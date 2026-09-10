@@ -154,16 +154,66 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 
 		t.Mu.Lock()
 		t.session = session
-		t.SetConnected(true)
 		t.Mu.Unlock()
 
 		if existingSession == nil {
 			go t.writerLoop()
 		}
 
-		// Auth - use safeWrite
+		// OnlyOffice 2026 / Engine.IO + Socket.IO handshake.
+		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+
+		_, hello, err := conn.ReadMessage()
+		if err != nil {
+			utils.Debugf("[YDOCS] Engine.IO hello failed: %v", err)
+			t.SetConnected(false)
+			t.scheduleReconnect(attempt)
+			return
+		}
+		if !strings.HasPrefix(string(hello), "0") {
+			utils.Debugf("[YDOCS] Unexpected Engine.IO hello")
+			conn.Close()
+			t.SetConnected(false)
+			t.scheduleReconnect(attempt)
+			return
+		}
+
 		auth1 := fmt.Sprintf(`40{"token":"%s"}`, info.Token)
-		session.safeWrite(websocket.TextMessage, []byte(auth1))
+		if err := session.safeWrite(websocket.TextMessage, []byte(auth1)); err != nil {
+			utils.Debugf("[YDOCS] Socket.IO auth write failed: %v", err)
+			t.SetConnected(false)
+			t.scheduleReconnect(attempt)
+			return
+		}
+
+		licenseSeen := false
+		for i := 0; i < 10; i++ {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				utils.Debugf("[YDOCS] Pre-auth read failed: %v", err)
+				t.SetConnected(false)
+				t.scheduleReconnect(attempt)
+				return
+			}
+
+			text := string(message)
+			if text == "2" {
+				session.safeWrite(websocket.TextMessage, []byte("3"))
+				continue
+			}
+			if strings.Contains(text, `"type":"license"`) {
+				licenseSeen = true
+				break
+			}
+		}
+
+		if !licenseSeen {
+			utils.Debugf("[YDOCS] License message not received")
+			conn.Close()
+			t.SetConnected(false)
+			t.scheduleReconnect(attempt)
+			return
+		}
 
 		authData := map[string]interface{}{
 			"type": "auth", "docid": info.DocID, "token": "fghhfgsjdgfjs",
@@ -172,7 +222,63 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			"openCmd": info.OpenCmd, "coEditingMode": "fast", "jwtOpen": info.Token,
 		}
 		messagePart, _ := json.Marshal([]interface{}{"message", authData})
-		session.safeWrite(websocket.TextMessage, []byte(fmt.Sprintf("42%s", string(messagePart))))
+
+		if err := session.safeWrite(
+			websocket.TextMessage,
+			[]byte(fmt.Sprintf("42%s", string(messagePart))),
+		); err != nil {
+			utils.Debugf("[YDOCS] Document auth write failed: %v", err)
+			t.SetConnected(false)
+			t.scheduleReconnect(attempt)
+			return
+		}
+
+		authOK := false
+		for i := 0; i < 20; i++ {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				utils.Debugf("[YDOCS] Auth response read failed: %v", err)
+				t.SetConnected(false)
+				t.scheduleReconnect(attempt)
+				return
+			}
+
+			text := string(message)
+
+			if text == "2" {
+				session.safeWrite(websocket.TextMessage, []byte("3"))
+				continue
+			}
+
+			if strings.Contains(text, `"type":"authChanges"`) {
+				ack := `42["message",{"type":"authChangesAck"}]`
+				if err := session.safeWrite(websocket.TextMessage, []byte(ack)); err != nil {
+					utils.Debugf("[YDOCS] authChangesAck write failed: %v", err)
+					t.SetConnected(false)
+					t.scheduleReconnect(attempt)
+					return
+				}
+				continue
+			}
+
+			if strings.Contains(text, `"type":"auth"`) &&
+				strings.Contains(text, `"result":1`) {
+				authOK = true
+				break
+			}
+		}
+
+		if !authOK {
+			utils.Debugf("[YDOCS] Document authentication not accepted")
+			conn.Close()
+			t.SetConnected(false)
+			t.scheduleReconnect(attempt)
+			return
+		}
+
+		conn.SetReadDeadline(time.Time{})
+		t.SetConnected(true)
+		utils.Debugf("[YDOCS] OnlyOffice authentication successful")
 
 		for t.IsRunning() {
 			_, message, err := conn.ReadMessage()
@@ -299,6 +405,9 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 }
 
 func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, error) {
+	if strings.HasPrefix(url, "file://") {
+		return loadStaticDocInfo(strings.TrimPrefix(url, "file://"), userID)
+	}
 	client := &http.Client{
 		CheckRedirect: func(req *http.Request, via []*http.Request) error { return nil },
 		Timeout:       30 * time.Second,
@@ -350,7 +459,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 		DocID:       document["key"].(string),
 		Origin:      balancerURL,
 		Host:        host,
-		WsURL:       fmt.Sprintf("wss://%s/2024.1.1-375/doc/%s/c/?EIO=4&transport=websocket", host, document["key"].(string)),
+		WsURL:       fmt.Sprintf("wss://%s/2026.2.1-2268/doc/%s/c/?EIO=4&transport=websocket", host, document["key"].(string)),
 		Permissions: perms,
 		OpenCmd: map[string]interface{}{
 			"c":      "open",
