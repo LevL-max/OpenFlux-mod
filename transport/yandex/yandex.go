@@ -49,11 +49,17 @@ func (s *DocSession) safeWrite(messageType int, data []byte) error {
 type YandexDocsTransport struct {
 	*transport.BaseTransport
 
-	url      string
-	session  *DocSession
+	url     string
+	session *DocSession
 
 	userCounter atomic.Int32
 	baseUserID  string
+
+	perfQueueFull   atomic.Uint64
+	perfWSWrites    atomic.Uint64
+	perfWSBytes     atomic.Uint64
+	perfWriteErrors atomic.Uint64
+	perfQueuePeak   atomic.Int64
 }
 
 func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
@@ -72,6 +78,7 @@ func (t *YandexDocsTransport) Start() error {
 
 	t.baseUserID = randUserID()
 	go t.keepAliveLoop()
+	go t.perfStatsLoop()
 	t.connectToDoc(0)
 
 	return nil
@@ -93,8 +100,11 @@ func (t *YandexDocsTransport) Send(data []byte) error {
 	select {
 	case session.WriteQueue <- data:
 		t.RecordSend(len(data))
+		t.observeQueueDepth(len(session.WriteQueue))
 		return nil
 	default:
+		t.perfQueueFull.Add(1)
+		t.observeQueueDepth(cap(session.WriteQueue))
 		return fmt.Errorf("write queue full")
 	}
 }
@@ -310,11 +320,106 @@ func (t *YandexDocsTransport) writerLoop() {
 			msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, payload)
 
 			if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
+				t.perfWriteErrors.Add(1)
 				utils.Debugf("[YDOCS] Write error: %v", err)
+			} else {
+				t.perfWSWrites.Add(1)
+				t.perfWSBytes.Add(uint64(len(msg)))
 			}
 		default:
 			time.Sleep(10 * time.Millisecond)
 		}
+	}
+}
+
+func (t *YandexDocsTransport) observeQueueDepth(depth int) {
+	d := int64(depth)
+	for {
+		old := t.perfQueuePeak.Load()
+		if d <= old {
+			return
+		}
+		if t.perfQueuePeak.CompareAndSwap(old, d) {
+			return
+		}
+	}
+}
+
+func (t *YandexDocsTransport) perfStatsLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+
+	prev := t.Stats()
+	prevWSWrites := t.perfWSWrites.Load()
+	prevWSBytes := t.perfWSBytes.Load()
+	prevQueueFull := t.perfQueueFull.Load()
+	prevWriteErrors := t.perfWriteErrors.Load()
+	last := time.Now()
+
+	for t.IsRunning() {
+		<-ticker.C
+
+		now := time.Now()
+		seconds := now.Sub(last).Seconds()
+		if seconds <= 0 {
+			seconds = 5
+		}
+		last = now
+
+		stats := t.Stats()
+		wsWrites := t.perfWSWrites.Load()
+		wsBytes := t.perfWSBytes.Load()
+		queueFull := t.perfQueueFull.Load()
+		writeErrors := t.perfWriteErrors.Load()
+
+		queueLen := 0
+		queueCap := 0
+
+		t.Mu.RLock()
+		session := t.session
+		if session != nil && session.WriteQueue != nil {
+			queueLen = len(session.WriteQueue)
+			queueCap = cap(session.WriteQueue)
+		}
+		t.Mu.RUnlock()
+
+		peak := t.perfQueuePeak.Swap(int64(queueLen))
+		if peak < int64(queueLen) {
+			peak = int64(queueLen)
+		}
+
+		txBytes := stats.BytesSent - prev.BytesSent
+		rxBytes := stats.BytesReceived - prev.BytesReceived
+		txPackets := stats.PacketsSent - prev.PacketsSent
+		rxPackets := stats.PacketsRecv - prev.PacketsRecv
+		wsWriteDelta := wsWrites - prevWSWrites
+		wsByteDelta := wsBytes - prevWSBytes
+
+		utils.Debugf(
+			"[PERF] connected=%t tx=%.2fMbps rx=%.2fMbps tx_pps=%.0f rx_pps=%.0f ws_msg_s=%.0f ws_payload=%.2fMbps queue=%d/%d peak=%d queue_full=%d(+%d) write_err=%d(+%d) reconnects=%d(+%d)",
+			stats.Connected,
+			float64(txBytes)*8/seconds/1000000,
+			float64(rxBytes)*8/seconds/1000000,
+			float64(txPackets)/seconds,
+			float64(rxPackets)/seconds,
+			float64(wsWriteDelta)/seconds,
+			float64(wsByteDelta)*8/seconds/1000000,
+			queueLen,
+			queueCap,
+			peak,
+			queueFull,
+			queueFull-prevQueueFull,
+			writeErrors,
+			writeErrors-prevWriteErrors,
+			stats.Reconnects,
+			stats.Reconnects-prev.Reconnects,
+		)
+
+		prev = stats
+		prevWSWrites = wsWrites
+		prevWSBytes = wsBytes
+		prevQueueFull = queueFull
+		prevWriteErrors = writeErrors
 	}
 }
 

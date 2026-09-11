@@ -27,7 +27,7 @@ type TCPTunnel struct {
 	packetCount atomic.Uint64
 }
 
-func NewTCPTunnel(trans transport.Transport, isExitNode bool) *TCPTunnel {
+func NewTCPTunnel(trans transport.Transport, isExitNode bool, tcpBufferDefault int, tcpBufferMax int) *TCPTunnel {
 	t := &TCPTunnel{
 		transport:  trans,
 		isExitNode: isExitNode,
@@ -40,14 +40,14 @@ func NewTCPTunnel(trans transport.Transport, isExitNode bool) *TCPTunnel {
 		TransportProtocols: []stack.TransportProtocolFactory{tcp.NewProtocol},
 	})
 
-        if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
-            &tcpip.TCPReceiveBufferSizeRangeOption{Min: 65536, Default: 262144, Max: 1048576}); err != nil {
-            utils.Debugf("[TUNNEL] Failed to set recv buffer: %v", err)
-        }
-        if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
-            &tcpip.TCPSendBufferSizeRangeOption{Min: 65536, Default: 262144, Max: 1048576}); err != nil {
-            utils.Debugf("[TUNNEL] Failed to set send buffer: %v", err)
-        }
+	if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
+		&tcpip.TCPReceiveBufferSizeRangeOption{Min: 65536, Default: tcpBufferDefault, Max: tcpBufferMax}); err != nil {
+		utils.Debugf("[TUNNEL] Failed to set recv buffer: %v", err)
+	}
+	if err := t.gvisorStack.SetTransportProtocolOption(tcp.ProtocolNumber,
+		&tcpip.TCPSendBufferSizeRangeOption{Min: 65536, Default: tcpBufferDefault, Max: tcpBufferMax}); err != nil {
+		utils.Debugf("[TUNNEL] Failed to set send buffer: %v", err)
+	}
 
 	tunnelEP := NewTunnelLinkEndpoint()
 	tunnelEP.onOutgoingPacket = func(data []byte) {
