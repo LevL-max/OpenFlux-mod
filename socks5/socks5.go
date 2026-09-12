@@ -42,6 +42,11 @@ func (s *SOCKS5Server) Start() error {
 }
 
 func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
+	defer func() {
+		if r := recover(); r != nil {
+			utils.Debugf("[SOCKS5] Recovered from panic in handler: %v", r)
+		}
+	}()
 	defer clientConn.Close()
 
 	buf := make([]byte, 256)
@@ -65,6 +70,10 @@ func (s *SOCKS5Server) handleConnection(clientConn net.Conn) {
 			uint16(buf[8])<<8|uint16(buf[9]))
 	case 0x03:
 		domainLen := int(buf[4])
+		if domainLen == 0 || 5+domainLen+2 > n {
+			utils.Debugf("[SOCKS5] Bad domain request (len=%d, n=%d)", domainLen, n)
+			return
+		}
 		targetAddr = fmt.Sprintf("%s:%d",
 			string(buf[5:5+domainLen]),
 			uint16(buf[5+domainLen])<<8|uint16(buf[6+domainLen]))
