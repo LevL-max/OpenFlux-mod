@@ -136,6 +136,10 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			return
 		}
 
+		if info.UserID != "" {
+			userID = info.UserID
+		}
+
 		dialer := websocket.Dialer{HandshakeTimeout: 10 * time.Second}
 		headers := http.Header{}
 		headers.Set("User-Agent", "Mozilla/5.0")
@@ -551,7 +555,28 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 
 	balancerURL := officeAction["balancer_url"].(string)
 	host := strings.TrimPrefix(balancerURL, "https://")
+	build, err := fetchOnlyOfficeBuild(client, balancerURL)
+	if err != nil {
+		return YandexDocsInfo{}, fmt.Errorf("OnlyOffice build detection failed: %w", err)
+	}
+	utils.Debugf("[YDOCS] Detected OnlyOffice build: %s", build)
+
 	document := editorConfigRaw["document"].(map[string]interface{})
+
+	runtimeEditorConfig, ok := editorConfigRaw["editorConfig"].(map[string]interface{})
+	if !ok || runtimeEditorConfig == nil {
+		return YandexDocsInfo{}, fmt.Errorf("editorConfig missing")
+	}
+
+	runtimeUser, ok := runtimeEditorConfig["user"].(map[string]interface{})
+	if !ok || runtimeUser == nil {
+		return YandexDocsInfo{}, fmt.Errorf("editorConfig.user missing")
+	}
+
+	yandexUserID, _ := runtimeUser["id"].(string)
+	if yandexUserID == "" {
+		return YandexDocsInfo{}, fmt.Errorf("editorConfig.user.id missing")
+	}
 
 	perms, _ := document["permissions"].(map[string]interface{})
 	if perms == nil {
@@ -562,20 +587,54 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 		CookieStr:   strings.Join(cookies, "; "),
 		Token:       editorConfigRaw["token"].(string),
 		DocID:       document["key"].(string),
+		UserID:      yandexUserID,
 		Origin:      balancerURL,
 		Host:        host,
-		WsURL:       fmt.Sprintf("wss://%s/2026.2.1-2268/doc/%s/c/?EIO=4&transport=websocket", host, document["key"].(string)),
+		WsURL:       fmt.Sprintf("wss://%s/%s/doc/%s/c/?EIO=4&transport=websocket", host, build, document["key"].(string)),
 		Permissions: perms,
 		OpenCmd: map[string]interface{}{
 			"c":      "open",
 			"id":     document["key"].(string),
-			"userid": userID,
+			"userid": yandexUserID,
 			"format": document["fileType"],
 			"url":    document["url"],
 			"title":  document["title"],
 			"lcid":   25,
 		},
 	}, nil
+}
+
+func fetchOnlyOfficeBuild(client *http.Client, balancerURL string) (string, error) {
+	apiURL := strings.TrimRight(balancerURL, "/") + "/web-apps/apps/api/documents/api.js"
+
+	req, err := http.NewRequest("GET", apiURL, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("User-Agent", "Mozilla/5.0")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("api.js HTTP status %d", resp.StatusCode)
+	}
+
+	b, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	re := regexp.MustCompile(`\?_dc=(\d+\.\d+\.\d+-\d+)`)
+	m := re.FindSubmatch(b)
+	if len(m) != 2 {
+		return "", fmt.Errorf("OnlyOffice build not found in api.js")
+	}
+
+	return string(m[1]), nil
 }
 
 func randUserID() string {
