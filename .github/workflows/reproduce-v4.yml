@@ -1,0 +1,58 @@
+name: Reproduce production v4
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - integration/canonical-v4-bootstrap
+    paths:
+      - .github/workflows/reproduce-v4.yml
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce-v4:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact production source commit
+        uses: actions/checkout@v4
+        with:
+          ref: 22f29ab94ca2f5aa5b85956053b5c4cab1d1e31e
+
+      - name: Set up Go from production go.mod
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify exact source commit
+        run: |
+          test "$(git rev-parse HEAD)" = "22f29ab94ca2f5aa5b85956053b5c4cab1d1e31e"
+          test -z "$(git status --porcelain)"
+
+      - name: Test exact v4 source
+        run: go test ./...
+
+      - name: Build exact v4 source
+        env:
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -o dist/openflux .
+          sha256sum dist/openflux | tee dist/SHA256SUMS
+          printf 'source_commit=%s\n' "$(git rev-parse HEAD)" > dist/BUILD-METADATA
+          printf 'go_version=%s\n' "$(go version)" >> dist/BUILD-METADATA
+          printf 'historical_production_sha256=%s\n' "6f242d3c7ef9184811e58df5893e0ad0095da6aeb7354ba02df5da99fa569715" >> dist/BUILD-METADATA
+
+      - name: Upload reproduction artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openflux-v4-reproduction-22f29ab
+          path: |
+            dist/openflux
+            dist/SHA256SUMS
+            dist/BUILD-METADATA
+          if-no-files-found: error
+          retention-days: 30
