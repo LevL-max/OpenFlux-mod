@@ -1,0 +1,27 @@
+# Build outputs
+/dist/
+/openflux
+*.exe
+
+# Local/editor files
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+
+# Secrets and runtime state
+*.key
+*.pem
+*.p12
+*.pfx
+.env
+.env.*
+yandex.json
+*token*
+*secret*
+
+# Local test/runtime output
+*.log
+/tmp/
+coverage.out
