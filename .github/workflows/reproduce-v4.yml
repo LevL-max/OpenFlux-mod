@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - integration/canonical-v4-bootstrap
+      - main
     paths:
       - .github/workflows/reproduce-v4.yml
 
@@ -34,14 +34,16 @@ jobs:
       - name: Test exact v4 source
         run: go test ./...
 
-      - name: Build exact v4 source
+      - name: Build exact v4 source variants
         env:
           GOOS: linux
           GOARCH: amd64
         run: |
-          mkdir -p dist
-          go build -o dist/openflux .
-          sha256sum dist/openflux | tee dist/SHA256SUMS
+          mkdir -p dist/default dist/trimpath
+          go build -o dist/default/openflux .
+          go build -trimpath -o dist/trimpath/openflux .
+          sha256sum dist/default/openflux | tee dist/default/SHA256SUMS
+          sha256sum dist/trimpath/openflux | tee dist/trimpath/SHA256SUMS
           printf 'source_commit=%s\n' "$(git rev-parse HEAD)" > dist/BUILD-METADATA
           printf 'go_version=%s\n' "$(go version)" >> dist/BUILD-METADATA
           printf 'historical_production_sha256=%s\n' "6f242d3c7ef9184811e58df5893e0ad0095da6aeb7354ba02df5da99fa569715" >> dist/BUILD-METADATA
@@ -51,8 +53,10 @@ jobs:
         with:
           name: openflux-v4-reproduction-22f29ab
           path: |
-            dist/openflux
-            dist/SHA256SUMS
+            dist/default/openflux
+            dist/default/SHA256SUMS
+            dist/trimpath/openflux
+            dist/trimpath/SHA256SUMS
             dist/BUILD-METADATA
           if-no-files-found: error
           retention-days: 30
