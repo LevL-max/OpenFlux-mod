@@ -30,8 +30,16 @@ vendor/
 .DS_Store
 Thumbs.db
 
+# Local/runtime configuration and secrets
 .env
-.env.local
+.env.*
+yandex.json
+*.key
+*.pem
+*.p12
+*.pfx
+*token*
+*secret*
 
 .gradle/
 *.hprof
