@@ -1,3 +1,20 @@
+# OpenFlux-mod
+
+Private downstream of `p1neappleXpress/OpenFlux` used for the maintained OpenFlux production line.
+
+Repository model:
+
+- `main` - our reviewed downstream development trunk
+- `upstream-main` - tracking branch for public upstream review only
+- `canonical-v4` - immutable imported reference for the production v4 source commit
+- production deploys only from explicitly approved private releases, never directly from upstream
+
+Current production source baseline before the GitHub migration is tag `yandex-working-v4` at commit `22f29ab94ca2f5aa5b85956053b5c4cab1d1e31e`. Runtime secrets and temporary Yandex session material must not be committed.
+
+See `docs/DEVOPS_MODEL.md`, `docs/UPSTREAM_POLICY.md` and `docs/PROJECT_BASELINE.md` for the maintained downstream process.
+
+---
+
 # OpenFlux
 
 **English** | [Русский](README.ru.md)
