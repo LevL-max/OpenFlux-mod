@@ -1,0 +1,54 @@
+name: Container CI
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  container-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build release binary
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -trimpath -ldflags='-s -w -buildid=' -o dist/openflux-linux-amd64 .
+          sha256sum dist/openflux-linux-amd64
+
+      - name: Build runtime container
+        run: |
+          docker build \
+            --file Dockerfile.release \
+            --build-arg VERSION=ci \
+            --build-arg SOURCE_COMMIT="$GITHUB_SHA" \
+            --tag openflux-mod:ci \
+            .
+
+      - name: Smoke test container entrypoint
+        run: |
+          docker run --rm openflux-mod:ci --help >/tmp/openflux-help.txt 2>&1
+          test -s /tmp/openflux-help.txt
+          docker image inspect openflux-mod:ci --format '{{json .Config.Entrypoint}}'
