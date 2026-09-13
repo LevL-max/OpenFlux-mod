@@ -1,0 +1,178 @@
+name: Draft private release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - release/VERSION
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+concurrency:
+  group: openflux-private-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      CANONICAL_V4_ANCESTOR: 22f29ab94ca2f5aa5b85956053b5c4cab1d1e31e
+      PRODUCTION_V4_SHA256: 6f242d3c7ef9184811e58df5893e0ad0095da6aeb7354ba02df5da99fa569715
+
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Resolve and validate release version
+        id: version
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="$(tr -d '[:space:]' < release/VERSION)"
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
+            echo "Invalid release version: $VERSION" >&2
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Refuse to overwrite an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$VERSION" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $VERSION already exists; refusing to overwrite it." >&2
+            exit 1
+          fi
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test exact release source
+        run: go test ./...
+
+      - name: Build Linux amd64 release binary
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          go build -trimpath -ldflags='-s -w -buildid=' -o dist/openflux-linux-amd64 .
+
+      - name: Build and smoke-test runtime container
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          docker build \
+            --file Dockerfile.release \
+            --build-arg VERSION="$VERSION" \
+            --build-arg SOURCE_COMMIT="$GITHUB_SHA" \
+            --tag "$IMAGE:$VERSION" \
+            .
+          docker run --rm "$IMAGE:$VERSION" --help >/tmp/openflux-help.txt 2>&1
+          test -s /tmp/openflux-help.txt
+          docker save "$IMAGE:$VERSION" | gzip -9 > dist/openflux-container-linux-amd64.tar.gz
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable container tags
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker push "$IMAGE:$VERSION"
+          docker tag "$IMAGE:$VERSION" "$IMAGE:sha-$GITHUB_SHA"
+          docker push "$IMAGE:sha-$GITHUB_SHA"
+          REGISTRY_DIGEST="$(docker buildx imagetools inspect "$IMAGE:$VERSION" | awk '/^Digest:/ {print $2; exit}')"
+          test -n "$REGISTRY_DIGEST"
+          echo "REGISTRY_DIGEST=$REGISTRY_DIGEST" >> "$GITHUB_ENV"
+
+      - name: Write immutable release metadata
+        shell: bash
+        run: |
+          set -euo pipefail
+          BINARY_SHA="$(sha256sum dist/openflux-linux-amd64 | awk '{print $1}')"
+          IMAGE_ARCHIVE_SHA="$(sha256sum dist/openflux-container-linux-amd64.tar.gz | awk '{print $1}')"
+          cat > dist/BUILD-METADATA <<EOF
+          version=$VERSION
+          source_commit=$GITHUB_SHA
+          canonical_v4_ancestor=$CANONICAL_V4_ANCESTOR
+          historical_production_binary_sha256=$PRODUCTION_V4_SHA256
+          go_version=$(go version)
+          goos=linux
+          goarch=amd64
+          cgo_enabled=0
+          go_build_flags=-trimpath -ldflags=-s -w -buildid=
+          binary_sha256=$BINARY_SHA
+          container_archive_sha256=$IMAGE_ARCHIVE_SHA
+          container_registry=$IMAGE:$VERSION
+          container_registry_digest=$REGISTRY_DIGEST
+          container_base=debian:bookworm-slim
+          production_deployed=false
+          EOF
+
+          cat > dist/RELEASE-NOTES.md <<EOF
+          # OpenFlux-mod $VERSION
+
+          Private downstream release candidate built from GitHub main.
+
+          - Functional baseline remains the proven private Yandex v4 line.
+          - Dynamic Yandex bootstrap/session discovery is retained.
+          - Private 4-packet / 1 ms batching and current reliability hardening are retained.
+          - Volga, CUPS and other experimental upstream transports are not promoted into this release candidate.
+          - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
+          - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
+          - Release creation does not deploy or restart AWS, Mini-PC1 or Mini-PC2.
+
+          Container image:
+
+          $IMAGE:$VERSION
+
+          Registry digest:
+
+          $REGISTRY_DIGEST
+
+          Historical production binary SHA256 remains recorded for comparison only:
+
+          $PRODUCTION_V4_SHA256
+          EOF
+
+          sha256sum \
+            dist/openflux-linux-amd64 \
+            dist/openflux-container-linux-amd64.tar.gz \
+            dist/BUILD-METADATA \
+            dist/RELEASE-NOTES.md \
+            > dist/SHA256SUMS
+
+      - name: Create draft prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$VERSION" \
+            dist/openflux-linux-amd64 \
+            dist/openflux-container-linux-amd64.tar.gz \
+            dist/SHA256SUMS \
+            dist/BUILD-METADATA \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "OpenFlux-mod $VERSION" \
+            --draft \
+            --prerelease \
+            --notes-file dist/RELEASE-NOTES.md
