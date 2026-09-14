@@ -76,14 +76,14 @@ jobs:
           trap 'rm -f "$out"' EXIT
           sed \
             -e "s/^DEFAULT_VERSION=.*/DEFAULT_VERSION=\"$TEST_VERSION\"/" \
-            -e "s/^KNOWN_RC2_ARCHIVE_SHA256=.*/KNOWN_RC2_ARCHIVE_SHA256=\"$TEST_SHA\"/" \
+            -e "s/^DEFAULT_ARCHIVE_SHA256=.*/DEFAULT_ARCHIVE_SHA256=\"$TEST_SHA\"/" \
             distribution/openflux-install > "$out"
           bash -n "$out"
           shellcheck "$out"
           grep -Fxq "DEFAULT_VERSION=\"$TEST_VERSION\"" "$out"
-          grep -Fxq "KNOWN_RC2_ARCHIVE_SHA256=\"$TEST_SHA\"" "$out"
+          grep -Fxq "DEFAULT_ARCHIVE_SHA256=\"$TEST_SHA\"" "$out"
           test "$(grep -c '^DEFAULT_VERSION=' "$out")" -eq 1
-          test "$(grep -c '^KNOWN_RC2_ARCHIVE_SHA256=' "$out")" -eq 1
+          test "$(grep -c '^DEFAULT_ARCHIVE_SHA256=' "$out")" -eq 1
 
       - name: Safety invariants
         shell: bash
@@ -98,6 +98,7 @@ jobs:
           grep -Fq -- 'PROFILE_TCP_MAX=4194304' "$f"
           grep -Fq -- 'PROFILE_BATCH_PACKETS=4' "$f"
           grep -Fq -- 'PROFILE_BATCH_DELAY_US=1000' "$f"
+          grep -Fq -- 'ip -o route show table all' "$f"
           if grep -Eq -- '--network(=|[[:space:]]+)host|--privileged' "$f"; then
             echo 'unsafe Docker isolation option found' >&2
             exit 1
