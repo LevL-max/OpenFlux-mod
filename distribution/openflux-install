@@ -4,7 +4,7 @@ IFS=$'\n\t'
 
 DEFAULT_REPO="LevL-max/OpenFlux-mod"
 DEFAULT_VERSION="v4.0.0-rc2"
-KNOWN_RC2_ARCHIVE_SHA256="74c02b7f7b46b26361d253578279ba3d7a7f95bcd420b5ac116dee1931e9a77c"
+DEFAULT_ARCHIVE_SHA256="74c02b7f7b46b26361d253578279ba3d7a7f95bcd420b5ac116dee1931e9a77c"
 
 CONFIG_DIR="/etc/openflux"
 CONFIG_FILE="$CONFIG_DIR/config.env"
@@ -68,17 +68,17 @@ Lifecycle:
   sudo openfluxctl set-transport yandex
   sudo openfluxctl uninstall
 
-Safety / planning:
+Read-only planning:
   sudo openflux-install preflight [client|exit]
   sudo openflux-install install client --url <url> --dry-run
 
 Options:
-  --version VERSION       release tag (default: v4.0.0-rc2)
+  --version VERSION       release tag (default: packaged release version)
   --repo OWNER/REPO       public distribution repository
   --backend auto|container|native
   --transport yandex      transport abstraction; vyandex/Volga is not enabled yet
   --socks-port PORT       client localhost SOCKS port (default: 11080)
-  --dry-run               show plan without changing the host
+  --dry-run               read-only install plan; do not install prerequisites or runtime
 
 Current executable backend in v1: container on Ubuntu/Debian linux/amd64.
 Native OpenWRT/Entware backend is detected intentionally but not enabled yet.
@@ -96,22 +96,12 @@ require_root() {
   [[ ${EUID:-$(id -u)} -eq 0 ]] || die "run as root (sudo)"
 }
 
-print_cmd() {
-  printf '[dry-run]'
-  printf ' %q' "$@"
-  printf '\n'
-}
-
-run() {
-  if (( DRY_RUN )); then
-    print_cmd "$@"
-  else
-    "$@"
-  fi
-}
-
 validate_version() {
   [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]] || die "invalid version: $VERSION"
+}
+
+validate_repo() {
+  [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] || die "invalid repository identifier: $REPO"
 }
 
 validate_role() {
@@ -133,15 +123,11 @@ validate_port() {
 
 validate_url_syntax() {
   [[ -n "$URL" ]] || die "public document URL is required"
-  [[ "$URL" =~ ^https://[^[:space:]]+$ ]] || die "URL must be an https URL without whitespace"
+  [[ "$URL" =~ ^https://[^[:space:]]+$ ]] || die "URL must be a raw https URL without Markdown or whitespace"
 }
 
 validate_remote_url() {
   validate_url_syntax
-  if (( DRY_RUN )); then
-    log "would validate public document URL over HTTPS"
-    return 0
-  fi
   curl -fsSL --max-time 20 --connect-timeout 10 -o /dev/null "$URL" \
     || die "document URL validation failed"
 }
@@ -196,36 +182,35 @@ select_backend() {
   [[ "$SERVICE_MANAGER" == "systemd" ]] || die "container backend v1 requires systemd"
 }
 
-ensure_apt_tooling() {
-  local missing=()
+missing_host_tools() {
   local tool
   for tool in curl sha256sum gzip ss ip python3; do
-    command -v "$tool" >/dev/null 2>&1 || missing+=("$tool")
+    command -v "$tool" >/dev/null 2>&1 || printf '%s\n' "$tool"
   done
+}
+
+install_host_tooling() {
+  local missing=()
+  mapfile -t missing < <(missing_host_tools)
   ((${#missing[@]} == 0)) && return 0
 
   log "installing required host tooling: ${missing[*]}"
-  run apt-get update
-  run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+  apt-get update
+  env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
     curl ca-certificates gzip coreutils iproute2 python3
 }
 
 ensure_docker() {
   if ! command -v docker >/dev/null 2>&1; then
-    log "Docker not found; installer will install docker.io"
-    run apt-get update
-    run env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker.io
-  fi
-
-  if (( DRY_RUN )) && ! command -v docker >/dev/null 2>&1; then
-    log "would enable and validate Docker daemon"
-    return 0
+    log "Docker not found; installing docker.io"
+    apt-get update
+    env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends docker.io
   fi
 
   if ! docker info >/dev/null 2>&1; then
-    run systemctl enable --now docker
+    systemctl enable --now docker
   fi
-  (( DRY_RUN )) || docker info >/dev/null 2>&1 || die "Docker daemon is not available"
+  docker info >/dev/null 2>&1 || die "Docker daemon is not available"
 }
 
 managed_container_name() {
@@ -234,6 +219,12 @@ managed_container_name() {
     exit) printf '%s\n' 'openflux-exit' ;;
     *) die "cannot resolve container name without role" ;;
   esac
+}
+
+image_ref() {
+  local lower_repo
+  lower_repo="${REPO,,}"
+  printf 'ghcr.io/%s:%s\n' "$lower_repo" "$VERSION"
 }
 
 is_managed_container() {
@@ -246,6 +237,11 @@ is_managed_network() {
   docker network inspect "$name" --format '{{index .Labels "com.openflux.managed"}}' 2>/dev/null | grep -qx 'true'
 }
 
+is_recorded_image() {
+  local image="$1"
+  [[ -r "$IMAGES_FILE" ]] && grep -Fxq "$image" "$IMAGES_FILE"
+}
+
 port_in_use() {
   local port="$1"
   ss -H -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "(^|:|\\])${port}$"
@@ -253,20 +249,25 @@ port_in_use() {
 
 assert_clean_new_install() {
   CONTAINER_NAME="$(managed_container_name)"
-  command -v docker >/dev/null 2>&1 || return 0
 
   if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
     if is_managed_container "$CONTAINER_NAME"; then
-      die "orphaned managed container $CONTAINER_NAME exists without installer config; refusing automatic adoption"
+      die "orphaned OpenFlux-managed container $CONTAINER_NAME exists without installer config; refusing automatic adoption"
     fi
     die "container name $CONTAINER_NAME already exists and is not OpenFlux-managed"
   fi
 
   if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
     if is_managed_network "$NETWORK_NAME"; then
-      die "orphaned managed network $NETWORK_NAME exists without installer config; refusing automatic adoption"
+      die "orphaned OpenFlux-managed network $NETWORK_NAME exists without installer config; refusing automatic adoption"
     fi
     die "Docker network $NETWORK_NAME already exists and is not OpenFlux-managed"
+  fi
+
+  local image
+  image="$(image_ref)"
+  if docker image inspect "$image" >/dev/null 2>&1; then
+    die "image tag $image already exists but is not recorded as installer-owned; refusing to overwrite it"
   fi
 
   if [[ "$ROLE" == "client" ]] && port_in_use "$SOCKS_PORT"; then
@@ -274,9 +275,17 @@ assert_clean_new_install() {
   fi
 }
 
+assert_update_image_safe() {
+  local image
+  image="$(image_ref)"
+  if docker image inspect "$image" >/dev/null 2>&1 && ! is_recorded_image "$image"; then
+    die "target image tag $image already exists but is not installer-owned; refusing to overwrite it"
+  fi
+}
+
 collect_used_cidrs() {
   {
-    ip -o route show 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) print $i}'
+    ip -o route show table all 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) print $i}'
     local net
     while IFS= read -r net; do
       docker network inspect "$net" --format '{{range .IPAM.Config}}{{if .Subnet}}{{.Subnet}}{{"\n"}}{{end}}{{end}}' 2>/dev/null || true
@@ -298,10 +307,15 @@ for line in os.environ.get("USED_CIDRS", "").splitlines():
     except ValueError:
         pass
 
-candidates = [
-    "172.28.250.0/24", "172.28.251.0/24", "172.28.252.0/24", "172.28.253.0/24",
-    "172.30.250.0/24", "172.30.251.0/24", "172.30.252.0/24", "172.30.253.0/24",
-]
+candidates = []
+for second in range(20, 32):
+    for third in range(240, 255):
+        candidates.append(f"172.{second}.{third}.0/24")
+for second in range(200, 255):
+    candidates.append(f"10.253.{second}.0/24")
+for third in range(200, 255):
+    candidates.append(f"192.168.{third}.0/24")
+
 for raw in candidates:
     candidate = ipaddress.ip_network(raw)
     if not any(candidate.overlaps(net) for net in used):
@@ -309,21 +323,6 @@ for raw in candidates:
         raise SystemExit(0)
 raise SystemExit(1)
 PY
-}
-
-plan_network_subnet() {
-  if command -v docker >/dev/null 2>&1 && docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
-    is_managed_network "$NETWORK_NAME" || die "network $NETWORK_NAME exists but is not OpenFlux-managed"
-    docker network inspect "$NETWORK_NAME" --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}'
-    return 0
-  fi
-
-  if (( DRY_RUN )) && ! command -v docker >/dev/null 2>&1; then
-    printf '%s\n' '<auto-after-docker-install>'
-    return 0
-  fi
-
-  choose_free_subnet || die "no conflict-free OpenFlux Docker subnet found"
 }
 
 create_managed_network() {
@@ -339,12 +338,6 @@ create_managed_network() {
     "$NETWORK_NAME" >/dev/null
 }
 
-image_ref() {
-  local lower_repo
-  lower_repo="${REPO,,}"
-  printf 'ghcr.io/%s:%s\n' "$lower_repo" "$VERSION"
-}
-
 release_base_url() {
   printf 'https://github.com/%s/releases/download/%s\n' "$REPO" "$VERSION"
 }
@@ -356,7 +349,7 @@ expected_archive_sha() {
   fi
 
   if [[ "$REPO" == "$DEFAULT_REPO" && "$VERSION" == "$DEFAULT_VERSION" ]]; then
-    printf '%s\n' "$KNOWN_RC2_ARCHIVE_SHA256"
+    printf '%s\n' "$DEFAULT_ARCHIVE_SHA256"
     return 0
   fi
 
@@ -387,7 +380,10 @@ remove_recorded_images() {
 }
 
 fetch_and_load_artifact() {
+  validate_repo
   validate_version
+  assert_update_image_safe
+
   WORKDIR="$(mktemp -d /tmp/openflux-install.XXXXXX)"
   local archive="$WORKDIR/openflux-container-linux-amd64.tar.gz"
   local expected actual image label_version
@@ -404,14 +400,13 @@ fetch_and_load_artifact() {
 
   docker load -i "$archive" >/dev/null
   image="$(image_ref)"
-  if ! docker image inspect "$image" >/dev/null 2>&1; then
-    die "loaded archive did not provide expected image $image"
-  fi
+  docker image inspect "$image" >/dev/null 2>&1 || die "loaded archive did not provide expected image $image"
   label_version="$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
   if [[ "$label_version" != "$VERSION" ]]; then
     docker image rm "$image" >/dev/null 2>&1 || true
     die "image version label mismatch: expected $VERSION got $label_version"
   fi
+
   record_owned_image "$image"
   log "container image loaded and version label verified"
 }
@@ -425,8 +420,17 @@ write_config() {
   local subnet="$6"
   local backend="$7"
   local socks_port="$8"
-  local tmp
-  tmp="$(mktemp)"
+  local dir tmp
+  dir="$(dirname "$target")"
+
+  if (( DRY_RUN )); then
+    log "would write protected config $target"
+    return 0
+  fi
+
+  install -d -m 0755 "$dir"
+  umask 077
+  tmp="$(mktemp "$dir/.config.XXXXXX")"
   {
     printf 'ROLE=%q\n' "$role"
     printf 'VERSION=%q\n' "$version"
@@ -438,16 +442,8 @@ write_config() {
     printf 'NETWORK_SUBNET=%q\n' "$subnet"
     printf 'REPO=%q\n' "$REPO"
   } > "$tmp"
-
-  if (( DRY_RUN )); then
-    log "would write protected config $target"
-    rm -f "$tmp"
-    return 0
-  fi
-
-  install -d -m 0755 "$(dirname "$target")"
-  install -m 0600 "$tmp" "$target"
-  rm -f "$tmp"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$target"
 }
 
 load_config() {
@@ -463,15 +459,18 @@ load_config() {
   NETWORK_NAME="${NETWORK_NAME:-openflux-net}"
   NETWORK_SUBNET="${NETWORK_SUBNET:-}"
   REPO="${REPO:-$DEFAULT_REPO}"
+  validate_repo
   validate_role
   validate_port
   CONTAINER_NAME="$(managed_container_name)"
 }
 
 write_ownership() {
-  (( DRY_RUN )) && return 0
   install -d -m 0755 "$STATE_DIR"
-  cat > "$OWNERSHIP_FILE" <<EOF
+  umask 077
+  local tmp
+  tmp="$(mktemp "$STATE_DIR/.ownership.XXXXXX")"
+  cat > "$tmp" <<EOF
 MANAGED=1
 BACKEND=container
 ROLE=$ROLE
@@ -479,19 +478,17 @@ CONTAINER_NAME=$CONTAINER_NAME
 NETWORK_NAME=$NETWORK_NAME
 IMAGE=$(image_ref)
 EOF
-  chmod 0600 "$OWNERSHIP_FILE"
+  chmod 0600 "$tmp"
+  mv -f "$tmp" "$OWNERSHIP_FILE"
 }
 
 install_control_plane() {
-  if (( DRY_RUN )); then
-    log "would install controller at $INSTALL_PATH and $CTL_PATH"
-    log "would install systemd unit $SYSTEMD_UNIT"
-    return 0
-  fi
-
   install -m 0755 "${BASH_SOURCE[0]}" "$INSTALL_PATH"
   ln -sfn "$INSTALL_PATH" "$CTL_PATH"
-  cat > "$SYSTEMD_UNIT" <<'EOF'
+
+  local tmp
+  tmp="$(mktemp /etc/systemd/system/.openflux.service.XXXXXX)"
+  cat > "$tmp" <<'EOF'
 [Unit]
 Description=OpenFlux managed container
 Requires=docker.service
@@ -509,6 +506,8 @@ TimeoutStopSec=30
 [Install]
 WantedBy=multi-user.target
 EOF
+  chmod 0644 "$tmp"
+  mv -f "$tmp" "$SYSTEMD_UNIT"
   systemctl daemon-reload
 }
 
@@ -605,6 +604,19 @@ remove_managed_container() {
   fi
 }
 
+client_connectivity_probe() {
+  local endpoint
+  for endpoint in \
+    'https://api.ipify.org' \
+    'https://www.gstatic.com/generate_204'; do
+    if curl -4 --socks5-hostname "127.0.0.1:${SOCKS_PORT}" \
+        -fsS -o /dev/null --connect-timeout 10 --max-time 20 "$endpoint"; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 health_check() {
   load_config
   local deadline=$((SECONDS + 60))
@@ -626,9 +638,8 @@ health_check() {
         log "health PASS: exit authenticated to Yandex/OnlyOffice"
         return 0
       fi
-      if curl -4 --socks5-hostname "127.0.0.1:${SOCKS_PORT}" \
-          -fsS --connect-timeout 10 --max-time 20 https://api.ipify.org >/dev/null; then
-        log "health PASS: client authenticated and SOCKS request succeeded"
+      if client_connectivity_probe; then
+        log "health PASS: client authenticated and HTTPS succeeded through localhost SOCKS"
         return 0
       fi
     fi
@@ -666,26 +677,74 @@ swap_current_previous_config() {
   chmod 0600 "$CONFIG_FILE" "$PREVIOUS_CONFIG"
 }
 
-preflight() {
-  require_root
+read_only_audit() {
   detect_platform
   log "platform: os=$OS_ID version=$OS_VERSION arch=$ARCH service_manager=$SERVICE_MANAGER"
   select_backend
   log "selected backend: $DETECTED_BACKEND"
   validate_port
-  ensure_apt_tooling
-  ensure_docker
 
-  if [[ -n "$ROLE" ]]; then
-    validate_role
-    assert_clean_new_install
+  local missing=()
+  mapfile -t missing < <(missing_host_tools)
+  if ((${#missing[@]})); then
+    log "missing host tools (would install during real install): ${missing[*]}"
+  else
+    log "host tooling: present"
   fi
 
   if command -v docker >/dev/null 2>&1; then
-    NETWORK_SUBNET="$(plan_network_subnet)"
-    log "planned isolated Docker subnet: $NETWORK_SUBNET"
+    if docker info >/dev/null 2>&1; then
+      log "Docker daemon: available"
+      if [[ -n "$ROLE" ]]; then
+        validate_role
+        CONTAINER_NAME="$(managed_container_name)"
+        if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
+          die "container name $CONTAINER_NAME already exists; real install would refuse adoption/overwrite"
+        fi
+        if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1; then
+          die "Docker network $NETWORK_NAME already exists; real install would refuse adoption/overwrite"
+        fi
+        if docker image inspect "$(image_ref)" >/dev/null 2>&1; then
+          die "image tag $(image_ref) already exists; real install would refuse overwrite"
+        fi
+      fi
+
+      if command -v ip >/dev/null 2>&1 && command -v python3 >/dev/null 2>&1; then
+        NETWORK_SUBNET="$(choose_free_subnet)" || die "no conflict-free RFC1918 Docker subnet found"
+        log "planned isolated Docker subnet: $NETWORK_SUBNET"
+      else
+        log "subnet selection: deferred until missing tooling is installed"
+      fi
+    else
+      log "Docker command present but daemon unavailable (real install would enable/start it)"
+    fi
+  else
+    log "Docker: missing (real install would install docker.io)"
   fi
-  log "preflight PASS"
+
+  if [[ "$ROLE" == "client" ]]; then
+    if command -v ss >/dev/null 2>&1; then
+      port_in_use "$SOCKS_PORT" && die "localhost SOCKS port $SOCKS_PORT is already in use"
+      log "localhost SOCKS port $SOCKS_PORT: free"
+    else
+      log "SOCKS port check: deferred until iproute2 is installed"
+    fi
+  fi
+
+  log "preflight PASS (read-only)"
+}
+
+prepare_host_for_install() {
+  detect_platform
+  log "platform: os=$OS_ID version=$OS_VERSION arch=$ARCH service_manager=$SERVICE_MANAGER"
+  select_backend
+  log "selected backend: $DETECTED_BACKEND"
+  validate_port
+  install_host_tooling
+  ensure_docker
+  assert_clean_new_install
+  NETWORK_SUBNET="$(choose_free_subnet)" || die "no conflict-free RFC1918 Docker subnet found"
+  log "selected isolated Docker subnet: $NETWORK_SUBNET"
 }
 
 prompt_install_inputs() {
@@ -704,15 +763,24 @@ prompt_install_inputs() {
 }
 
 rollback_failed_first_install() {
-  warn "initial health gate failed; removing OpenFlux-owned objects from this attempt"
+  warn "installation transaction failed; removing only OpenFlux-owned objects from this attempt"
+
   if [[ -r "$CONFIG_FILE" ]]; then
     ( remove_managed_container ) || true
+  else
+    local candidate
+    candidate="$(managed_container_name 2>/dev/null || true)"
+    if [[ -n "$candidate" ]] && docker container inspect "$candidate" >/dev/null 2>&1 && is_managed_container "$candidate"; then
+      docker rm -f "$candidate" >/dev/null 2>&1 || true
+    fi
   fi
+
   if command -v docker >/dev/null 2>&1 \
      && docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 \
      && is_managed_network "$NETWORK_NAME"; then
     docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
   fi
+
   remove_control_plane
   remove_recorded_images
   rm -f "$CONFIG_FILE" "$OWNERSHIP_FILE" "$PREVIOUS_CONFIG" "$IMAGES_FILE"
@@ -720,46 +788,53 @@ rollback_failed_first_install() {
   rm -f "$INSTALL_PATH"
 }
 
+perform_initial_install_transaction() {
+  fetch_and_load_artifact
+  create_managed_network
+  CONTAINER_NAME="$(managed_container_name)"
+  write_config "$CONFIG_FILE" "$ROLE" "$VERSION" "$TRANSPORT" "$URL" "$NETWORK_SUBNET" "container" "$SOCKS_PORT"
+  write_ownership
+  install_control_plane
+  safe_start_health
+  systemctl enable openflux.service >/dev/null
+  systemctl start openflux.service
+}
+
+preflight_cmd() {
+  require_root
+  validate_repo
+  validate_version
+  [[ -z "$ROLE" ]] || validate_role
+  read_only_audit
+}
+
 install_cmd() {
   require_root
   prompt_install_inputs
+  validate_repo
   validate_version
   validate_transport
   validate_port
   validate_url_syntax
   [[ ! -e "$CONFIG_FILE" ]] || die "OpenFlux is already installed; use openfluxctl lifecycle commands"
 
-  preflight
-  validate_remote_url
-
   if (( DRY_RUN )); then
+    read_only_audit
     log "plan: role=$ROLE transport=$TRANSPORT version=$VERSION backend=$DETECTED_BACKEND"
     [[ "$ROLE" == "client" ]] && log "plan: publish SOCKS only on 127.0.0.1:$SOCKS_PORT"
-    log "plan: isolated Docker subnet=$NETWORK_SUBNET"
     log "plan: no host-wide firewall, DNS or routing changes"
     log "dry-run complete; no changes made"
     return 0
   fi
 
-  fetch_and_load_artifact
-  if ! create_managed_network; then
-    remove_recorded_images
-    rm -f "$IMAGES_FILE"
-    rmdir "$STATE_DIR" 2>/dev/null || true
-    die "failed to create isolated Docker network; downloaded image was cleaned up"
-  fi
+  prepare_host_for_install
+  validate_remote_url
 
-  CONTAINER_NAME="$(managed_container_name)"
-  write_config "$CONFIG_FILE" "$ROLE" "$VERSION" "$TRANSPORT" "$URL" "$NETWORK_SUBNET" "container" "$SOCKS_PORT"
-  write_ownership
-  install_control_plane
-
-  if ! safe_start_health; then
+  if ! ( perform_initial_install_transaction ); then
     rollback_failed_first_install
-    die "installation failed health gate and was rolled back"
+    die "installation failed and was rolled back"
   fi
 
-  systemctl enable --now openflux.service >/dev/null
   log "installation PASS: role=$ROLE version=$VERSION transport=$TRANSPORT"
   [[ "$ROLE" == "client" ]] && log "SOCKS endpoint: 127.0.0.1:$SOCKS_PORT"
 }
@@ -770,6 +845,8 @@ status_cmd() {
   printf 'role=%s\nversion=%s\ntransport=%s\nbackend=%s\n' "$ROLE" "$VERSION" "$TRANSPORT" "$BACKEND"
   [[ "$ROLE" == "client" ]] && printf 'socks=127.0.0.1:%s\n' "$SOCKS_PORT"
   printf 'network=%s subnet=%s\n' "$NETWORK_NAME" "$NETWORK_SUBNET"
+  printf 'service_active=%s\n' "$(systemctl is-active openflux.service 2>/dev/null || true)"
+  printf 'service_enabled=%s\n' "$(systemctl is-enabled openflux.service 2>/dev/null || true)"
   if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
     docker ps -a --filter "name=^/${CONTAINER_NAME}$" --format 'container={{.Names}} status={{.Status}} image={{.Image}}'
   else
@@ -790,7 +867,11 @@ logs_cmd() {
 
 restart_with_health_or_restore() {
   local context="$1"
-  ( remove_managed_container ) || die "$context could not remove the current managed container safely"
+
+  if ! ( remove_managed_container ); then
+    restore_previous_config
+    die "$context could not remove the current managed container safely; previous config restored"
+  fi
 
   if safe_start_health; then
     load_config
@@ -825,8 +906,9 @@ update_cmd() {
 
   detect_platform
   select_backend
-  ensure_apt_tooling
+  install_host_tooling
   ensure_docker
+  assert_update_image_safe
   fetch_and_load_artifact
   backup_current_config
 
@@ -911,20 +993,23 @@ set_transport_cmd() {
 
 start_cmd() {
   require_root
-  safe_start_health || die "start completed without a healthy runtime"
+  load_config
+  systemctl start openflux.service
+  health_check || die "service started but runtime health check failed"
 }
 
 stop_cmd() {
   require_root
-  stop_managed_container
+  load_config
+  systemctl stop openflux.service
   log "stopped"
 }
 
 restart_cmd() {
   require_root
   load_config
-  backup_current_config
-  restart_with_health_or_restore "restart"
+  systemctl restart openflux.service
+  health_check || die "service restarted but runtime health check failed"
 }
 
 uninstall_cmd() {
@@ -1046,7 +1131,7 @@ main() {
 
   case "$cmd" in
     install) install_cmd ;;
-    preflight) preflight ;;
+    preflight) preflight_cmd ;;
     status) status_cmd ;;
     test) test_cmd ;;
     logs) logs_cmd ;;
