@@ -98,13 +98,13 @@ jobs:
           IMAGE_ARCHIVE_SHA="$(sha256sum dist/openflux-container-linux-amd64.tar.gz | awk '{print $1}')"
           sed \
             -e "s/^DEFAULT_VERSION=.*/DEFAULT_VERSION=\"$VERSION\"/" \
-            -e "s/^KNOWN_RC2_ARCHIVE_SHA256=.*/KNOWN_RC2_ARCHIVE_SHA256=\"$IMAGE_ARCHIVE_SHA\"/" \
+            -e "s/^DEFAULT_ARCHIVE_SHA256=.*/DEFAULT_ARCHIVE_SHA256=\"$IMAGE_ARCHIVE_SHA\"/" \
             distribution/openflux-install > dist/openflux-install
           chmod 0755 dist/openflux-install
           bash -n dist/openflux-install
           shellcheck dist/openflux-install
-          grep -Fq "DEFAULT_VERSION=\"$VERSION\"" dist/openflux-install
-          grep -Fq "KNOWN_RC2_ARCHIVE_SHA256=\"$IMAGE_ARCHIVE_SHA\"" dist/openflux-install
+          grep -Fxq "DEFAULT_VERSION=\"$VERSION\"" dist/openflux-install
+          grep -Fxq "DEFAULT_ARCHIVE_SHA256=\"$IMAGE_ARCHIVE_SHA\"" dist/openflux-install
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
