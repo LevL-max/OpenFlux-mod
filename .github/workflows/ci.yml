@@ -66,6 +66,25 @@ jobs:
       - name: Installer help smoke test
         run: bash distribution/openflux-install help >/tmp/openflux-installer-help.txt && test -s /tmp/openflux-installer-help.txt
 
+      - name: Release self-pinning simulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_VERSION='v9.8.7-rc6'
+          TEST_SHA='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+          out="$(mktemp)"
+          trap 'rm -f "$out"' EXIT
+          sed \
+            -e "s/^DEFAULT_VERSION=.*/DEFAULT_VERSION=\"$TEST_VERSION\"/" \
+            -e "s/^KNOWN_RC2_ARCHIVE_SHA256=.*/KNOWN_RC2_ARCHIVE_SHA256=\"$TEST_SHA\"/" \
+            distribution/openflux-install > "$out"
+          bash -n "$out"
+          shellcheck "$out"
+          grep -Fxq "DEFAULT_VERSION=\"$TEST_VERSION\"" "$out"
+          grep -Fxq "KNOWN_RC2_ARCHIVE_SHA256=\"$TEST_SHA\"" "$out"
+          test "$(grep -c '^DEFAULT_VERSION=' "$out")" -eq 1
+          test "$(grep -c '^KNOWN_RC2_ARCHIVE_SHA256=' "$out")" -eq 1
+
       - name: Safety invariants
         shell: bash
         run: |
