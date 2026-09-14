@@ -1,4 +1,4 @@
-name: Draft private release
+name: Draft release
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
   packages: write
 
 concurrency:
-  group: openflux-private-release
+  group: openflux-release
   cancel-in-progress: false
 
 jobs:
@@ -60,6 +60,11 @@ jobs:
       - name: Test exact release source
         run: go test ./...
 
+      - name: Validate installer source
+        run: |
+          bash -n distribution/openflux-install
+          shellcheck distribution/openflux-install
+
       - name: Build Linux amd64 release binary
         env:
           CGO_ENABLED: '0'
@@ -86,6 +91,21 @@ jobs:
           test -s /tmp/openflux-help.txt
           docker save "$IMAGE:$VERSION" | gzip -9 > dist/openflux-container-linux-amd64.tar.gz
 
+      - name: Package self-pinned installer
+        shell: bash
+        run: |
+          set -euo pipefail
+          IMAGE_ARCHIVE_SHA="$(sha256sum dist/openflux-container-linux-amd64.tar.gz | awk '{print $1}')"
+          sed \
+            -e "s/^DEFAULT_VERSION=.*/DEFAULT_VERSION=\"$VERSION\"/" \
+            -e "s/^DEFAULT_ARCHIVE_SHA256=.*/DEFAULT_ARCHIVE_SHA256=\"$IMAGE_ARCHIVE_SHA\"/" \
+            distribution/openflux-install > dist/openflux-install
+          chmod 0755 dist/openflux-install
+          bash -n dist/openflux-install
+          shellcheck dist/openflux-install
+          grep -Fxq "DEFAULT_VERSION=\"$VERSION\"" dist/openflux-install
+          grep -Fxq "DEFAULT_ARCHIVE_SHA256=\"$IMAGE_ARCHIVE_SHA\"" dist/openflux-install
+
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
@@ -110,6 +130,7 @@ jobs:
           set -euo pipefail
           BINARY_SHA="$(sha256sum dist/openflux-linux-amd64 | awk '{print $1}')"
           IMAGE_ARCHIVE_SHA="$(sha256sum dist/openflux-container-linux-amd64.tar.gz | awk '{print $1}')"
+          INSTALLER_SHA="$(sha256sum dist/openflux-install | awk '{print $1}')"
           cat > dist/BUILD-METADATA <<EOF
           version=$VERSION
           source_commit=$GITHUB_SHA
@@ -122,6 +143,9 @@ jobs:
           go_build_flags=-trimpath -ldflags=-s -w -buildid=
           binary_sha256=$BINARY_SHA
           container_archive_sha256=$IMAGE_ARCHIVE_SHA
+          installer_sha256=$INSTALLER_SHA
+          installer_default_version=$VERSION
+          installer_default_archive_sha256=$IMAGE_ARCHIVE_SHA
           container_registry=$IMAGE:$VERSION
           container_registry_digest=$REGISTRY_DIGEST
           container_base=debian:bookworm-slim
@@ -131,15 +155,17 @@ jobs:
           cat > dist/RELEASE-NOTES.md <<EOF
           # OpenFlux-mod $VERSION
 
-          Private downstream release candidate built from GitHub main.
+          Downstream release candidate built from GitHub main.
 
           - Functional baseline remains the proven private Yandex v4 line.
           - Dynamic Yandex bootstrap/session discovery is retained.
           - Private 4-packet / 1 ms batching and current reliability hardening are retained.
           - Volga, CUPS and other experimental upstream transports are not promoted into this release candidate.
-          - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
-          - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
-          - Release creation does not deploy or restart AWS, Mini-PC1 or Mini-PC2.
+          - No Yandex session token, private key, environment file or runtime secret is baked into the binary, installer or container image.
+          - Client and exit container deployment can be managed by the `openflux-install` release asset.
+          - The packaged installer is self-pinned to this exact release version and container archive SHA256.
+          - The exit-node runtime uses an isolated Docker bridge; host networking is not required and no public container port is declared.
+          - Release creation does not deploy or restart production AWS or any Mini-PC.
 
           Container image:
 
@@ -157,6 +183,7 @@ jobs:
           sha256sum \
             dist/openflux-linux-amd64 \
             dist/openflux-container-linux-amd64.tar.gz \
+            dist/openflux-install \
             dist/BUILD-METADATA \
             dist/RELEASE-NOTES.md \
             > dist/SHA256SUMS
@@ -168,6 +195,7 @@ jobs:
           gh release create "$VERSION" \
             dist/openflux-linux-amd64 \
             dist/openflux-container-linux-amd64.tar.gz \
+            dist/openflux-install \
             dist/SHA256SUMS \
             dist/BUILD-METADATA \
             --repo "$GITHUB_REPOSITORY" \

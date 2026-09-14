@@ -47,3 +47,63 @@ jobs:
             dist/BUILD-METADATA
           if-no-files-found: error
           retention-days: 30
+
+  installer-static:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Bash syntax
+        run: bash -n distribution/openflux-install
+
+      - name: ShellCheck
+        run: shellcheck distribution/openflux-install
+
+      - name: Installer help smoke test
+        run: bash distribution/openflux-install help >/tmp/openflux-installer-help.txt && test -s /tmp/openflux-installer-help.txt
+
+      - name: Release self-pinning simulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          TEST_VERSION='v9.8.7-rc6'
+          TEST_SHA='0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
+          out="$(mktemp)"
+          trap 'rm -f "$out"' EXIT
+          sed \
+            -e "s/^DEFAULT_VERSION=.*/DEFAULT_VERSION=\"$TEST_VERSION\"/" \
+            -e "s/^DEFAULT_ARCHIVE_SHA256=.*/DEFAULT_ARCHIVE_SHA256=\"$TEST_SHA\"/" \
+            distribution/openflux-install > "$out"
+          bash -n "$out"
+          shellcheck "$out"
+          grep -Fxq "DEFAULT_VERSION=\"$TEST_VERSION\"" "$out"
+          grep -Fxq "DEFAULT_ARCHIVE_SHA256=\"$TEST_SHA\"" "$out"
+          test "$(grep -c '^DEFAULT_VERSION=' "$out")" -eq 1
+          test "$(grep -c '^DEFAULT_ARCHIVE_SHA256=' "$out")" -eq 1
+
+      - name: Safety invariants
+        shell: bash
+        run: |
+          set -euo pipefail
+          f=distribution/openflux-install
+          grep -Fq -- '127.0.0.1:${SOCKS_PORT}:1080' "$f"
+          grep -Fq -- '--cap-add NET_ADMIN' "$f"
+          grep -Fq -- '--cap-add NET_RAW' "$f"
+          grep -Fq -- 'PROFILE_QUEUE=1024' "$f"
+          grep -Fq -- 'PROFILE_TCP_DEFAULT=1048576' "$f"
+          grep -Fq -- 'PROFILE_TCP_MAX=4194304' "$f"
+          grep -Fq -- 'PROFILE_BATCH_PACKETS=4' "$f"
+          grep -Fq -- 'PROFILE_BATCH_DELAY_US=1000' "$f"
+          grep -Fq -- 'ip -o route show table all' "$f"
+          if grep -Eq -- '--network(=|[[:space:]]+)host|--privileged' "$f"; then
+            echo 'unsafe Docker isolation option found' >&2
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]*(sudo[[:space:]]+)?iptables[[:space:]]' "$f"; then
+            echo 'host-side iptables command found' >&2
+            exit 1
+          fi
