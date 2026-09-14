@@ -317,6 +317,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			if err != nil {
 				utils.Debugf("[YDOCS] Read error: %v", err)
 				t.SetConnected(false)
+				conn.Close()
 				next := attempt
 				if time.Since(connectedAt) > 15*time.Second {
 					next = -1
@@ -476,7 +477,6 @@ func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
 		return
 	}
 
-	// Socket.IO ping - respond with pong (use safeWrite)
 	if text == "2" {
 		if session != nil && session.Conn != nil {
 			session.safeWrite(websocket.TextMessage, []byte("3"))
