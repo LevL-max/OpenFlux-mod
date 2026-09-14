@@ -477,6 +477,7 @@ func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
 		return
 	}
 
+	// Socket.IO ping - respond with pong (use safeWrite)
 	if text == "2" {
 		if session != nil && session.Conn != nil {
 			session.safeWrite(websocket.TextMessage, []byte("3"))
