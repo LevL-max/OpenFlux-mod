@@ -2,7 +2,6 @@
 set -Eeuo pipefail
 IFS=$'\n\t'
 
-PROGRAM="${0##*/}"
 DEFAULT_REPO="LevL-max/OpenFlux-mod"
 DEFAULT_VERSION="v4.0.0-rc2"
 KNOWN_RC2_ARCHIVE_SHA256="74c02b7f7b46b26361d253578279ba3d7a7f95bcd420b5ac116dee1931e9a77c"
@@ -12,6 +11,7 @@ CONFIG_FILE="$CONFIG_DIR/config.env"
 STATE_DIR="/var/lib/openflux"
 OWNERSHIP_FILE="$STATE_DIR/ownership.env"
 PREVIOUS_CONFIG="$STATE_DIR/config.previous.env"
+IMAGES_FILE="$STATE_DIR/images.list"
 INSTALL_PATH="/usr/local/sbin/openflux-install"
 CTL_PATH="/usr/local/sbin/openfluxctl"
 SYSTEMD_UNIT="/etc/systemd/system/openflux.service"
@@ -27,7 +27,6 @@ NETWORK_NAME="openflux-net"
 NETWORK_SUBNET=""
 CONTAINER_NAME=""
 DRY_RUN=0
-ASSUME_YES=0
 
 PROFILE_QUEUE=1024
 PROFILE_COMPRESSION=true
@@ -42,6 +41,9 @@ ARCH="unknown"
 SERVICE_MANAGER="unknown"
 DETECTED_BACKEND="unknown"
 WORKDIR=""
+UPDATE_VERSION=""
+SET_URL_VALUE=""
+SET_TRANSPORT_VALUE=""
 
 log() { printf '[openflux] %s\n' "$*"; }
 warn() { printf '[openflux] WARNING: %s\n' "$*" >&2; }
@@ -77,10 +79,9 @@ Options:
   --transport yandex      transport abstraction; vyandex/Volga is not enabled yet
   --socks-port PORT       client localhost SOCKS port (default: 11080)
   --dry-run               show plan without changing the host
-  -y, --yes               non-interactive confirmation where applicable
 
 Current executable backend in v1: container on Ubuntu/Debian linux/amd64.
-Native OpenWRT/Entware backend is intentionally detected but not enabled yet.
+Native OpenWRT/Entware backend is detected intentionally but not enabled yet.
 EOF
 }
 
@@ -243,6 +244,7 @@ is_managed_network() {
 
 assert_name_ownership() {
   CONTAINER_NAME="$(managed_container_name)"
+  command -v docker >/dev/null 2>&1 || return 0
 
   if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1 && ! is_managed_container "$CONTAINER_NAME"; then
     die "container name $CONTAINER_NAME already exists and is not OpenFlux-managed"
@@ -261,7 +263,9 @@ port_in_use() {
 assert_client_port_available_for_new_install() {
   [[ "$ROLE" == "client" ]] || return 0
 
-  if docker container inspect openflux-client >/dev/null 2>&1 && is_managed_container openflux-client; then
+  if command -v docker >/dev/null 2>&1 \
+     && docker container inspect openflux-client >/dev/null 2>&1 \
+     && is_managed_container openflux-client; then
     return 0
   fi
 
@@ -273,12 +277,10 @@ assert_client_port_available_for_new_install() {
 collect_used_cidrs() {
   {
     ip -o route show 2>/dev/null | awk '{for (i=1;i<=NF;i++) if ($i ~ /^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+\/[0-9]+$/) print $i}'
-    if command -v docker >/dev/null 2>&1; then
-      local net
-      while IFS= read -r net; do
-        docker network inspect "$net" --format '{{range .IPAM.Config}}{{if .Subnet}}{{.Subnet}}{{"\n"}}{{end}}{{end}}' 2>/dev/null || true
-      done < <(docker network ls -q 2>/dev/null || true)
-    fi
+    local net
+    while IFS= read -r net; do
+      docker network inspect "$net" --format '{{range .IPAM.Config}}{{if .Subnet}}{{.Subnet}}{{"\n"}}{{end}}{{end}}' 2>/dev/null || true
+    done < <(docker network ls -q 2>/dev/null || true)
   } | awk 'NF' | sort -u
 }
 
@@ -352,6 +354,14 @@ expected_archive_sha() {
   awk '$2 ~ /(^|\/)openflux-container-linux-amd64.tar.gz$/ {print $1; exit}' "$sums"
 }
 
+record_owned_image() {
+  local image="$1"
+  install -d -m 0755 "$STATE_DIR"
+  touch "$IMAGES_FILE"
+  chmod 0600 "$IMAGES_FILE"
+  grep -Fxq "$image" "$IMAGES_FILE" || printf '%s\n' "$image" >> "$IMAGES_FILE"
+}
+
 fetch_and_load_artifact() {
   validate_version
   WORKDIR="$(mktemp -d /tmp/openflux-install.XXXXXX)"
@@ -379,18 +389,12 @@ fetch_and_load_artifact() {
   docker image inspect "$image" >/dev/null 2>&1 || die "loaded archive did not provide expected image $image"
   label_version="$(docker image inspect "$image" --format '{{index .Config.Labels "org.opencontainers.image.version"}}')"
   [[ "$label_version" == "$VERSION" ]] || die "image version label mismatch: expected $VERSION got $label_version"
+  record_owned_image "$image"
   log "container image loaded and version label verified"
 }
 
 write_config() {
-  local target="$1"
-  local role="$2"
-  local version="$3"
-  local transport="$4"
-  local url="$5"
-  local subnet="$6"
-  local backend="$7"
-  local socks_port="$8"
+  local target="$1" role="$2" version="$3" transport="$4" url="$5" subnet="$6" backend="$7" socks_port="$8"
   local tmp
   tmp="$(mktemp)"
   {
@@ -474,6 +478,12 @@ EOF
   systemctl daemon-reload
 }
 
+remove_control_plane() {
+  systemctl disable --now openflux.service >/dev/null 2>&1 || true
+  rm -f "$SYSTEMD_UNIT" "$CTL_PATH"
+  systemctl daemon-reload >/dev/null 2>&1 || true
+}
+
 runtime_args() {
   printf '%s\0' \
     "--transport" "$TRANSPORT" \
@@ -509,6 +519,7 @@ start_managed_container() {
   is_managed_network "$NETWORK_NAME" || die "refusing unmanaged network: $NETWORK_NAME"
 
   local -a args=()
+  local arg
   while IFS= read -r -d '' arg; do args+=("$arg"); done < <(runtime_args)
 
   if [[ "$ROLE" == "client" ]]; then
@@ -541,9 +552,7 @@ start_managed_container() {
 }
 
 stop_managed_container() {
-  if [[ ! -r "$CONFIG_FILE" ]]; then
-    return 0
-  fi
+  [[ -r "$CONFIG_FILE" ]] || return 0
   load_config
   if docker container inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
     is_managed_container "$CONTAINER_NAME" || die "refusing to stop unmanaged container $CONTAINER_NAME"
@@ -635,6 +644,28 @@ prompt_install_inputs() {
   fi
 }
 
+rollback_failed_first_install() {
+  warn "initial health gate failed; removing OpenFlux-owned test objects"
+  if [[ -r "$CONFIG_FILE" ]]; then
+    remove_managed_container || true
+  fi
+  if command -v docker >/dev/null 2>&1 \
+     && docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 \
+     && is_managed_network "$NETWORK_NAME"; then
+    docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
+  fi
+  remove_control_plane
+  rm -f "$CONFIG_FILE" "$OWNERSHIP_FILE" "$PREVIOUS_CONFIG"
+  if [[ -r "$IMAGES_FILE" ]]; then
+    while IFS= read -r image; do
+      [[ -n "$image" ]] && docker image rm "$image" >/dev/null 2>&1 || true
+    done < "$IMAGES_FILE"
+    rm -f "$IMAGES_FILE"
+  fi
+  rmdir "$CONFIG_DIR" "$STATE_DIR" 2>/dev/null || true
+  rm -f "$INSTALL_PATH"
+}
+
 install_cmd() {
   require_root
   prompt_install_inputs
@@ -666,16 +697,11 @@ install_cmd() {
   install_control_plane
 
   if ! start_managed_container || ! health_check; then
-    warn "initial health gate failed; rolling back installation"
-    remove_managed_container || true
-    if docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 && is_managed_network "$NETWORK_NAME"; then
-      docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || true
-    fi
-    rm -f "$CONFIG_FILE" "$OWNERSHIP_FILE"
+    rollback_failed_first_install
     die "installation failed health gate and was rolled back"
   fi
 
-  systemctl enable openflux.service >/dev/null
+  systemctl enable --now openflux.service >/dev/null
   log "installation PASS: role=$ROLE version=$VERSION transport=$TRANSPORT"
   [[ "$ROLE" == "client" ]] && log "SOCKS endpoint: 127.0.0.1:$SOCKS_PORT"
 }
@@ -708,6 +734,7 @@ restart_with_health_or_restore() {
   local context="$1"
   remove_managed_container
   if start_managed_container && health_check; then
+    write_ownership
     log "$context PASS"
     return 0
   fi
@@ -717,6 +744,7 @@ restart_with_health_or_restore() {
   remove_managed_container || true
   start_managed_container
   health_check || die "$context failed and automatic rollback could not restore health"
+  write_ownership
   die "$context failed; previous configuration was restored successfully"
 }
 
@@ -724,7 +752,7 @@ update_cmd() {
   require_root
   load_config
   local old_version="$VERSION"
-  local new_version="${UPDATE_VERSION:-}"
+  local new_version="$UPDATE_VERSION"
   [[ -n "$new_version" ]] || die "update requires --version"
   VERSION="$new_version"
   validate_version
@@ -737,20 +765,13 @@ update_cmd() {
   fetch_and_load_artifact
   backup_current_config
 
-  # Reload old config values, then write the requested version.
   load_config
   write_config "$CONFIG_FILE" "$ROLE" "$new_version" "$TRANSPORT" "$URL" "$NETWORK_SUBNET" "$BACKEND" "$SOCKS_PORT"
   VERSION="$new_version"
   restart_with_health_or_restore "update to $new_version"
 }
 
-rollback_cmd() {
-  require_root
-  load_config
-  [[ -r "$PREVIOUS_CONFIG" ]] || die "no previous config is available"
-  local current_version="$VERSION"
-  backup_current_config >/dev/null 2>&1 || true
-  # Swap current and previous so rollback itself remains reversible.
+swap_current_previous_config() {
   local tmp
   tmp="$(mktemp)"
   cp -a "$CONFIG_FILE" "$tmp"
@@ -758,15 +779,40 @@ rollback_cmd() {
   cp -a "$tmp" "$PREVIOUS_CONFIG"
   rm -f "$tmp"
   chmod 0600 "$CONFIG_FILE" "$PREVIOUS_CONFIG"
+}
+
+rollback_cmd() {
+  require_root
   load_config
-  docker image inspect "$(image_ref)" >/dev/null 2>&1 || die "rollback image is not present locally: $(image_ref)"
-  remove_managed_container
-  start_managed_container
-  if health_check; then
-    log "rollback PASS: $current_version -> $VERSION"
-  else
-    die "rollback target failed health check; manual intervention required"
+  [[ -r "$PREVIOUS_CONFIG" ]] || die "no previous config is available"
+  local current_version="$VERSION"
+
+  swap_current_previous_config
+  load_config
+  if ! docker image inspect "$(image_ref)" >/dev/null 2>&1; then
+    log "rollback image not present locally; fetching exact previous release $VERSION"
+    if ! fetch_and_load_artifact; then
+      swap_current_previous_config
+      load_config
+      die "could not fetch rollback image; current configuration was left unchanged"
+    fi
   fi
+
+  remove_managed_container
+  if start_managed_container && health_check; then
+    write_ownership
+    log "rollback PASS: $current_version -> $VERSION"
+    return 0
+  fi
+
+  warn "rollback target failed health check; restoring the configuration active before rollback"
+  swap_current_previous_config
+  load_config
+  remove_managed_container || true
+  start_managed_container
+  health_check || die "rollback target failed and original configuration could not be restored"
+  write_ownership
+  die "rollback target failed health check; original configuration restored"
 }
 
 set_url_cmd() {
@@ -820,13 +866,12 @@ restart_cmd() {
 uninstall_cmd() {
   require_root
   load_config
-  local image
-  image="$(image_ref)"
 
   log "uninstalling only OpenFlux-owned objects"
   if (( DRY_RUN )); then
     log "would stop/remove managed container $CONTAINER_NAME"
     log "would remove managed network $NETWORK_NAME if unused"
+    log "would remove only images recorded in $IMAGES_FILE"
     log "would remove config/state/control-plane files"
     return 0
   fi
@@ -842,8 +887,13 @@ uninstall_cmd() {
     docker network rm "$NETWORK_NAME" >/dev/null 2>&1 || warn "managed network is still in use; leaving it in place"
   fi
 
-  docker image rm "$image" >/dev/null 2>&1 || true
-  rm -f "$SYSTEMD_UNIT" "$CTL_PATH" "$CONFIG_FILE" "$OWNERSHIP_FILE" "$PREVIOUS_CONFIG"
+  if [[ -r "$IMAGES_FILE" ]]; then
+    while IFS= read -r image; do
+      [[ -n "$image" ]] && docker image rm "$image" >/dev/null 2>&1 || true
+    done < "$IMAGES_FILE"
+  fi
+
+  rm -f "$SYSTEMD_UNIT" "$CTL_PATH" "$CONFIG_FILE" "$OWNERSHIP_FILE" "$PREVIOUS_CONFIG" "$IMAGES_FILE"
   rmdir "$CONFIG_DIR" "$STATE_DIR" 2>/dev/null || true
   systemctl daemon-reload
   rm -f "$INSTALL_PATH"
@@ -865,8 +915,7 @@ parse_options() {
     case "$1" in
       client|exit)
         [[ -z "$ROLE" ]] || die "role specified more than once"
-        ROLE="$1"
-        shift
+        ROLE="$1"; shift
         ;;
       --url)
         (($# >= 2)) || die "--url requires a value"
@@ -895,15 +944,10 @@ parse_options() {
       --dry-run)
         DRY_RUN=1; shift
         ;;
-      -y|--yes)
-        ASSUME_YES=1; shift
-        ;;
       -h|--help)
         usage; exit 0
         ;;
-      *)
-        die "unknown option/argument: $1"
-        ;;
+      *) die "unknown option/argument: $1" ;;
     esac
   done
 }
@@ -912,10 +956,6 @@ main() {
   local cmd="${1:-}"
   [[ -n "$cmd" ]] || { usage; exit 1; }
   shift || true
-
-  SET_URL_VALUE=""
-  SET_TRANSPORT_VALUE=""
-  UPDATE_VERSION=""
 
   case "$cmd" in
     set-url)
