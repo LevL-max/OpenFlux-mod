@@ -1,0 +1,60 @@
+name: Volga central batcher v3 bytecap
+
+on:
+  push:
+    branches: [test/volga-central-batcher-v3-bytecap]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-test-artifact:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go from go.mod
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Apply V1 central batcher, V2 telemetry, V3 byte cap
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/volga_central_batcher_v1.py
+          python3 tools/volga_central_batcher_v2_telemetry.py
+          python3 tools/volga_central_batcher_v3_bytecap.py
+          gofmt -w transport/yandex/vyandex.go
+          git diff --check
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build Linux amd64 test binary
+        env:
+          GOOS: linux
+          GOARCH: amd64
+          CGO_ENABLED: 0
+        run: |
+          mkdir -p dist
+          go build -trimpath -o dist/openflux-volga-batcher-v3 .
+          sha256sum dist/openflux-volga-batcher-v3 | tee dist/SHA256SUMS
+          printf 'base_commit=%s\n' '2133b7179dd5e42f7bd7e53d824a355faad35d64' > dist/BUILD-METADATA
+          printf 'test_patch=central-batcher-v1-plus-telemetry-v2-plus-bytecap-v3\n' >> dist/BUILD-METADATA
+          printf 'workflow_commit=%s\n' "$GITHUB_SHA" >> dist/BUILD-METADATA
+          printf 'go_version=%s\n' "$(go version)" >> dist/BUILD-METADATA
+
+      - name: Upload test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openflux-volga-central-batcher-v3-${{ github.sha }}
+          path: |
+            dist/openflux-volga-batcher-v3
+            dist/SHA256SUMS
+            dist/BUILD-METADATA
+          if-no-files-found: error
+          retention-days: 7
