@@ -1,4 +1,4 @@
-name: Volga V1 auth probe
+name: Volga V2 push WebSocket probe
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  auth:
+  ws:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,11 +26,12 @@ jobs:
       - name: Build diagnostic probe
         run: go build -trimpath -o /tmp/volga-probe ./cmd/volga-probe
 
-      - name: Authenticate test document only
+      - name: Probe Volga push WebSocket only
         shell: bash
         run: |
           set -euo pipefail
           U='https:'
           U="${U}//disk.yandex.ru/i/bYtlXiyMGxd1lw"
-          # V1 only: Volga bootstrap/authentication. No WS, no relay, no client/exit.
-          /tmp/volga-probe auth --url "$U"
+          # V2 only: one fresh auth bootstrap, one Xiva push WS handshake/read/close.
+          # No relay POST, no batching, no SOCKS, no tunnel, no client/exit.
+          /tmp/volga-probe ws --url "$U"
