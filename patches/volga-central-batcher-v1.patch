@@ -1,0 +1,230 @@
+diff --git a/transport/yandex/vyandex.go b/transport/yandex/vyandex.go
+index e6940ca..0000000 100644
+--- a/transport/yandex/vyandex.go
++++ b/transport/yandex/vyandex.go
+@@ -418,8 +418,8 @@ type relayClient struct {
+ 
+ 	httpClient *http.Client
+ 	workers    int
+-	queue      chan []byte
+-	batchQueue chan []byte
++	packetQueue chan []byte
++	batchQueue  chan [][]byte
+ 	wg         sync.WaitGroup
+ 	ctx        context.Context
+ 	cancel     context.CancelFunc
+@@ -446,6 +446,11 @@ func newRelayClient(auth *volgaAuth, cfg VolgaConfig, stats *VolgaStats) *relayC
+ 
+ 	ctx, cancel := context.WithCancel(context.Background())
+ 
++	batchQueueSize := cfg.QueueSize / cfg.BatchSize
++	if batchQueueSize < 1 {
++		batchQueueSize = 1
++	}
++
+ 	return &relayClient{
+ 		auth:   auth,
+ 		config: cfg,
+@@ -457,20 +462,21 @@ func newRelayClient(auth *volgaAuth, cfg VolgaConfig, stats *VolgaStats) *relayC
+ 			Jar:       auth.Session.Jar,
+ 		},
+-		workers:    cfg.WorkerCount,
+-		queue:      make(chan []byte, cfg.QueueSize),
+-		batchQueue: make(chan []byte, cfg.QueueSize),
+-		ctx:        ctx,
+-		cancel:     cancel,
++		workers:     cfg.WorkerCount,
++		packetQueue: make(chan []byte, cfg.QueueSize),
++		batchQueue:  make(chan [][]byte, batchQueueSize),
++		ctx:         ctx,
++		cancel:      cancel,
+ 	}
+ }
+ 
+ func (r *relayClient) Start() {
++	r.wg.Add(1)
++	go r.batcher()
++
+ 	for i := 0; i < r.workers; i++ {
+ 		r.wg.Add(1)
+ 		go r.worker(i)
+ 	}
+-	utils.Debugf("[VOLGA] relay pool started: %d workers, batch=%d timeout=%v",
++	utils.Debugf("[VOLGA] relay pool started: central batcher -> %d HTTP workers, batch=%d timeout=%v",
+ 		r.workers, r.config.BatchSize, r.config.BatchTimeout)
+ }
+ 
+ func (r *relayClient) Stop() {
+ 	r.cancel()
+-	close(r.queue)
+-	close(r.batchQueue)
+ 	r.wg.Wait()
+ }
+ 
+@@ -488,13 +494,90 @@ func (r *relayClient) Send(data []byte) error {
+ 	cp := make([]byte, len(data))
+ 	copy(cp, data)
+ 
++	select {
++	case <-r.ctx.Done():
++		return fmt.Errorf("relay stopped")
++	default:
++	}
++
+ 	select {
+-	case r.batchQueue <- cp:
++	case r.packetQueue <- cp:
+ 		return nil
+ 	default:
+ 		r.stats.QueueDrops.Add(1)
+ 		return fmt.Errorf("queue full")
+ 	}
+ }
+ 
+-func (r *relayClient) worker(id int) {
++func (r *relayClient) batcher() {
+ 	defer r.wg.Done()
+ 
+ 	batch := make([][]byte, 0, r.config.BatchSize)
+ 	totalBytes := 0
+ 	timer := time.NewTimer(r.config.BatchTimeout)
+ 	if !timer.Stop() {
+ 		<-timer.C
+ 	}
+ 	defer timer.Stop()
++	var timerC <-chan time.Time
++
++	stopTimer := func() {
++		if timerC == nil {
++			return
++		}
++		if !timer.Stop() {
++			select {
++			case <-timer.C:
++			default:
++			}
++		}
++		timerC = nil
++	}
++
++	startTimer := func() {
++		stopTimer()
++		timer.Reset(r.config.BatchTimeout)
++		timerC = timer.C
++	}
+ 
+-	flush := func() {
++	flush := func() bool {
+ 		if len(batch) == 0 {
+-			return
++			return true
+ 		}
++
++		stopTimer()
++		ready := batch
++		batch = make([][]byte, 0, r.config.BatchSize)
++		totalBytes = 0
++
++		select {
++		case r.batchQueue <- ready:
++			return true
++		case <-r.ctx.Done():
++			return false
++		}
++	}
++
++	for {
++		select {
++		case <-r.ctx.Done():
++			return
++
++		case pkt := <-r.packetQueue:
++			batch = append(batch, pkt)
++			totalBytes += len(pkt)
++
++			if len(batch) >= r.config.BatchSize || totalBytes >= r.config.BatchMaxBytes {
++				if !flush() {
++					return
++				}
++			} else if len(batch) == 1 {
++				startTimer()
++			}
++
++		case <-timerC:
++			timerC = nil
++			if !flush() {
++				return
++			}
++		}
++	}
++}
++
++func (r *relayClient) worker(id int) {
++	defer r.wg.Done()
++
++	for {
++		select {
++		case <-r.ctx.Done():
++			return
++
++		case batch := <-r.batchQueue:
++			if len(batch) == 0 {
++				continue
++			}
++
+ 		r.stats.WorkerBusy.Add(1)
+ 		err := r.sendBatch(batch)
+ 		if err != nil {
+ 			r.stats.HTTPReqsFailed.Add(1)
+@@ -505,32 +588,9 @@ func (r *relayClient) worker(id int) {
+ 			r.stats.BatchesSent.Add(1)
+ 		}
+ 		r.stats.WorkerBusy.Add(-1)
+-		batch = batch[:0]
+-		totalBytes = 0
+-	}
+-
+-	for {
+-		select {
+-		case <-r.ctx.Done():
+-			flush()
+-			return
+-
+-		case pkt, ok := <-r.batchQueue:
+-			if !ok {
+-				flush()
+-				return
+-			}
+-			batch = append(batch, pkt)
+-			totalBytes += len(pkt)
+-
+-			if len(batch) >= r.config.BatchSize || totalBytes >= r.config.BatchMaxBytes {
+-				flush()
+-			} else if len(batch) == 1 {
+-				timer.Reset(r.config.BatchTimeout)
+-			}
+-
+-		case <-timer.C:
+-			flush()
++		}
+ 		}
+ 	}
+ }
+@@ -1060,13 +1120,15 @@ func (t *YandexVolgaTransport) statsLoop() {
+ 			batches := t.stats.BatchesSent.Load()
+ 			batched := t.stats.PacketsBatched.Load()
+ 
+-			utils.Debugf("[VOLGA-STATS] send %d pkt/s (%d KB/s) | http %d req/s fail %d | batch %d (avg %.1f pkt) | recv %d pkt/s (%d KB/s) | busy %d/%d",
++			utils.Debugf("[VOLGA-STATS] send %d pkt/s (%d KB/s) | http %d req/s fail %d | batch %d (avg %.1f pkt) | recv %d pkt/s (%d KB/s) | busy %d/%d | q %d/%d batchq %d/%d",
+ 				(sent-lastSent)/5, (bytes-lastBytes)/5/1024,
+ 				(httpReqs-lastHTTP)/5, failed-lastFailed,
+ 				(batches-lastBatches)/5,
+ 				float64(batched-lastBatched)/float64(maxU64(batches-lastBatches, 1)),
+ 				(recv-lastRecv)/5, (recvBytes-lastRecvBytes)/5/1024,
+-				t.stats.WorkerBusy.Load(), t.config.WorkerCount)
++				t.stats.WorkerBusy.Load(), t.config.WorkerCount,
++				len(t.relay.packetQueue), cap(t.relay.packetQueue),
++				len(t.relay.batchQueue), cap(t.relay.batchQueue))
+ 
+ 			lastSent, lastBytes = sent, bytes
+ 			lastHTTP, lastFailed = httpReqs, failed
