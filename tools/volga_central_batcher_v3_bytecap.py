@@ -13,7 +13,7 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 # Use a conservative raw batch cap derived from the observed Volga HTTP 413 envelope.
 # V2 telemetry observed success at body=6434/raw=4503 and 413 at body=8293/raw=5898.
-# 5000 raw bytes leaves ~1 KiB headroom below an apparent ~8 KiB request ceiling.
+# 5000 raw bytes leaves useful headroom below the apparent ~8 KiB request ceiling.
 s = replace_once(
     s,
     "\t\tBatchMaxBytes: 4 * 1024 * 1024,\n",
@@ -21,7 +21,7 @@ s = replace_once(
     "BatchMaxBytes default",
 )
 
-old = r'''\t\tcase pkt := <-r.packetQueue:
+old = """\t\tcase pkt := <-r.packetQueue:
 \t\t\tbatch = append(batch, pkt)
 \t\t\ttotalBytes += len(pkt)
 
@@ -32,9 +32,9 @@ old = r'''\t\tcase pkt := <-r.packetQueue:
 \t\t\t} else if len(batch) == 1 {
 \t\t\t\tarmTimer()
 \t\t\t}
-'''
+"""
 
-new = r'''\t\tcase pkt := <-r.packetQueue:
+new = """\t\tcase pkt := <-r.packetQueue:
 \t\t\t// Flush the current batch BEFORE appending a packet that would cross
 \t\t\t// the byte cap. Flushing only after append can overshoot the HTTP
 \t\t\t// request-size ceiling and cause Volga to return 413.
@@ -54,7 +54,7 @@ new = r'''\t\tcase pkt := <-r.packetQueue:
 \t\t\t} else if len(batch) == 1 {
 \t\t\t\tarmTimer()
 \t\t\t}
-'''
+"""
 
 s = replace_once(s, old, new, "byte-aware preflush")
 
