@@ -1,4 +1,4 @@
-name: Volga V0 classify probe
+name: Volga V1 auth probe
 
 on:
   push:
@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 jobs:
-  classify:
+  auth:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -26,11 +26,11 @@ jobs:
       - name: Build diagnostic probe
         run: go build -trimpath -o /tmp/volga-probe ./cmd/volga-probe
 
-      - name: Classify test document only
+      - name: Authenticate test document only
         shell: bash
         run: |
           set -euo pipefail
           U='https:'
           U="${U}//disk.yandex.ru/i/bYtlXiyMGxd1lw"
-          # V0 only: public page/client-config classification, no auth and no WS.
-          /tmp/volga-probe classify --url "$U"
+          # V1 only: Volga bootstrap/authentication. No WS, no relay, no client/exit.
+          /tmp/volga-probe auth --url "$U"
