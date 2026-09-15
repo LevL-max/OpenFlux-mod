@@ -44,12 +44,16 @@ func classifyChallenge(status int, finalURL string, body []byte) string {
 		return "rate_limit"
 	case status == http.StatusForbidden:
 		return "forbidden"
-	case strings.Contains(u, "passport.yandex") || strings.Contains(lower, "passport") || strings.Contains(lower, "login"):
+	case strings.Contains(u, "passport.yandex"):
 		return "login"
-	case strings.Contains(lower, "captcha") || strings.Contains(lower, "smartcaptcha"):
+	case strings.Contains(u, "captcha") || strings.Contains(u, "smartcaptcha"):
 		return "captcha"
 	case strings.Contains(u, "/document/error/"):
 		return "document_error"
+	case len(body) > 0 && (strings.Contains(lower, "smartcaptcha") || strings.Contains(lower, "captcha")):
+		return "captcha"
+	case len(body) > 0 && (strings.Contains(lower, "passport.yandex") || strings.Contains(lower, "passport-auth")):
+		return "login"
 	default:
 		return "none"
 	}
@@ -111,11 +115,14 @@ func ProbeVolgaClassify(docURL string) VolgaProbeResult {
 	if u, parseErr := url.Parse(finalURL); parseErr == nil {
 		result.FinalHost = u.Host
 	}
-	result.Challenge = classifyChallenge(status, finalURL, body)
 	if err != nil {
+		result.Challenge = classifyChallenge(status, finalURL, body)
 		result.Error = err.Error()
 		return result
 	}
+	// A valid client-config means we reached an editor page. Do not classify
+	// generic login/captcha words elsewhere in normal page HTML as a challenge.
+	result.Challenge = classifyChallenge(status, finalURL, nil)
 
 	if officeType := getStr(cfg, "officeType"); officeType != "" {
 		result.Layout = officeType
