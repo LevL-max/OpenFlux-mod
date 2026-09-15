@@ -85,12 +85,20 @@ func TestFormatTTL(t *testing.T) {
 	}
 }
 
-func TestNewYandexVolgaTransport(t *testing.T) {
-	tr := NewYandexVolgaTransport("https://disk.yandex.ru/i/test", transport.TransportConfig{})
-	if tr == nil {
-		t.Fatal("transport is nil")
+func TestNewYandexVolgaTransportDefaults(t *testing.T) {
+	baseCfg := transport.DefaultConfig()
+	v := NewYandexVolgaTransport("https://example.invalid/doc", baseCfg)
+
+	if v.docURL != "https://example.invalid/doc" {
+		t.Fatalf("docURL=%q", v.docURL)
 	}
-	if tr.docURL != "https://disk.yandex.ru/i/test" {
-		t.Fatalf("docURL=%q", tr.docURL)
+	if v.config.BatchSize != 20 || v.config.BatchTimeout != 2*time.Millisecond {
+		t.Fatalf("unexpected Volga batching defaults: size=%d timeout=%v", v.config.BatchSize, v.config.BatchTimeout)
+	}
+	if v.IsConnected() {
+		t.Fatal("new Volga transport must not report connected before Start")
+	}
+	if err := v.Send([]byte("x")); err == nil {
+		t.Fatal("Send before Start must fail")
 	}
 }
