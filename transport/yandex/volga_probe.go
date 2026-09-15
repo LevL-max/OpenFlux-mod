@@ -142,16 +142,14 @@ func ProbeVolgaClassify(docURL string) VolgaProbeResult {
 	return result
 }
 
-// ProbeVolgaAuth executes the same authorize() path used by the transport and
-// returns only presence/health metadata. Secret values are never returned.
-func ProbeVolgaAuth(docURL string) VolgaProbeResult {
+func probeVolgaAuthSession(docURL string) (VolgaProbeResult, *volgaAuth) {
 	result := ProbeVolgaClassify(docURL)
 	result.Stage = "auth"
 	if result.Challenge != "none" || result.Error != "" || result.Layout != "volga" {
 		if result.Error == "" && result.Layout != "volga" {
 			result.Error = "document is not a Volga layout"
 		}
-		return result
+		return result, nil
 	}
 	auth, err := authorize(docURL)
 	if err != nil {
@@ -159,7 +157,7 @@ func ProbeVolgaAuth(docURL string) VolgaProbeResult {
 		if strings.Contains(strings.ToLower(result.Error), "document/error") {
 			result.Challenge = "document_error"
 		}
-		return result
+		return result, nil
 	}
 	result.HasToken = auth.Token != ""
 	result.HasRequestPath = auth.RequestPath != ""
@@ -167,20 +165,23 @@ func ProbeVolgaAuth(docURL string) VolgaProbeResult {
 	result.HasXivaUser = auth.UserIDStr != ""
 	result.HasXivaSign = auth.Sign != ""
 	result.HasXivaTS = auth.TS != ""
+	return result, auth
+}
+
+// ProbeVolgaAuth executes the same authorize() path used by the transport and
+// returns only presence/health metadata. Secret values are never returned.
+func ProbeVolgaAuth(docURL string) VolgaProbeResult {
+	result, _ := probeVolgaAuthSession(docURL)
 	return result
 }
 
-// ProbeVolgaWS executes auth, opens the same Xiva push WebSocket endpoint used
-// by Volga, waits for one server frame, and closes it. It sends no tunnel data.
+// ProbeVolgaWS executes one auth bootstrap, opens the same Xiva push WebSocket
+// endpoint used by Volga, waits for one server frame, and closes it. It sends
+// no tunnel data.
 func ProbeVolgaWS(docURL string) VolgaProbeResult {
-	result := ProbeVolgaAuth(docURL)
+	result, auth := probeVolgaAuthSession(docURL)
 	result.Stage = "ws"
-	if result.Error != "" {
-		return result
-	}
-	auth, err := authorize(docURL)
-	if err != nil {
-		result.Error = err.Error()
+	if result.Error != "" || auth == nil {
 		return result
 	}
 	wsURL := "wss://push.yandex.ru/v2/subscribe/websocket?" +
