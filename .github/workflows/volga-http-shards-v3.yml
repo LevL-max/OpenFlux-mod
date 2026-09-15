@@ -1,0 +1,103 @@
+name: Volga HTTP shards v3
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/volga-http-shards-v3
+    paths:
+      - 'tools/volga_http_shards_v3.py'
+      - '.github/workflows/volga-http-shards-v3.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+
+      - name: Apply V1 central batcher
+        run: python3 tools/volga_central_batcher_v1.py
+
+      - name: Apply V2 telemetry and redaction
+        run: python3 tools/volga_central_batcher_v2_telemetry.py
+
+      - name: Apply V3 byte cap
+        run: python3 tools/volga_central_batcher_v3_bytecap.py
+
+      - name: Apply V4 packet telemetry
+        run: python3 tools/volga_central_batcher_v4_packet_telemetry.py
+
+      - name: Apply V5 serial worker baseline step
+        run: python3 tools/volga_central_batcher_v5_serial_worker.py
+
+      - name: Apply V6 64-worker baseline step
+        run: python3 tools/volga_central_batcher_v6_64_workers.py
+
+      - name: Apply runtime benchmark harness
+        run: python3 tools/volga_benchmark_harness.py
+
+      - name: Apply body fragmentation v1
+        run: python3 tools/volga_body_fragment_v1.py
+
+      - name: Apply adaptive fragmentation v2
+        run: python3 tools/volga_adaptive_fragment_v2.py
+
+      - name: Apply HTTP shards v3
+        run: python3 tools/volga_http_shards_v3.py
+
+      - name: Format generated Go
+        run: |
+          gofmt -w \
+            main.go \
+            transport/transport.go \
+            transport/yandex/vyandex.go \
+            transport/yandex/volga_fragment_test.go \
+            transport/yandex/volga_http_shards_test.go
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build linux amd64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -buildvcs=false -trimpath -o openflux-volga-http-shards-v3 .
+
+      - name: Verify runtime knobs
+        run: |
+          ./openflux-volga-http-shards-v3 -h 2>&1 | grep -E -- 'volga-workers|volga-http-shards|volga-batch-bytes|volga-http-body-limit|volga-normalize-mtu' >/dev/null
+
+      - name: Checksums and metadata
+        run: |
+          sha256sum openflux-volga-http-shards-v3 > SHA256SUMS
+          {
+            echo "source_branch=test/volga-http-shards-v3"
+            echo "workflow_commit=${GITHUB_SHA}"
+            echo "transform=v1-v6+benchmark-harness+body-fragment-v1+adaptive-fragment-v2+http-shards-v3"
+            echo "http_shards_default=1"
+            echo "http_shards_allowed=1,2,4,8"
+            echo "batch_bytes_baseline=5000"
+            echo "http_body_limit=8000"
+            echo "normalizer_expected_runtime=0"
+            echo "go_version=$(go version)"
+          } > BUILD-METADATA
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openflux-volga-http-shards-v3-${{ github.sha }}
+          path: |
+            openflux-volga-http-shards-v3
+            SHA256SUMS
+            BUILD-METADATA
+          retention-days: 7
