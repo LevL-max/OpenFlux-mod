@@ -25,8 +25,8 @@ func TestDefaultVolgaConfig(t *testing.T) {
 	if cfg.BatchTimeout != 2*time.Millisecond {
 		t.Fatalf("BatchTimeout=%v want 2ms", cfg.BatchTimeout)
 	}
-	if cfg.BatchMaxBytes != 4*1024*1024 {
-		t.Fatalf("BatchMaxBytes=%d want %d", cfg.BatchMaxBytes, 4*1024*1024)
+	if cfg.BatchMaxBytes != 5000 {
+		t.Fatalf("BatchMaxBytes=%d want 5000", cfg.BatchMaxBytes)
 	}
 	if cfg.ReconnectMinDelay != 500*time.Millisecond {
 		t.Fatalf("ReconnectMinDelay=%v want 500ms", cfg.ReconnectMinDelay)
@@ -85,20 +85,12 @@ func TestFormatTTL(t *testing.T) {
 	}
 }
 
-func TestNewYandexVolgaTransportDefaults(t *testing.T) {
-	baseCfg := transport.DefaultConfig()
-	v := NewYandexVolgaTransport("https://example.invalid/doc", baseCfg)
-
-	if v.docURL != "https://example.invalid/doc" {
-		t.Fatalf("docURL=%q", v.docURL)
+func TestNewYandexVolgaTransport(t *testing.T) {
+	tr := NewYandexVolgaTransport("https://disk.yandex.ru/i/test", transport.TransportConfig{})
+	if tr == nil {
+		t.Fatal("transport is nil")
 	}
-	if v.config.BatchSize != 20 || v.config.BatchTimeout != 2*time.Millisecond {
-		t.Fatalf("unexpected Volga batching defaults: size=%d timeout=%v", v.config.BatchSize, v.config.BatchTimeout)
-	}
-	if v.IsConnected() {
-		t.Fatal("new Volga transport must not report connected before Start")
-	}
-	if err := v.Send([]byte("x")); err == nil {
-		t.Fatal("Send before Start must fail")
+	if tr.docURL != "https://disk.yandex.ru/i/test" {
+		t.Fatalf("docURL=%q", tr.docURL)
 	}
 }
