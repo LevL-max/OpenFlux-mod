@@ -13,8 +13,8 @@ import (
 func TestDefaultVolgaConfig(t *testing.T) {
 	cfg := DefaultVolgaConfig()
 
-	if cfg.WorkerCount != 2000 {
-		t.Fatalf("WorkerCount=%d want 2000", cfg.WorkerCount)
+	if cfg.WorkerCount != 1 {
+		t.Fatalf("WorkerCount=%d want 1", cfg.WorkerCount)
 	}
 	if cfg.QueueSize != 1_000_000 {
 		t.Fatalf("QueueSize=%d want 1000000", cfg.QueueSize)
