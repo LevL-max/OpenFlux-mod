@@ -63,7 +63,7 @@ jobs:
 
       - name: Verify runtime knobs
         run: |
-          ./openflux-volga-body-fragment-v1 --help 2>&1 | grep -E -- '--volga-workers|--volga-batch-bytes|--volga-http-body-limit|--volga-normalize-mtu'
+          ./openflux-volga-body-fragment-v1 --help 2>&1 | grep -E -- 'volga-workers|volga-batch-bytes|volga-http-body-limit|volga-normalize-mtu'
 
       - name: Checksums and metadata
         run: |
