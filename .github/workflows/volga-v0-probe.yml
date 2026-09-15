@@ -32,4 +32,5 @@ jobs:
           set -euo pipefail
           U='https:'
           U="${U}//disk.yandex.ru/i/BGr5sIITkdvHPg"
+          # V0 only: public page/client-config classification, no auth and no WS.
           /tmp/volga-probe classify --url "$U"
