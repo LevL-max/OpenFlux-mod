@@ -1,0 +1,64 @@
+name: Volga central batcher v5 serial worker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+
+      - name: Apply V1 central batcher
+        run: python3 tools/volga_central_batcher_v1.py
+
+      - name: Apply V2 telemetry
+        run: python3 tools/volga_central_batcher_v2_telemetry.py
+
+      - name: Apply V3 byte cap
+        run: python3 tools/volga_central_batcher_v3_bytecap.py
+
+      - name: Apply V4 packet telemetry
+        run: python3 tools/volga_central_batcher_v4_packet_telemetry.py
+
+      - name: Apply V5 serial worker
+        run: python3 tools/volga_central_batcher_v5_serial_worker.py
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build linux amd64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -trimpath -o openflux-volga-batcher-v5 .
+
+      - name: Checksums
+        run: |
+          sha256sum openflux-volga-batcher-v5 > SHA256SUMS
+          {
+            echo "base_commit=2133b7179dd5e42f7bd7e53d824a355faad35d64"
+            echo "test_patch=central-batcher-v1-plus-telemetry-v2-plus-bytecap-v3-plus-packet-telemetry-v4-plus-serial-worker-v5"
+            echo "workflow_commit=${GITHUB_SHA}"
+            echo "go_version=$(go version)"
+          } > BUILD-METADATA
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openflux-volga-central-batcher-v5-${{ github.sha }}
+          path: |
+            openflux-volga-batcher-v5
+            SHA256SUMS
+            BUILD-METADATA
+          retention-days: 7
