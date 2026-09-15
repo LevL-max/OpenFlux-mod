@@ -1,0 +1,35 @@
+name: Volga V0 classify probe
+
+on:
+  push:
+    branches: [feature/volga-integration]
+    paths:
+      - .github/workflows/volga-v0-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  classify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build diagnostic probe
+        run: go build -trimpath -o /tmp/volga-probe ./cmd/volga-probe
+
+      - name: Classify test document only
+        shell: bash
+        run: |
+          set -euo pipefail
+          U='https:'
+          U="${U}//disk.yandex.ru/i/BGr5sIITkdvHPg"
+          /tmp/volga-probe classify --url "$U"
