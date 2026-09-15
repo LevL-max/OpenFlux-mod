@@ -31,7 +31,7 @@ func main() {
 	client := flag.Bool("client", false, "Run as client")
 	debug := flag.Bool("debug", false, "Enable verbose debug logging")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
-	transportType := flag.String("transport", "yandex", "Transport type (yandex, google, custom)")
+	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, oneme)")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
 	compressionEnabled := flag.Bool("compression", true, "Enable transport LZ4 wrapper")
 	tcpBufferDefault := flag.Int("tcp-buffer-default", 262144, "gVisor TCP default send/receive buffer bytes")
@@ -76,6 +76,15 @@ func main() {
 	var trans transport.Transport
 
 	switch *transportType {
+	case "vyandex":
+		volgaTransport := yandex.NewYandexVolgaTransport(globalDocUrl, config)
+		if *compressionEnabled {
+			trans = transport.NewCompressedTransport(volgaTransport)
+		} else {
+			trans = volgaTransport
+		}
+		log.Printf("Volga transport: upstream defaults (internal batch=20 timeout=2ms)")
+		log.Printf("Compression: %t", *compressionEnabled)
 	case "yandex":
 		yandexTransport := yandex.NewYandexDocsTransport(globalDocUrl, config)
 		if *compressionEnabled {
@@ -92,6 +101,8 @@ func main() {
 		log.Fatalf("Unknown transport type: %s", *transportType)
 	}
 
+	// Keep the proven private 4-packet/1ms batching wrapper scoped to the legacy
+	// Yandex transport only. Volga has its own upstream internal batching profile.
 	if *transportType == "yandex" && *batchPackets > 1 {
 		trans = transport.NewBatchingTransport(
 			trans,
@@ -100,6 +111,8 @@ func main() {
 			time.Duration(*batchDelayUs)*time.Microsecond,
 		)
 		log.Printf("Batching: packets=%d max_bytes=32768 delay=%dus", *batchPackets, *batchDelayUs)
+	} else if *transportType == "vyandex" {
+		log.Printf("External batching: disabled (Volga uses internal batching)")
 	} else {
 		log.Printf("Batching: disabled")
 	}

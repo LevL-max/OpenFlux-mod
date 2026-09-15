@@ -1,0 +1,38 @@
+name: Volga V2 push WebSocket probe
+
+on:
+  push:
+    branches: [feature/volga-integration]
+    paths:
+      - .github/workflows/volga-v0-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ws:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Build diagnostic probe
+        run: go build -trimpath -o /tmp/volga-probe ./cmd/volga-probe
+
+      - name: Probe Volga push WebSocket only
+        shell: bash
+        run: |
+          set -euo pipefail
+          U='https:'
+          U="${U}//disk.yandex.ru/i/bYtlXiyMGxd1lw"
+          # V2 only: one fresh auth bootstrap, one Xiva push WS handshake/read/close.
+          # No relay POST, no batching, no SOCKS, no tunnel, no client/exit.
+          # probe-run: v2-1
+          /tmp/volga-probe ws --url "$U"
