@@ -34,4 +34,5 @@ jobs:
           U="${U}//disk.yandex.ru/i/bYtlXiyMGxd1lw"
           # V2 only: one fresh auth bootstrap, one Xiva push WS handshake/read/close.
           # No relay POST, no batching, no SOCKS, no tunnel, no client/exit.
+          # probe-run: v2-1
           /tmp/volga-probe ws --url "$U"
