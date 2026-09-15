@@ -21,12 +21,11 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Apply central batcher patch
+      - name: Apply central batcher transform
         shell: bash
         run: |
           set -euo pipefail
-          git apply --check patches/volga-central-batcher-v1.patch
-          git apply patches/volga-central-batcher-v1.patch
+          python3 tools/volga_central_batcher_v1.py
           gofmt -w transport/yandex/vyandex.go
           git diff --check
           git diff -- transport/yandex/vyandex.go
