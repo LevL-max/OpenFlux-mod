@@ -1,10 +1,10 @@
-name: Volga reliable v5.4 shared dual
+name: Volga reliable v5.5 fresh re-auth handoff
 
 on:
   workflow_dispatch:
   push:
     branches:
-      - test/volga-reliable-v5
+      - test/volga-reliable-v5-5-fresh-handoff
     paths:
       - 'tools/volga_ordered_batch_v4b.py'
       - 'tools/volga_ordered_batch_v4c.py'
@@ -19,9 +19,9 @@ on:
       - 'tools/volga_reliable_v5_3_dual.py'
       - 'tools/volga_dual_v5_3.go.txt'
       - 'tools/volga_dual_v5_3_test.go.txt'
-      - 'tools/volga_reliable_v5_4_shared_dual.py'
-      - 'tools/volga_dual_v5_4.go.txt'
-      - 'tools/volga_dual_v5_4_test.go.txt'
+      - 'tools/volga_reliable_v5_5_fresh_handoff.py'
+      - 'tools/volga_dual_v5_5.go.txt'
+      - 'tools/volga_dual_v5_5_test.go.txt'
       - '.github/workflows/volga-reliable-v5.yml'
 
 permissions:
@@ -75,10 +75,10 @@ jobs:
         run: python3 tools/volga_reliable_v5_1_congestion.py
       - name: Apply V5.2 receiver resume floor
         run: python3 tools/volga_reliable_v5_2_resume.py
-      - name: Apply V5.3.1 dual warm carrier
+      - name: Apply V5.3.1 dual baseline
         run: python3 tools/volga_reliable_v5_3_dual.py
-      - name: Apply V5.4 shared reliability dual carrier
-        run: python3 tools/volga_reliable_v5_4_shared_dual.py
+      - name: Apply V5.5 fresh re-auth handoff
+        run: python3 tools/volga_reliable_v5_5_fresh_handoff.py
       - name: Isolate superseded V4 receive tests
         run: python3 tools/volga_reliable_v5_ci_compat.py
 
@@ -106,13 +106,13 @@ jobs:
       - name: Build linux amd64
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -buildvcs=false -trimpath -o openflux-volga-reliable-v5-4-shared-dual .
+            go build -buildvcs=false -trimpath -o openflux-volga-reliable-v5-5-fresh-handoff .
 
       - name: Verify runtime knobs
         run: |
-          ./openflux-volga-reliable-v5-4-shared-dual -h 2>&1 | grep -E -- 'volga-workers|volga-http-shards|volga-batch-bytes|volga-http-body-limit|volga-normalize-mtu|volga-url-secondary|volga-rotate-seconds' >/dev/null
+          ./openflux-volga-reliable-v5-5-fresh-handoff -h 2>&1 | grep -E -- 'volga-workers|volga-http-shards|volga-batch-bytes|volga-http-body-limit|volga-normalize-mtu|volga-url-secondary|volga-rotate-seconds' >/dev/null
 
-      - name: Verify V5.4 shared reliability source
+      - name: Verify V5.5 fresh-session source
         run: |
           python3 - <<'PY'
           import re
@@ -126,34 +126,36 @@ jobs:
           checks = {
               'dual constructor CLI': (main, r'NewDualYandexVolgaTransport\s*\('),
               'secondary URL flag': (main, r'volga-url-secondary'),
-              'rotation flag': (main, r'volga-rotate-seconds'),
-              'dual type': (dual, r'type\s+DualYandexVolgaTransport\s+struct'),
-              'one logical send queue': (dual, r'return\s+d\.primary\.Send\(data\)'),
-              'wire selector installed': (dual, r'd\.primary\.volgaReliableWireSelector\s*=\s*d\.activeWireRelay'),
-              'secondary receive owner': (dual, r'd\.secondary\.volgaReliableOwner\s*=\s*d\.primary\.ws'),
-              'standby app keepalive disabled': (dual, r'stopDualApplicationKeepAlive'),
-              'idle reset': (dual, r'idle reset after='),
-              'shared telemetry': (dual, r'reliability=shared'),
-              'wire target helper': (wire, r'func\s+\(r \*relayClient\)\s+volgaReliableWireTarget'),
-              'wire post selection': (wire, r'wire := r\.volgaReliableWireTarget\(\)'),
-              'shared receive delegation': (rel, r'w\.volgaReliableOwner\.handleVolgaReliableRecords'),
-              'shared recv state': (rel, r'return w\.volgaReliableOwner\.volgaReliableRecvState\(\)'),
+              '15 second default': (main, r'volga-rotate-seconds",\s*15'),
+              'fresh-session CLI log': (main, r'fresh-session A/B handoff'),
+              'V5.5 type': (dual, r'type\s+DualYandexVolgaTransport\s+struct'),
+              '15 second carrier window': (dual, r'volgaDualDefaultRotation\s*=\s*15\s*\*\s*time\.Second'),
+              '3 second prewarm': (dual, r'volgaDualDefaultPrewarm\s*=\s*3\s*\*\s*time\.Second'),
+              'fresh constructor': (dual, r'func\s+\(d \*DualYandexVolgaTransport\)\s+newFreshCarrier'),
+              'prewarm start': (dual, r'prewarm start carrier='),
+              'fresh ready': (dual, r'fresh carrier ready='),
+              'fresh handoff': (dual, r'handoff active='),
+              'stale retire': (dual, r'retired stale carrier='),
+              'application keepalive disabled': (dual, r'stopDualApplicationKeepAlive'),
+              'WS readiness wait': (dual, r't\.ws\.IsConnected\(\)'),
+              'WS connected atomic': (wire, r'connected\s+atomic\.Bool'),
+              'WS readiness method': (wire, r'func\s+\(w \*wsListener\)\s+IsConnected\(\) bool'),
+              'WS readiness true': (wire, r'w\.connected\.Store\(true\)'),
+              'WS readiness false': (wire, r'w\.connected\.Store\(false\)'),
               'V5.2 replay floor': (rel, r'volgaReliableReplayFloor'),
               'V5.2 receiver baseline': (rel, r'receiver baseline session='),
           }
           for name, (text, pattern) in checks.items():
               if not re.search(pattern, text):
-                  raise SystemExit(f'missing V5.4 invariant: {name}')
+                  raise SystemExit(f'missing V5.5 invariant: {name}')
 
-          # The logical session metadata must stay on the owner relay even when
-          # the actual Yandex POST is routed through carrier B.
-          post_start = wire.index('func (r *relayClient) postBatchV5')
-          post_end = wire.index('func (r *relayClient) volgaReliableWireTarget', post_start)
-          post = wire[post_start:post_end]
-          if 'r.volgaReliableSession()' not in post:
-              raise SystemExit('V5.4 logical session no longer owned by primary relay')
-          if 'wire.auth' not in post or 'wire.httpClient' not in post:
-              raise SystemExit('V5.4 Yandex POST is not routed through selected wire carrier')
+          # V5.5 intentionally returns to the proven V5.3.1 DATA path. The
+          # failed V5.4 shared-wire selector/delegated-receiver experiment must
+          # not be present in this build.
+          if 'volgaReliableWireSelector' in wire:
+              raise SystemExit('V5.4 wire selector leaked into V5.5 build')
+          if 'volgaReliableOwner' in wire or 'volgaReliableOwner' in rel:
+              raise SystemExit('V5.4 shared receive owner leaked into V5.5 build')
 
           const_checks = {
               'replay cap': r'volgaReliableReplayCap\s*=\s*16384\b',
@@ -164,7 +166,7 @@ jobs:
           }
           for name, pattern in const_checks.items():
               if not re.search(pattern, rel):
-                  raise SystemExit(f'missing V5.4 reliability invariant: {name}')
+                  raise SystemExit(f'missing V5.5 reliability invariant: {name}')
           PY
 
       - name: Verify V5 wire isolation from V4 ordered receive
@@ -181,20 +183,21 @@ jobs:
 
       - name: Checksums and metadata
         run: |
-          sha256sum openflux-volga-reliable-v5-4-shared-dual > SHA256SUMS
+          sha256sum openflux-volga-reliable-v5-5-fresh-handoff > SHA256SUMS
           {
-            echo "source_branch=test/volga-reliable-v5"
+            echo "source_branch=test/volga-reliable-v5-5-fresh-handoff"
             echo "workflow_commit=${GITHUB_SHA}"
-            echo "base=v5.3.1-clean-warm-standby"
-            echo "experiment=v5.4-shared-reliability-dual-carrier"
-            echo "dual_mode=active-standby-no-striping"
-            echo "dual_rotation_default_seconds=25"
-            echo "dual_idle_reset_seconds=2x-rotation"
+            echo "base=v5.3.1-known-good-data-path"
+            echo "experiment=v5.5-fresh-yandex-session-handoff"
+            echo "dual_mode=active-standby-fresh-reauth-no-striping"
+            echo "dual_rotation_default_seconds=15"
+            echo "dual_prewarm_seconds=3"
+            echo "dual_retire_grace_seconds=2"
             echo "dual_application_keepalive=disabled"
-            echo "dual_receive=both-carriers-one-shared-state"
-            echo "dual_reliability=single-v5.2-owner"
-            echo "dual_retransmit=current-active-carrier"
-            echo "dual_standby=wire-silent"
+            echo "dual_reauth=inactive-carrier-before-each-handoff"
+            echo "dual_stale_carrier=retired-after-handoff"
+            echo "dual_reliability=independent-v5.2-per-fresh-carrier"
+            echo "v5.4_shared_wire_selector=absent"
             echo "workers_per_carrier=runtime-configured"
             echo "reliability=payload-session-seq+replay-floor+cumulative-ack+sack-ranges+selective-retransmit+dedupe"
             echo "retry_concurrency=8"
@@ -210,9 +213,9 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openflux-volga-reliable-v5-4-shared-dual-${{ github.sha }}
+          name: openflux-volga-reliable-v5-5-fresh-handoff-${{ github.sha }}
           path: |
-            openflux-volga-reliable-v5-4-shared-dual
+            openflux-volga-reliable-v5-5-fresh-handoff
             SHA256SUMS
             BUILD-METADATA
           retention-days: 7
