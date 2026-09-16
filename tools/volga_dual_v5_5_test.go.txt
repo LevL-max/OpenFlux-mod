@@ -1,0 +1,58 @@
+package yandex
+
+import (
+	"testing"
+	"time"
+)
+
+func TestDualVolgaV55DefaultRotationIsFifteenSeconds(t *testing.T) {
+	if volgaDualDefaultRotation != 15*time.Second {
+		t.Fatalf("default rotation=%v want=15s", volgaDualDefaultRotation)
+	}
+}
+
+func TestDualVolgaV55PrewarmLead(t *testing.T) {
+	if got := dualVolgaPrewarm(15 * time.Second); got != 3*time.Second {
+		t.Fatalf("prewarm(15s)=%v want=3s", got)
+	}
+	if got := dualVolgaPrewarm(6 * time.Second); got != 2*time.Second {
+		t.Fatalf("prewarm(6s)=%v want=2s", got)
+	}
+}
+
+func TestDualVolgaV55CarrierIndex(t *testing.T) {
+	r := 15 * time.Second
+	cases := []struct {
+		elapsed time.Duration
+		want    uint32
+	}{
+		{0, 0},
+		{14*time.Second + 999*time.Millisecond, 0},
+		{15 * time.Second, 1},
+		{29*time.Second + 999*time.Millisecond, 1},
+		{30 * time.Second, 0},
+		{45 * time.Second, 1},
+	}
+	for _, tc := range cases {
+		if got := dualVolgaCarrierIndex(tc.elapsed, r); got != tc.want {
+			t.Fatalf("elapsed=%v got=%d want=%d", tc.elapsed, got, tc.want)
+		}
+	}
+}
+
+func TestDualVolgaV55PreparationWindow(t *testing.T) {
+	d := NewDualYandexVolgaTransport("A", "B", 15*time.Second, transport.TransportConfig{})
+	d.stateMu.Lock()
+	idx, cycle, ok := d.maybePrepareNextLocked(time.Now(), 0, 11*time.Second)
+	d.stateMu.Unlock()
+	if ok {
+		t.Fatalf("unexpected prepare before window idx=%d cycle=%d", idx, cycle)
+	}
+
+	d.stateMu.Lock()
+	idx, cycle, ok = d.maybePrepareNextLocked(time.Now(), 0, 12*time.Second)
+	d.stateMu.Unlock()
+	if !ok || idx != 1 || cycle != 1 {
+		t.Fatalf("prepare idx=%d cycle=%d ok=%v want idx=1 cycle=1", idx, cycle, ok)
+	}
+}
