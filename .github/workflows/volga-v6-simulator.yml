@@ -21,6 +21,7 @@ on:
       - 'transport/yandex/volga_v6_atomic.go'
       - 'transport/yandex/vyandex_v6_transport.go'
       - 'transport/yandex/vyandex_v6_transport_test.go'
+      - 'transport/yandex/vyandex_v6_concurrency_test.go'
       - 'docs/volga-v6-design.md'
       - 'docs/volga-v6-invariants.md'
       - '.github/workflows/volga-v6-simulator.yml'
@@ -57,7 +58,8 @@ jobs:
             transport/yandex/volga_v6_yandex_carrier_test.go \
             transport/yandex/volga_v6_atomic.go \
             transport/yandex/vyandex_v6_transport.go \
-            transport/yandex/vyandex_v6_transport_test.go
+            transport/yandex/vyandex_v6_transport_test.go \
+            transport/yandex/vyandex_v6_concurrency_test.go
 
       - name: V6 deterministic reliability tests
         run: go test -timeout 2m ./transport/yandex -run '^TestVolgaV6' -count=1 -v
@@ -86,4 +88,5 @@ jobs:
             transport/yandex/volga_v6_yandex_carrier_test.go \
             transport/yandex/volga_v6_atomic.go \
             transport/yandex/vyandex_v6_transport.go \
-            transport/yandex/vyandex_v6_transport_test.go || true
+            transport/yandex/vyandex_v6_transport_test.go \
+            transport/yandex/vyandex_v6_concurrency_test.go || true
