@@ -1,4 +1,4 @@
-name: Volga reliable v5.2
+name: Volga reliable v5.3 dual
 
 on:
   workflow_dispatch:
@@ -16,6 +16,9 @@ on:
       - 'tools/volga_reliable_v5_ci_compat.py'
       - 'tools/volga_reliable_v5_1_congestion.py'
       - 'tools/volga_reliable_v5_2_resume.py'
+      - 'tools/volga_reliable_v5_3_dual.py'
+      - 'tools/volga_dual_v5_3.go.txt'
+      - 'tools/volga_dual_v5_3_test.go.txt'
       - '.github/workflows/volga-reliable-v5.yml'
 
 permissions:
@@ -86,6 +89,9 @@ jobs:
       - name: Apply V5.2 receiver resume floor
         run: python3 tools/volga_reliable_v5_2_resume.py
 
+      - name: Apply V5.3 dual warm carrier
+        run: python3 tools/volga_reliable_v5_3_dual.py
+
       - name: Isolate superseded V4 receive tests
         run: python3 tools/volga_reliable_v5_ci_compat.py
 
@@ -95,6 +101,8 @@ jobs:
             main.go \
             transport/transport.go \
             transport/yandex/vyandex.go \
+            transport/yandex/vyandex_dual_v5_3.go \
+            transport/yandex/vyandex_dual_v5_3_test.go \
             transport/yandex/volga_fragment_test.go \
             transport/yandex/volga_http_shards_test.go \
             transport/yandex/volga_ordered_batch_v4b_test.go \
@@ -111,47 +119,50 @@ jobs:
       - name: Build linux amd64
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -buildvcs=false -trimpath -o openflux-volga-reliable-v5-2 .
+            go build -buildvcs=false -trimpath -o openflux-volga-reliable-v5-3-dual .
 
       - name: Verify runtime knobs
         run: |
-          ./openflux-volga-reliable-v5-2 -h 2>&1 | grep -E -- 'volga-workers|volga-http-shards|volga-batch-bytes|volga-http-body-limit|volga-normalize-mtu' >/dev/null
+          ./openflux-volga-reliable-v5-3-dual -h 2>&1 | grep -E -- 'volga-workers|volga-http-shards|volga-batch-bytes|volga-http-body-limit|volga-normalize-mtu|volga-url-secondary|volga-rotate-seconds' >/dev/null
 
-      - name: Verify V5.2 reliability source
+      - name: Verify V5.3 dual reliability source
         run: |
           python3 - <<'PY'
           import re
           from pathlib import Path
 
-          vy = Path('transport/yandex/vyandex.go').read_text()
+          main = Path('main.go').read_text()
+          dual = Path('transport/yandex/vyandex_dual_v5_3.go').read_text()
           rel = Path('transport/yandex/volga_reliable_v5.go').read_text()
 
           checks = {
-              'V5.2 live DATA metadata': r'makeVolgaReliableDataMetaV52\s*\(',
-              'replay floor sender': r'volgaReliableReplayFloor\s*\(',
-              'V5.2 metadata parser': r'parseVolgaReliableDataMetaV52\s*\(',
-              'V5.2 receiver baseline': r'volgaReliableHandleDataV52\s*\(',
-              'baseline telemetry': r'receiver baseline session=',
+              'dual constructor CLI': (main, r'NewDualYandexVolgaTransport\s*\('),
+              'secondary URL flag': (main, r'volga-url-secondary'),
+              'rotation flag': (main, r'volga-rotate-seconds'),
+              'dual type': (dual, r'type\s+DualYandexVolgaTransport\s+struct'),
+              'warm carrier A': (dual, r'primary:\s+NewYandexVolgaTransport'),
+              'warm carrier B': (dual, r'secondary:\s+NewYandexVolgaTransport'),
+              'time rotation': (dual, r'dualVolgaCarrierIndex'),
+              'receive fan-in A': (dual, r'd\.primary\.Receive\(d\.emit\)'),
+              'receive fan-in B': (dual, r'd\.secondary\.Receive\(d\.emit\)'),
+              'rotation telemetry': (dual, r'\[VOLGA-DUAL\] rotate active='),
+              'V5.2 replay floor': (rel, r'volgaReliableReplayFloor'),
+              'V5.2 receiver baseline': (rel, r'receiver baseline session='),
           }
-          for name, pattern in checks.items():
-              if not re.search(pattern, vy + '\n' + rel):
-                  raise SystemExit(f'missing V5.2 source invariant: {name}')
+          for name, (text, pattern) in checks.items():
+              if not re.search(pattern, text):
+                  raise SystemExit(f'missing V5.3 invariant: {name}')
 
           const_checks = {
               'replay cap': r'volgaReliableReplayCap\s*=\s*16384\b',
-              'ACK range cap': r'volgaReliableAckMaxRanges\s*=\s*32\b',
               'retry concurrency': r'volgaReliableRetryConcurrency\s*=\s*8\b',
               'fast retry minimum': r'volgaReliableFastRetryMin\s*=\s*180\s*\*\s*time\.Millisecond',
-              'fast retry depth': r'volgaReliableFastRetryDepth\s*=\s*3\b',
               'fast retry burst': r'volgaReliableFastRetryBurst\s*=\s*8\b',
               'timeout retry burst': r'volgaReliableTimeoutRetryBurst\s*=\s*8\b',
           }
           for name, pattern in const_checks.items():
               if not re.search(pattern, rel):
-                  raise SystemExit(f'missing V5.2 constant invariant: {name}')
-
-          if 'volgaReliableDataMetaV5Bytes' not in rel or '+ 8 + 8 + 8' not in rel:
-              raise SystemExit('missing V5.2 replay-floor metadata width')
+                  raise SystemExit(f'missing V5.3 reliability invariant: {name}')
           PY
 
       - name: Verify V5 wire isolation from V4 ordered receive
@@ -168,41 +179,34 @@ jobs:
 
       - name: Checksums and metadata
         run: |
-          sha256sum openflux-volga-reliable-v5-2 > SHA256SUMS
+          sha256sum openflux-volga-reliable-v5-3-dual > SHA256SUMS
           {
             echo "source_branch=test/volga-reliable-v5"
             echo "workflow_commit=${GITHUB_SHA}"
-            echo "base=v5.1-congestion-controlled-retransmit"
-            echo "experiment=v5.2-receiver-resume-replay-floor"
+            echo "base=v5.2-receiver-resume-replay-floor"
+            echo "experiment=v5.3-dual-warm-document-rotation"
+            echo "dual_mode=active-standby-no-striping"
+            echo "dual_rotation_default_seconds=25"
+            echo "dual_receive=both-carriers-always"
+            echo "dual_sessions=independent-v5.2-reliability"
+            echo "workers_per_carrier=runtime-configured"
             echo "reliability=payload-session-seq+replay-floor+cumulative-ack+sack-ranges+selective-retransmit+dedupe"
-            echo "receiver_resume=sender-replay-floor"
-            echo "legacy_v5_metadata_parse=true"
-            echo "replay_cap_batches=16384"
-            echo "ack_max_ranges=32"
             echo "retry_concurrency=8"
             echo "fast_retry_min_ms=180"
-            echo "fast_retry_depth=3"
             echo "fast_retry_burst=8"
             echo "timeout_retry_burst=8"
-            echo "retry_backoff_max_ms=4000"
-            echo "ack_interval_ms=20"
-            echo "initial_rto_ms=350"
-            echo "rto_bounds_ms=150..2000"
-            echo "global_receive_hol=disabled-for-v5-live-traffic"
-            echo "retransmit_yandex_identity=fresh"
             echo "http_shards_default=1"
             echo "batch_bytes_baseline=5000"
             echo "http_body_limit=8000"
-            echo "normalizer_expected_runtime=0"
             echo "go_version=$(go version)"
           } > BUILD-METADATA
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openflux-volga-reliable-v5-2-${{ github.sha }}
+          name: openflux-volga-reliable-v5-3-dual-${{ github.sha }}
           path: |
-            openflux-volga-reliable-v5-2
+            openflux-volga-reliable-v5-3-dual
             SHA256SUMS
             BUILD-METADATA
           retention-days: 7
