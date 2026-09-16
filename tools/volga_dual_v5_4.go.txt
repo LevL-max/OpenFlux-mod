@@ -1,0 +1,232 @@
+package yandex
+
+import (
+	"fmt"
+	"sync"
+	"time"
+
+	"universal-bypass-tool/transport"
+	"universal-bypass-tool/utils"
+)
+
+const volgaDualDefaultRotation = 25 * time.Second
+
+func dualVolgaCarrierIndex(elapsed, rotation time.Duration) uint32 {
+	if rotation <= 0 {
+		rotation = volgaDualDefaultRotation
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return uint32((elapsed / rotation) & 1)
+}
+
+func stopDualApplicationKeepAlive(t *YandexVolgaTransport) {
+	if t == nil {
+		return
+	}
+	select {
+	case <-t.keepAliveStop:
+	default:
+		close(t.keepAliveStop)
+	}
+}
+
+type DualYandexVolgaTransport struct {
+	primary   *YandexVolgaTransport
+	secondary *YandexVolgaTransport
+	rotation  time.Duration
+	idleReset time.Duration
+	started   time.Time
+
+	stateMu       sync.Mutex
+	rotationStart time.Time
+	lastData      time.Time
+	active        uint32
+
+	onDataMu sync.RWMutex
+	onData   func([]byte)
+}
+
+func NewDualYandexVolgaTransport(primaryURL, secondaryURL string, rotation time.Duration, cfg transport.TransportConfig) *DualYandexVolgaTransport {
+	if rotation <= 0 {
+		rotation = volgaDualDefaultRotation
+	}
+	return &DualYandexVolgaTransport{
+		primary:   NewYandexVolgaTransport(primaryURL, cfg),
+		secondary: NewYandexVolgaTransport(secondaryURL, cfg),
+		rotation:  rotation,
+		idleReset: 2 * rotation,
+	}
+}
+
+func (d *DualYandexVolgaTransport) Start() error {
+	if d.primary == nil || d.secondary == nil {
+		return fmt.Errorf("dual Volga carriers are not configured")
+	}
+
+	d.primary.Receive(d.emit)
+	d.secondary.Receive(d.emit)
+
+	// Carrier A owns the ONLY V5 reliability engine. Its POST primitive asks
+	// activeWireRelay() which warm Yandex carrier should carry this logical
+	// DATA/ACK/retransmit at the instant the POST is made.
+	d.primary.volgaReliableWireSelector = d.activeWireRelay
+	if err := d.primary.Start(); err != nil {
+		return fmt.Errorf("dual carrier A start: %w", err)
+	}
+	stopDualApplicationKeepAlive(d.primary)
+
+	// Attach the secondary WS to A's receive owner BEFORE B starts. This keeps
+	// fetch_history and live bundles from B in the same session/seq/dedupe/ACK
+	// state instead of creating an independent B reliability engine.
+	d.secondary.volgaReliableOwner = d.primary.ws
+	if err := d.secondary.Start(); err != nil {
+		_ = d.primary.Stop()
+		return fmt.Errorf("dual carrier B start: %w", err)
+	}
+	stopDualApplicationKeepAlive(d.secondary)
+
+	d.stateMu.Lock()
+	d.started = time.Now()
+	d.rotationStart = time.Time{}
+	d.lastData = time.Time{}
+	d.active = 0
+	d.stateMu.Unlock()
+
+	utils.Debugf("[VOLGA-DUAL] V5.4 started carriers=A+B rotate=%v active=A reliability=shared standby=wire-silent idle-reset=%v", d.rotation, d.idleReset)
+	return nil
+}
+
+func (d *DualYandexVolgaTransport) Stop() error {
+	var first error
+	if d.primary != nil {
+		if err := d.primary.Stop(); err != nil && first == nil {
+			first = err
+		}
+	}
+	if d.secondary != nil {
+		if err := d.secondary.Stop(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (d *DualYandexVolgaTransport) setActiveLocked(idx uint32, elapsed time.Duration) {
+	if idx == d.active {
+		return
+	}
+	d.active = idx
+	name := "A"
+	if idx == 1 {
+		name = "B"
+	}
+	utils.Debugf("[VOLGA-DUAL] rotate active=%s elapsed=%v reliability=shared", name, elapsed.Round(time.Millisecond))
+}
+
+func (d *DualYandexVolgaTransport) noteDataAt(now time.Time) {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
+
+	if d.rotationStart.IsZero() {
+		d.rotationStart = now
+		d.lastData = now
+		d.active = 0
+		utils.Debugf("[VOLGA-DUAL] first DATA starts shared rotation active=A")
+		return
+	}
+
+	if !d.lastData.IsZero() && d.idleReset > 0 && now.Sub(d.lastData) >= d.idleReset {
+		idle := now.Sub(d.lastData)
+		d.rotationStart = now
+		d.lastData = now
+		d.active = 0
+		utils.Debugf("[VOLGA-DUAL] idle reset after=%v active=A reliability=shared", idle.Round(time.Millisecond))
+		return
+	}
+
+	d.lastData = now
+	elapsed := now.Sub(d.rotationStart)
+	d.setActiveLocked(dualVolgaCarrierIndex(elapsed, d.rotation), elapsed)
+}
+
+func (d *DualYandexVolgaTransport) activeIndexAt(now time.Time) uint32 {
+	d.stateMu.Lock()
+	defer d.stateMu.Unlock()
+	if d.rotationStart.IsZero() {
+		return 0
+	}
+	elapsed := now.Sub(d.rotationStart)
+	idx := dualVolgaCarrierIndex(elapsed, d.rotation)
+	d.setActiveLocked(idx, elapsed)
+	return idx
+}
+
+func (d *DualYandexVolgaTransport) activeWireRelay() *relayClient {
+	idx := d.activeIndexAt(time.Now())
+	if idx == 1 && d.secondary != nil && d.secondary.relay != nil {
+		return d.secondary.relay
+	}
+	if d.primary != nil {
+		return d.primary.relay
+	}
+	return nil
+}
+
+func (d *DualYandexVolgaTransport) Send(data []byte) error {
+	if d.started.IsZero() || d.primary == nil || d.primary.relay == nil {
+		return fmt.Errorf("dual Volga transport not started")
+	}
+
+	// All new logical DATA enters carrier A's ONE reliability queue. The wire
+	// carrier is selected later for each actual POST, so retransmits and ACKs
+	// automatically move with the same A/B rotation and never run on standby.
+	d.noteDataAt(time.Now())
+	return d.primary.Send(data)
+}
+
+func (d *DualYandexVolgaTransport) Receive(callback func([]byte)) {
+	d.onDataMu.Lock()
+	d.onData = callback
+	d.onDataMu.Unlock()
+}
+
+func (d *DualYandexVolgaTransport) emit(data []byte) {
+	d.onDataMu.RLock()
+	cb := d.onData
+	d.onDataMu.RUnlock()
+	if cb != nil {
+		cb(data)
+	}
+}
+
+func (d *DualYandexVolgaTransport) IsConnected() bool {
+	if d.primary == nil || d.secondary == nil {
+		return false
+	}
+	return d.primary.IsConnected() || d.secondary.IsConnected()
+}
+
+func (d *DualYandexVolgaTransport) Stats() transport.TransportStats {
+	var a, b transport.TransportStats
+	if d.primary != nil {
+		a = d.primary.Stats()
+	}
+	if d.secondary != nil {
+		b = d.secondary.Stats()
+	}
+	uptime := time.Duration(0)
+	if !d.started.IsZero() {
+		uptime = time.Since(d.started)
+	}
+	return transport.TransportStats{
+		BytesSent:     a.BytesSent + b.BytesSent,
+		BytesReceived: a.BytesReceived + b.BytesReceived,
+		PacketsSent:   a.PacketsSent + b.PacketsSent,
+		PacketsRecv:   a.PacketsRecv + b.PacketsRecv,
+		Reconnects:    a.Reconnects + b.Reconnects,
+		Connected:     d.IsConnected(),
+		Uptime:        uptime,
+	}
+}
