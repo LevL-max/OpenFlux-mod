@@ -30,3 +30,13 @@ func TestDualVolgaCarrierIndexUsesSafeDefault(t *testing.T) {
 		t.Fatalf("default rotation got=%d want=1", got)
 	}
 }
+
+func TestDualVolgaRotationDoesNotAgeWhileIdle(t *testing.T) {
+	// The transport can stay warm for minutes before the first payload. Rotation
+	// is intentionally based on the first Send() timestamp, so an idle warm-up
+	// period is not part of carrier age. The index helper therefore sees zero
+	// elapsed at first DATA and must begin on A.
+	if got := dualVolgaCarrierIndex(0, 25*time.Second); got != 0 {
+		t.Fatalf("first DATA must start on A, got=%d", got)
+	}
+}
