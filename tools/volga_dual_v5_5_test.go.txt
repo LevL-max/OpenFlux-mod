@@ -3,6 +3,8 @@ package yandex
 import (
 	"testing"
 	"time"
+
+	"universal-bypass-tool/transport"
 )
 
 func TestDualVolgaV55DefaultRotationIsFifteenSeconds(t *testing.T) {
