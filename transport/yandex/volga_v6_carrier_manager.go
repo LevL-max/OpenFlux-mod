@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 )
 
@@ -36,12 +37,15 @@ type volgaV6CarrierManager struct {
 	factory volgaV6CarrierFactory
 	onFrame func(volgaV6WireFrame)
 
-	mu         sync.RWMutex
-	active     volgaV6PhysicalCarrier
-	draining   map[uint64]volgaV6PhysicalCarrier
-	nextGen    uint64
-	handoffs   uint64
-	stopped    bool
+	// lifecycleMu serializes Start/Handoff/Stop. In particular, two concurrent
+	// fresh-authorize handoffs must never race their active-pointer swap.
+	lifecycleMu sync.Mutex
+	mu          sync.RWMutex
+	active      volgaV6PhysicalCarrier
+	draining    map[uint64]volgaV6PhysicalCarrier
+	nextGen     uint64
+	handoffs    uint64
+	stopped     bool
 }
 
 func newVolgaV6CarrierManager(factory volgaV6CarrierFactory, onFrame func(volgaV6WireFrame)) *volgaV6CarrierManager {
@@ -58,6 +62,8 @@ func (m *volgaV6CarrierManager) newCarrier(ctx context.Context) (volgaV6Physical
 		m.mu.Unlock()
 		return nil, context.Canceled
 	}
+	// Generations are monotonic and intentionally not reused after a failed
+	// authorization/start attempt.
 	m.nextGen++
 	generation := m.nextGen
 	factory := m.factory
@@ -86,6 +92,9 @@ func (m *volgaV6CarrierManager) newCarrier(ctx context.Context) (volgaV6Physical
 }
 
 func (m *volgaV6CarrierManager) Start(ctx context.Context) error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+
 	carrier, err := m.newCarrier(ctx)
 	if err != nil {
 		return err
@@ -109,6 +118,9 @@ func (m *volgaV6CarrierManager) Start(ctx context.Context) error {
 // before the active pointer is changed. The previous active carrier becomes
 // receive-capable draining state and is not stopped here.
 func (m *volgaV6CarrierManager) Handoff(ctx context.Context) (oldGeneration, newGeneration uint64, err error) {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+
 	replacement, err := m.newCarrier(ctx)
 	if err != nil {
 		return 0, 0, err
@@ -174,6 +186,7 @@ func (m *volgaV6CarrierManager) Snapshot() volgaV6CarrierManagerSnapshot {
 	for generation := range m.draining {
 		draining = append(draining, generation)
 	}
+	sort.Slice(draining, func(i, j int) bool { return draining[i] < draining[j] })
 	return volgaV6CarrierManagerSnapshot{
 		ActiveGeneration: active,
 		Draining:         draining,
@@ -182,6 +195,9 @@ func (m *volgaV6CarrierManager) Snapshot() volgaV6CarrierManagerSnapshot {
 }
 
 func (m *volgaV6CarrierManager) Stop() error {
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+
 	m.mu.Lock()
 	if m.stopped {
 		m.mu.Unlock()
