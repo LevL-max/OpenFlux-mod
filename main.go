@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	_ "github.com/wlynxg/anet"
@@ -31,13 +32,14 @@ func main() {
 	client := flag.Bool("client", false, "Run as client")
 	debug := flag.Bool("debug", false, "Enable verbose debug logging")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
-	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, oneme)")
+	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, vyandex-v6, oneme)")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
 	compressionEnabled := flag.Bool("compression", true, "Enable transport LZ4 wrapper")
 	tcpBufferDefault := flag.Int("tcp-buffer-default", 262144, "gVisor TCP default send/receive buffer bytes")
 	tcpBufferMax := flag.Int("tcp-buffer-max", 1048576, "gVisor TCP max send/receive buffer bytes")
 	batchPackets := flag.Int("batch-packets", 1, "IP packets per Yandex transport batch; 1 disables batching")
 	batchDelayUs := flag.Int("batch-delay-us", 1000, "Maximum batch flush delay in microseconds")
+	volgaURLSecondary := flag.String("volga-url-secondary", "", "Secondary Yandex document URL for experimental vyandex-v6 carrier recycling")
 	flag.StringVar(&globalDocUrl, "url", "http://#", "Document URL. If u use Yandex.Docs transport")
 	flag.StringVar(&maxToken, "maxToken", "", "MAX call user id. If u use MAX transport")
 	flag.StringVar(&maxUid, "maxUid", "", "MAX Web token. If u use MAX transport")
@@ -85,6 +87,20 @@ func main() {
 		}
 		log.Printf("Volga transport: upstream defaults (internal batch=20 timeout=2ms)")
 		log.Printf("Compression: %t", *compressionEnabled)
+	case "vyandex-v6":
+		documents := []string{globalDocUrl}
+		if secondary := strings.TrimSpace(*volgaURLSecondary); secondary != "" {
+			documents = append(documents, secondary)
+		}
+		volgaV6Transport := yandex.NewYandexVolgaV6Transport(documents, config)
+		if *compressionEnabled {
+			trans = transport.NewCompressedTransport(volgaV6Transport)
+		} else {
+			trans = volgaV6Transport
+		}
+		log.Printf("Volga V6 experimental: docs=%d logical-reliability=shared physical-carriers=recyclable", len(documents))
+		log.Printf("Volga V6 defaults: batch=20/5000B/2ms send-workers=32 progress-based-recycle=true")
+		log.Printf("Compression: %t", *compressionEnabled)
 	case "yandex":
 		yandexTransport := yandex.NewYandexDocsTransport(globalDocUrl, config)
 		if *compressionEnabled {
@@ -102,7 +118,7 @@ func main() {
 	}
 
 	// Keep the proven private 4-packet/1ms batching wrapper scoped to the legacy
-	// Yandex transport only. Volga has its own upstream internal batching profile.
+	// Yandex transport only. Both Volga implementations own their batching.
 	if *transportType == "yandex" && *batchPackets > 1 {
 		trans = transport.NewBatchingTransport(
 			trans,
@@ -111,7 +127,7 @@ func main() {
 			time.Duration(*batchDelayUs)*time.Microsecond,
 		)
 		log.Printf("Batching: packets=%d max_bytes=32768 delay=%dus", *batchPackets, *batchDelayUs)
-	} else if *transportType == "vyandex" {
+	} else if *transportType == "vyandex" || *transportType == "vyandex-v6" {
 		log.Printf("External batching: disabled (Volga uses internal batching)")
 	} else {
 		log.Printf("Batching: disabled")
