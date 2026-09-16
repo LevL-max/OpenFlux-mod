@@ -1,0 +1,125 @@
+name: Volga batch trace v4d
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - test/volga-batch-trace-v4d
+    paths:
+      - 'tools/volga_ordered_batch_v4b.py'
+      - 'tools/volga_ordered_batch_v4c.py'
+      - 'tools/volga_batch_trace_v4d.py'
+      - '.github/workflows/volga-batch-trace-v4d.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+
+      - name: Apply V1 central batcher
+        run: python3 tools/volga_central_batcher_v1.py
+
+      - name: Apply V2 telemetry and redaction
+        run: python3 tools/volga_central_batcher_v2_telemetry.py
+
+      - name: Apply V3 byte cap
+        run: python3 tools/volga_central_batcher_v3_bytecap.py
+
+      - name: Apply V4 packet telemetry
+        run: python3 tools/volga_central_batcher_v4_packet_telemetry.py
+
+      - name: Apply V5 serial worker baseline step
+        run: python3 tools/volga_central_batcher_v5_serial_worker.py
+
+      - name: Apply V6 64-worker baseline step
+        run: python3 tools/volga_central_batcher_v6_64_workers.py
+
+      - name: Apply runtime benchmark harness
+        run: python3 tools/volga_benchmark_harness.py
+
+      - name: Apply body fragmentation v1
+        run: python3 tools/volga_body_fragment_v1.py
+
+      - name: Apply adaptive fragmentation v2
+        run: python3 tools/volga_adaptive_fragment_v2.py
+
+      - name: Apply HTTP shards v3
+        run: python3 tools/volga_http_shards_v3.py
+
+      - name: Apply ordered-batch v4b
+        run: python3 tools/volga_ordered_batch_v4b.py
+
+      - name: Apply strict ordered receive v4c
+        run: python3 tools/volga_ordered_batch_v4c.py
+
+      - name: Apply per-batch forensic trace v4d
+        run: python3 tools/volga_batch_trace_v4d.py
+
+      - name: Format generated Go
+        run: |
+          gofmt -w \
+            main.go \
+            transport/transport.go \
+            transport/yandex/vyandex.go \
+            transport/yandex/volga_fragment_test.go \
+            transport/yandex/volga_http_shards_test.go \
+            transport/yandex/volga_ordered_batch_v4b_test.go \
+            transport/yandex/volga_ordered_batch_v4c_test.go
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build linux amd64
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+            go build -buildvcs=false -trimpath -o openflux-volga-batch-trace-v4d .
+
+      - name: Verify runtime knobs
+        run: |
+          ./openflux-volga-batch-trace-v4d -h 2>&1 | grep -E -- 'volga-workers|volga-http-shards|volga-batch-bytes|volga-http-body-limit|volga-normalize-mtu' >/dev/null
+
+      - name: Verify trace markers
+        run: |
+          strings openflux-volga-batch-trace-v4d | grep -F '[VOLGA-TRACE-TX]' >/dev/null
+          strings openflux-volga-batch-trace-v4d | grep -F '[VOLGA-TRACE-RX]' >/dev/null
+
+      - name: Checksums and metadata
+        run: |
+          sha256sum openflux-volga-batch-trace-v4d > SHA256SUMS
+          {
+            echo "source_branch=test/volga-batch-trace-v4d"
+            echo "workflow_commit=${GITHUB_SHA}"
+            echo "base=v1-v6+benchmark-harness+body-fragment-v1+adaptive-fragment-v2+http-shards-v3+ordered-batch-v4b+strict-order-v4c"
+            echo "experiment=per-batch-created+http-result+gap-open-fill-skip-late"
+            echo "behaviour_change=none-intended-diagnostic-only"
+            echo "reorder_gap_wait_ms=10000"
+            echo "reorder_max_pending=32768"
+            echo "sender_retry=unchanged"
+            echo "http_shards_default=1"
+            echo "batch_bytes_baseline=5000"
+            echo "http_body_limit=8000"
+            echo "normalizer_expected_runtime=0"
+            echo "go_version=$(go version)"
+          } > BUILD-METADATA
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: openflux-volga-batch-trace-v4d-${{ github.sha }}
+          path: |
+            openflux-volga-batch-trace-v4d
+            SHA256SUMS
+            BUILD-METADATA
+          retention-days: 7
