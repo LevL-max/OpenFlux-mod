@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+	"time"
 )
 
 var (
@@ -22,12 +23,31 @@ type volgaV6PhysicalCarrier interface {
 	Stop() error
 }
 
+type volgaV6PhysicalHealth struct {
+	Known          bool
+	Generation     uint64
+	Document       string
+	Connected      bool
+	Age            time.Duration
+	Posts          uint64
+	PostFailures   uint64
+	PostBytes      uint64
+	PostMicros     uint64
+	MaxPostMicros  uint64
+	WSReconnects   uint64
+}
+
+type volgaV6PhysicalHealthReporter interface {
+	VolgaV6PhysicalHealth(now time.Time) volgaV6PhysicalHealth
+}
+
 type volgaV6CarrierFactory func(generation uint64, onFrame func(volgaV6WireFrame)) (volgaV6PhysicalCarrier, error)
 
 type volgaV6CarrierManagerSnapshot struct {
 	ActiveGeneration uint64
 	Draining         []uint64
 	Handoffs         uint64
+	ActiveHealth     volgaV6PhysicalHealth
 }
 
 // volgaV6CarrierManager owns only physical carrier lifetime. ReliableSession
@@ -176,21 +196,33 @@ func (m *volgaV6CarrierManager) Retire(generation uint64) error {
 }
 
 func (m *volgaV6CarrierManager) Snapshot() volgaV6CarrierManagerSnapshot {
+	return m.snapshotAt(time.Now())
+}
+
+func (m *volgaV6CarrierManager) snapshotAt(now time.Time) volgaV6CarrierManagerSnapshot {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
+	activeCarrier := m.active
 	active := uint64(0)
-	if m.active != nil {
-		active = m.active.Generation()
+	if activeCarrier != nil {
+		active = activeCarrier.Generation()
 	}
 	draining := make([]uint64, 0, len(m.draining))
 	for generation := range m.draining {
 		draining = append(draining, generation)
 	}
+	handoffs := m.handoffs
+	m.mu.RUnlock()
+
 	sort.Slice(draining, func(i, j int) bool { return draining[i] < draining[j] })
+	health := volgaV6PhysicalHealth{}
+	if reporter, ok := activeCarrier.(volgaV6PhysicalHealthReporter); ok {
+		health = reporter.VolgaV6PhysicalHealth(now)
+	}
 	return volgaV6CarrierManagerSnapshot{
 		ActiveGeneration: active,
 		Draining:         draining,
-		Handoffs:         m.handoffs,
+		Handoffs:         handoffs,
+		ActiveHealth:     health,
 	}
 }
 
