@@ -166,7 +166,7 @@ func makeVolgaWSMessage(t *testing.T, userID int, opID string, packet []byte) []
 }
 
 func TestVolgaSelfMessageAdvancesFrontierWithoutLoopback(t *testing.T) {
-    relay := &relayClient{}
+    relay := &relayClient{stats: &VolgaStats{}}
     delivered := 0
     w := &wsListener{
         auth:  &volgaAuth{UserID: 42},
@@ -188,7 +188,7 @@ func TestVolgaSelfMessageAdvancesFrontierWithoutLoopback(t *testing.T) {
 }
 
 func TestVolgaPeerMessageStillDeliversPayload(t *testing.T) {
-    relay := &relayClient{}
+    relay := &relayClient{stats: &VolgaStats{}}
     var got []byte
     w := &wsListener{
         auth:  &volgaAuth{UserID: 42},
