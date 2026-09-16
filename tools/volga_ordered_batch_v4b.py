@@ -270,8 +270,11 @@ s = replace_once(
 )
 
 # Keep Yandex's local/bundle IDs aligned with the same logical sequence too.
-s = replace_once(s, '"localId":    r.localID.Add(1),', '"localId":    opSeq,', "textInsert localId")
-s = replace_once(s, '"localId":    r.localID.Add(1),', '"localId":    relaySeq,', "setCaret localId")
+local_id_marker = '"localId":    r.localID.Add(1),'
+if s.count(local_id_marker) != 2:
+    raise SystemExit(f"localId markers: expected 2, got {s.count(local_id_marker)}")
+s = s.replace(local_id_marker, '"localId":    opSeq,', 1)
+s = s.replace(local_id_marker, '"localId":    relaySeq,', 1)
 s = replace_once(s, '"bundleId": r.bundleID.Add(1),', '"bundleId": batchSeq,', "ordered bundleId")
 
 # ---------------------------------------------------------------------------
