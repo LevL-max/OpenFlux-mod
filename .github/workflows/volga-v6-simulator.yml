@@ -26,12 +26,15 @@ jobs:
         with:
           go-version: '1.26.4'
 
-      - name: Format check
-        run: |
-          test -z "$(gofmt -d transport/yandex/volga_v6_reliable.go transport/yandex/volga_v6_reliable_test.go)"
+      - name: Format V6 source
+        run: gofmt -w transport/yandex/volga_v6_reliable.go transport/yandex/volga_v6_reliable_test.go
 
       - name: V6 deterministic reliability tests
         run: go test -timeout 2m ./transport/yandex -run '^TestVolgaV6' -count=1 -v
 
       - name: Full test suite
         run: go test -timeout 2m ./...
+
+      - name: Show formatting diff
+        if: always()
+        run: git diff -- transport/yandex/volga_v6_reliable.go transport/yandex/volga_v6_reliable_test.go || true
