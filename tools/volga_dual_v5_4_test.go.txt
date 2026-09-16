@@ -1,0 +1,67 @@
+package yandex
+
+import (
+	"testing"
+	"time"
+)
+
+func TestDualVolgaCarrierIndexRotatesWithoutGapV54(t *testing.T) {
+	r := 25 * time.Second
+	cases := []struct {
+		elapsed time.Duration
+		want    uint32
+	}{
+		{0, 0},
+		{24*time.Second + 999*time.Millisecond, 0},
+		{25 * time.Second, 1},
+		{49*time.Second + 999*time.Millisecond, 1},
+		{50 * time.Second, 0},
+		{75 * time.Second, 1},
+	}
+	for _, tc := range cases {
+		if got := dualVolgaCarrierIndex(tc.elapsed, r); got != tc.want {
+			t.Fatalf("elapsed=%v got=%d want=%d", tc.elapsed, got, tc.want)
+		}
+	}
+}
+
+func TestDualVolgaIdleResetStartsNextDataOnA(t *testing.T) {
+	d := &DualYandexVolgaTransport{
+		rotation:  25 * time.Second,
+		idleReset: 50 * time.Second,
+	}
+	t0 := time.Unix(1000, 0)
+	d.noteDataAt(t0)
+	if got := d.activeIndexAt(t0.Add(25 * time.Second)); got != 1 {
+		t.Fatalf("before idle reset got=%d want=B(1)", got)
+	}
+
+	// More than two rotation windows without application DATA resets the next
+	// DATA window to A even if the old wall-clock phase would have been B.
+	t1 := t0.Add(3*time.Minute + 25*time.Second)
+	d.noteDataAt(t1)
+	if got := d.activeIndexAt(t1); got != 0 {
+		t.Fatalf("after idle reset got=%d want=A(0)", got)
+	}
+	if !d.rotationStart.Equal(t1) {
+		t.Fatalf("rotationStart=%v want=%v", d.rotationStart, t1)
+	}
+}
+
+func TestDualVolgaRetrySelectorMovesWithSharedClock(t *testing.T) {
+	d := &DualYandexVolgaTransport{
+		rotation:  25 * time.Second,
+		idleReset: 50 * time.Second,
+	}
+	t0 := time.Unix(2000, 0)
+	d.noteDataAt(t0)
+	if got := d.activeIndexAt(t0.Add(10 * time.Second)); got != 0 {
+		t.Fatalf("10s got=%d want=A(0)", got)
+	}
+	if got := d.activeIndexAt(t0.Add(30 * time.Second)); got != 1 {
+		t.Fatalf("30s got=%d want=B(1)", got)
+	}
+	if got := d.activeIndexAt(t0.Add(55 * time.Second)); got != 0 {
+		t.Fatalf("55s got=%d want=A(0)", got)
+	}
+}
