@@ -71,6 +71,7 @@ type volgaV6ReplayEntry struct {
 	firstSent time.Time
 	lastSent  time.Time
 	retries   int
+	sacked    bool
 }
 
 type volgaV6ReliableSnapshot struct {
@@ -78,6 +79,7 @@ type volgaV6ReliableSnapshot struct {
 	NextSeq          uint64
 	AckBase          uint64
 	ReplayDepth      int
+	SackedDepth      int
 	OldestUnackedAge time.Duration
 	Retries          uint64
 }
@@ -89,11 +91,11 @@ type volgaV6ReliableSession struct {
 	sender    volgaV6WireSender
 	config    volgaV6ReliableConfig
 
-	mu       sync.Mutex
-	nextSeq  uint64
-	ackBase  uint64
-	replay   map[uint64]*volgaV6ReplayEntry
-	retries  uint64
+	mu      sync.Mutex
+	nextSeq uint64
+	ackBase uint64
+	replay  map[uint64]*volgaV6ReplayEntry
+	retries uint64
 }
 
 func newVolgaV6ReliableSession(sessionID uint64, sender volgaV6WireSender, cfg volgaV6ReliableConfig) *volgaV6ReliableSession {
@@ -178,13 +180,7 @@ func (s *volgaV6ReliableSession) sendAt(payload [][]byte, now time.Time) (uint64
 	return seq, s.sender.SendVolgaV6(frame)
 }
 
-func volgaV6AckContains(ack volgaV6Ack, seq uint64) bool {
-	if seq == 0 {
-		return false
-	}
-	if seq <= ack.Base {
-		return true
-	}
+func volgaV6AckContainsRange(ack volgaV6Ack, seq uint64) bool {
 	for _, rg := range ack.Ranges {
 		if seq >= rg.Start && seq <= rg.End {
 			return true
@@ -204,12 +200,19 @@ func (s *volgaV6ReliableSession) HandleAck(ack volgaV6Ack) int {
 	if ack.Base > s.ackBase {
 		s.ackBase = ack.Base
 	}
+
+	// Only cumulative ACK releases replay storage. SACK proves that the current
+	// receiver instance has seen a later sequence, but keeping the payload is
+	// essential for receiver restart and carrier handoff. A later ACK snapshot
+	// that no longer contains the SACK range makes the entry repairable again.
 	released := 0
-	for seq := range s.replay {
-		if volgaV6AckContains(ack, seq) {
+	for seq, entry := range s.replay {
+		if seq <= ack.Base {
 			delete(s.replay, seq)
 			released++
+			continue
 		}
+		entry.sacked = volgaV6AckContainsRange(ack, seq)
 	}
 	return released
 }
@@ -236,7 +239,7 @@ func (s *volgaV6ReliableSession) DueRepairs(now time.Time) []uint64 {
 
 	seqs := make([]uint64, 0, len(s.replay))
 	for seq, entry := range s.replay {
-		if entry.lastSent.IsZero() {
+		if entry.sacked || entry.lastSent.IsZero() {
 			continue
 		}
 		if now.Sub(entry.lastSent) >= s.retryDelayLocked(entry) {
@@ -263,6 +266,7 @@ func (s *volgaV6ReliableSession) replayAt(seq uint64, now time.Time) error {
 	}
 	entry.lastSent = now
 	entry.retries++
+	entry.sacked = false
 	s.retries++
 	floor := s.replayFloorLocked(seq)
 	payload := cloneVolgaV6Payload(entry.payload)
@@ -286,7 +290,11 @@ func (s *volgaV6ReliableSession) Snapshot(now time.Time) volgaV6ReliableSnapshot
 	defer s.mu.Unlock()
 
 	oldest := time.Time{}
+	sacked := 0
 	for _, entry := range s.replay {
+		if entry.sacked {
+			sacked++
+		}
 		if oldest.IsZero() || entry.firstSent.Before(oldest) {
 			oldest = entry.firstSent
 		}
@@ -300,6 +308,7 @@ func (s *volgaV6ReliableSession) Snapshot(now time.Time) volgaV6ReliableSnapshot
 		NextSeq:          s.nextSeq,
 		AckBase:          s.ackBase,
 		ReplayDepth:      len(s.replay),
+		SackedDepth:      sacked,
 		OldestUnackedAge: age,
 		Retries:          s.retries,
 	}
