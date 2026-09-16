@@ -1,0 +1,637 @@
+package yandex
+
+import (
+	"encoding/binary"
+	"fmt"
+	"sort"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"universal-bypass-tool/utils"
+)
+
+const (
+	volgaReliableMagic            = "OFV5REL1"
+	volgaReliableFrameData  byte  = 1
+	volgaReliableFrameAck   byte  = 2
+	volgaReliableDataMetaBytes    = len(volgaReliableMagic) + 1 + 8 + 8
+	volgaReliableAckHeaderBytes   = len(volgaReliableMagic) + 1 + 8 + 8 + 2
+	volgaReliableReplayCap        = 16384
+	volgaReliableAckMaxRanges     = 32
+	volgaReliableRetryConcurrency = 32
+	volgaReliableAckInterval      = 20 * time.Millisecond
+	volgaReliableRetryScan        = 50 * time.Millisecond
+	volgaReliableFastRetryMin     = 80 * time.Millisecond
+	volgaReliableInitialRTO       = 350 * time.Millisecond
+	volgaReliableMinRTO           = 150 * time.Millisecond
+	volgaReliableMaxRTO           = 2 * time.Second
+)
+
+type volgaReliableAckRange struct {
+	Start uint64
+	End   uint64
+}
+
+type volgaReliableAck struct {
+	Session uint64
+	Base    uint64
+	Ranges  []volgaReliableAckRange
+}
+
+func makeVolgaReliableDataMeta(session, seq uint64) []byte {
+	record := make([]byte, volgaReliableDataMetaBytes)
+	copy(record[:len(volgaReliableMagic)], volgaReliableMagic)
+	record[len(volgaReliableMagic)] = volgaReliableFrameData
+	off := len(volgaReliableMagic) + 1
+	binary.BigEndian.PutUint64(record[off:off+8], session)
+	binary.BigEndian.PutUint64(record[off+8:off+16], seq)
+	return record
+}
+
+func parseVolgaReliableDataMeta(record []byte) (session, seq uint64, ok bool) {
+	if len(record) != volgaReliableDataMetaBytes || string(record[:len(volgaReliableMagic)]) != volgaReliableMagic || record[len(volgaReliableMagic)] != volgaReliableFrameData {
+		return 0, 0, false
+	}
+	off := len(volgaReliableMagic) + 1
+	session = binary.BigEndian.Uint64(record[off : off+8])
+	seq = binary.BigEndian.Uint64(record[off+8 : off+16])
+	if session == 0 || seq == 0 {
+		return 0, 0, false
+	}
+	return session, seq, true
+}
+
+func makeVolgaReliableAckRecord(ack volgaReliableAck) []byte {
+	ranges := ack.Ranges
+	if len(ranges) > volgaReliableAckMaxRanges {
+		ranges = ranges[:volgaReliableAckMaxRanges]
+	}
+	record := make([]byte, volgaReliableAckHeaderBytes+len(ranges)*16)
+	copy(record[:len(volgaReliableMagic)], volgaReliableMagic)
+	record[len(volgaReliableMagic)] = volgaReliableFrameAck
+	off := len(volgaReliableMagic) + 1
+	binary.BigEndian.PutUint64(record[off:off+8], ack.Session)
+	binary.BigEndian.PutUint64(record[off+8:off+16], ack.Base)
+	binary.BigEndian.PutUint16(record[off+16:off+18], uint16(len(ranges)))
+	p := off + 18
+	for _, rg := range ranges {
+		binary.BigEndian.PutUint64(record[p:p+8], rg.Start)
+		binary.BigEndian.PutUint64(record[p+8:p+16], rg.End)
+		p += 16
+	}
+	return record
+}
+
+func parseVolgaReliableAckRecord(record []byte) (volgaReliableAck, bool) {
+	if len(record) < volgaReliableAckHeaderBytes || string(record[:len(volgaReliableMagic)]) != volgaReliableMagic || record[len(volgaReliableMagic)] != volgaReliableFrameAck {
+		return volgaReliableAck{}, false
+	}
+	off := len(volgaReliableMagic) + 1
+	ack := volgaReliableAck{
+		Session: binary.BigEndian.Uint64(record[off : off+8]),
+		Base:    binary.BigEndian.Uint64(record[off+8 : off+16]),
+	}
+	count := int(binary.BigEndian.Uint16(record[off+16 : off+18]))
+	if count < 0 || count > volgaReliableAckMaxRanges || len(record) != volgaReliableAckHeaderBytes+count*16 || ack.Session == 0 {
+		return volgaReliableAck{}, false
+	}
+	p := off + 18
+	ack.Ranges = make([]volgaReliableAckRange, 0, count)
+	for i := 0; i < count; i++ {
+		rg := volgaReliableAckRange{
+			Start: binary.BigEndian.Uint64(record[p : p+8]),
+			End:   binary.BigEndian.Uint64(record[p+8 : p+16]),
+		}
+		p += 16
+		if rg.Start == 0 || rg.End < rg.Start {
+			return volgaReliableAck{}, false
+		}
+		ack.Ranges = append(ack.Ranges, rg)
+	}
+	return ack, true
+}
+
+func volgaReliableAckContains(ack volgaReliableAck, seq uint64) bool {
+	if seq == 0 {
+		return false
+	}
+	if seq <= ack.Base {
+		return true
+	}
+	for _, rg := range ack.Ranges {
+		if seq >= rg.Start && seq <= rg.End {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneVolgaReliableBatch(batch [][]byte) [][]byte {
+	out := make([][]byte, len(batch))
+	for i := range batch {
+		out[i] = append([]byte(nil), batch[i]...)
+	}
+	return out
+}
+
+type volgaReliableReplayEntry struct {
+	packets   [][]byte
+	firstSent time.Time
+	lastSent  time.Time
+	retries   int
+	queued    bool
+}
+
+type volgaReliableRelayState struct {
+	once sync.Once
+
+	session uint64
+	mu      sync.Mutex
+	replay  map[uint64]*volgaReliableReplayEntry
+	slots   chan struct{}
+	retrySem chan struct{}
+
+	srtt   time.Duration
+	rttvar time.Duration
+	rto    time.Duration
+
+	acked             atomic.Uint64
+	ackRx             atomic.Uint64
+	retransmits       atomic.Uint64
+	fastRetransmits   atomic.Uint64
+	timeoutRetransmits atomic.Uint64
+	replayMax         atomic.Uint64
+	rtoMillis         atomic.Uint64
+}
+
+var volgaReliableRelayStates sync.Map
+
+func (r *relayClient) volgaReliableState() *volgaReliableRelayState {
+	if v, ok := volgaReliableRelayStates.Load(r); ok {
+		st := v.(*volgaReliableRelayState)
+		st.once.Do(func() { go r.volgaReliableRetryLoop(st) })
+		return st
+	}
+
+	session := uint64(time.Now().UnixNano())
+	if session == 0 {
+		session = 1
+	}
+	st := &volgaReliableRelayState{
+		session: session,
+		replay:  make(map[uint64]*volgaReliableReplayEntry),
+		slots:   make(chan struct{}, volgaReliableReplayCap),
+		retrySem: make(chan struct{}, volgaReliableRetryConcurrency),
+		rto:     volgaReliableInitialRTO,
+	}
+	st.rtoMillis.Store(uint64(st.rto / time.Millisecond))
+	actual, _ := volgaReliableRelayStates.LoadOrStore(r, st)
+	st = actual.(*volgaReliableRelayState)
+	st.once.Do(func() { go r.volgaReliableRetryLoop(st) })
+	return st
+}
+
+func (r *relayClient) volgaReliableSession() uint64 {
+	return r.volgaReliableState().session
+}
+
+func (r *relayClient) volgaReliableRemember(seq uint64, batch [][]byte) error {
+	if seq == 0 {
+		return nil
+	}
+	st := r.volgaReliableState()
+	st.mu.Lock()
+	if _, ok := st.replay[seq]; ok {
+		st.mu.Unlock()
+		return nil
+	}
+	st.mu.Unlock()
+
+	select {
+	case st.slots <- struct{}{}:
+	case <-r.ctx.Done():
+		return fmt.Errorf("relay stopped while waiting for reliable replay slot")
+	}
+
+	st.mu.Lock()
+	if _, ok := st.replay[seq]; ok {
+		st.mu.Unlock()
+		<-st.slots
+		return nil
+	}
+	st.replay[seq] = &volgaReliableReplayEntry{packets: cloneVolgaReliableBatch(batch)}
+	depth := uint64(len(st.replay))
+	st.mu.Unlock()
+	atomicMax(&st.replayMax, depth)
+	return nil
+}
+
+func (r *relayClient) volgaReliableMarkSend(seq uint64, retransmit bool) {
+	if seq == 0 {
+		return
+	}
+	st := r.volgaReliableState()
+	now := time.Now()
+	st.mu.Lock()
+	if e := st.replay[seq]; e != nil {
+		if e.firstSent.IsZero() {
+			e.firstSent = now
+		}
+		e.lastSent = now
+		if retransmit {
+			e.retries++
+		}
+	}
+	st.mu.Unlock()
+}
+
+func (r *relayClient) volgaReliableForget(seq uint64) {
+	if seq == 0 {
+		return
+	}
+	st := r.volgaReliableState()
+	deleted := false
+	st.mu.Lock()
+	if _, ok := st.replay[seq]; ok {
+		delete(st.replay, seq)
+		deleted = true
+	}
+	st.mu.Unlock()
+	if deleted {
+		<-st.slots
+	}
+}
+
+func absVolgaDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
+}
+
+func (r *relayClient) volgaReliableObserveRTT(sample time.Duration) {
+	if sample <= 0 {
+		return
+	}
+	st := r.volgaReliableState()
+	st.mu.Lock()
+	if st.srtt == 0 {
+		st.srtt = sample
+		st.rttvar = sample / 2
+	} else {
+		delta := absVolgaDuration(st.srtt - sample)
+		st.rttvar = (3*st.rttvar + delta) / 4
+		st.srtt = (7*st.srtt + sample) / 8
+	}
+	rto := st.srtt + 4*st.rttvar
+	if rto < volgaReliableMinRTO {
+		rto = volgaReliableMinRTO
+	}
+	if rto > volgaReliableMaxRTO {
+		rto = volgaReliableMaxRTO
+	}
+	st.rto = rto
+	st.rtoMillis.Store(uint64(rto / time.Millisecond))
+	st.mu.Unlock()
+}
+
+func (r *relayClient) volgaReliableHandleAck(ack volgaReliableAck) {
+	st := r.volgaReliableState()
+	if ack.Session != st.session {
+		return
+	}
+	st.ackRx.Add(1)
+	now := time.Now()
+	highest := ack.Base
+	for _, rg := range ack.Ranges {
+		if rg.End > highest {
+			highest = rg.End
+		}
+	}
+
+	var released int
+	var samples []time.Duration
+	var fast []uint64
+
+	st.mu.Lock()
+	for seq, e := range st.replay {
+		if volgaReliableAckContains(ack, seq) {
+			if e.retries == 0 && !e.firstSent.IsZero() {
+				samples = append(samples, now.Sub(e.firstSent))
+			}
+			delete(st.replay, seq)
+			released++
+			continue
+		}
+		if highest > seq && !e.queued && !e.lastSent.IsZero() && now.Sub(e.lastSent) >= volgaReliableFastRetryMin {
+			fast = append(fast, seq)
+		}
+	}
+	st.mu.Unlock()
+
+	for i := 0; i < released; i++ {
+		<-st.slots
+	}
+	if released > 0 {
+		st.acked.Add(uint64(released))
+	}
+	for _, sample := range samples {
+		r.volgaReliableObserveRTT(sample)
+	}
+	for _, seq := range fast {
+		r.volgaReliableScheduleRetry(seq, true)
+	}
+}
+
+func (r *relayClient) volgaReliableScheduleRetry(seq uint64, fast bool) {
+	st := r.volgaReliableState()
+
+	st.mu.Lock()
+	e := st.replay[seq]
+	if e == nil || e.queued {
+		st.mu.Unlock()
+		return
+	}
+	select {
+	case st.retrySem <- struct{}{}:
+	default:
+		st.mu.Unlock()
+		return
+	}
+	e.queued = true
+	packets := cloneVolgaReliableBatch(e.packets)
+	now := time.Now()
+	if e.firstSent.IsZero() {
+		e.firstSent = now
+	}
+	e.lastSent = now
+	e.retries++
+	st.mu.Unlock()
+
+	st.retransmits.Add(1)
+	if fast {
+		st.fastRetransmits.Add(1)
+	} else {
+		st.timeoutRetransmits.Add(1)
+	}
+
+	go func() {
+		defer func() { <-st.retrySem }()
+		utils.Debugf("[VOLGA-RELIABLE] retransmit seq=%d fast=%t", seq, fast)
+		err := r.postBatchV5(seq, packets)
+		if err == errVolgaAdaptiveLocalSplit || err == errVolgaAdaptive413Retry {
+			r.volgaReliableForget(seq)
+		}
+		if err != nil && err != errVolgaAdaptiveLocalSplit && err != errVolgaAdaptive413Retry {
+			utils.Debugf("[VOLGA-RELIABLE] retransmit failed seq=%d: %v", seq, err)
+		}
+		st.mu.Lock()
+		if cur := st.replay[seq]; cur != nil {
+			cur.queued = false
+		}
+		st.mu.Unlock()
+	}()
+}
+
+func (r *relayClient) volgaReliableRetryLoop(st *volgaReliableRelayState) {
+	ticker := time.NewTicker(volgaReliableRetryScan)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-r.ctx.Done():
+			return
+		case now := <-ticker.C:
+			st.mu.Lock()
+			rto := st.rto
+			if rto <= 0 {
+				rto = volgaReliableInitialRTO
+			}
+			seqs := make([]uint64, 0, 128)
+			for seq, e := range st.replay {
+				if len(seqs) >= 128 {
+					break
+				}
+				if !e.queued && !e.lastSent.IsZero() && now.Sub(e.lastSent) >= rto {
+					seqs = append(seqs, seq)
+				}
+			}
+			st.mu.Unlock()
+			for _, seq := range seqs {
+				r.volgaReliableScheduleRetry(seq, false)
+			}
+		}
+	}
+}
+
+func (r *relayClient) volgaReliableSendAck(ack volgaReliableAck) error {
+	record := makeVolgaReliableAckRecord(ack)
+	return r.postBatchV5(0, [][]byte{record})
+}
+
+func (r *relayClient) volgaReliableSnapshot() (session, depth, acked, ackRx, retransmits, fast, timeout, replayMax, rtoMs uint64) {
+	st := r.volgaReliableState()
+	st.mu.Lock()
+	depth = uint64(len(st.replay))
+	st.mu.Unlock()
+	return st.session,
+		depth,
+		st.acked.Load(),
+		st.ackRx.Load(),
+		st.retransmits.Load(),
+		st.fastRetransmits.Load(),
+		st.timeoutRetransmits.Load(),
+		st.replayMax.Load(),
+		st.rtoMillis.Load()
+}
+
+type volgaReliableRecvState struct {
+	once sync.Once
+	mu sync.Mutex
+	peerSession uint64
+	base uint64
+	seen map[uint64]struct{}
+	ackWake chan struct{}
+
+	ackTx atomic.Uint64
+	duplicates atomic.Uint64
+	resets atomic.Uint64
+	stale atomic.Uint64
+	legacyDrops atomic.Uint64
+}
+
+var volgaReliableRecvStates sync.Map
+
+func (w *wsListener) volgaReliableRecvState() *volgaReliableRecvState {
+	if v, ok := volgaReliableRecvStates.Load(w); ok {
+		st := v.(*volgaReliableRecvState)
+		if w.relay != nil {
+			st.once.Do(func() { go w.volgaReliableAckLoop(st) })
+		}
+		return st
+	}
+	st := &volgaReliableRecvState{
+		seen: make(map[uint64]struct{}),
+		ackWake: make(chan struct{}, 1),
+	}
+	actual, _ := volgaReliableRecvStates.LoadOrStore(w, st)
+	st = actual.(*volgaReliableRecvState)
+	if w.relay != nil {
+		st.once.Do(func() { go w.volgaReliableAckLoop(st) })
+	}
+	return st
+}
+
+func (w *wsListener) volgaReliableWakeAck(st *volgaReliableRecvState) {
+	select {
+	case st.ackWake <- struct{}{}:
+	default:
+	}
+}
+
+func (w *wsListener) volgaReliableHandleData(session, seq uint64, records [][]byte) {
+	st := w.volgaReliableRecvState()
+	if session == 0 || seq == 0 {
+		return
+	}
+
+	deliver := false
+	st.mu.Lock()
+	if st.peerSession == 0 || session > st.peerSession {
+		st.peerSession = session
+		st.base = 0
+		st.seen = make(map[uint64]struct{})
+		st.resets.Add(1)
+	} else if session < st.peerSession {
+		st.stale.Add(1)
+		st.mu.Unlock()
+		return
+	}
+
+	if seq <= st.base {
+		st.duplicates.Add(1)
+	} else if _, exists := st.seen[seq]; exists {
+		st.duplicates.Add(1)
+	} else {
+		st.seen[seq] = struct{}{}
+		deliver = true
+		for {
+			next := st.base + 1
+			if _, ok := st.seen[next]; !ok {
+				break
+			}
+			delete(st.seen, next)
+			st.base = next
+		}
+	}
+	st.mu.Unlock()
+
+	w.volgaReliableWakeAck(st)
+	if !deliver {
+		return
+	}
+
+	for _, record := range records {
+		packets := w.reassembler.accept(record)
+		w.stats.PacketsRecv.Add(uint64(len(packets)))
+		for _, pkt := range packets {
+			if w.onData != nil {
+				w.onData(pkt)
+			}
+		}
+	}
+}
+
+func (w *wsListener) volgaReliableAckSnapshot(st *volgaReliableRecvState) (volgaReliableAck, bool) {
+	st.mu.Lock()
+	defer st.mu.Unlock()
+	if st.peerSession == 0 {
+		return volgaReliableAck{}, false
+	}
+	keys := make([]uint64, 0, len(st.seen))
+	for seq := range st.seen {
+		if seq > st.base {
+			keys = append(keys, seq)
+		}
+	}
+	sort.Slice(keys, func(i, j int) bool { return keys[i] < keys[j] })
+	ranges := make([]volgaReliableAckRange, 0, minInt(len(keys), volgaReliableAckMaxRanges))
+	for _, seq := range keys {
+		if len(ranges) == 0 || seq > ranges[len(ranges)-1].End+1 {
+			if len(ranges) >= volgaReliableAckMaxRanges {
+				break
+			}
+			ranges = append(ranges, volgaReliableAckRange{Start: seq, End: seq})
+		} else {
+			ranges[len(ranges)-1].End = seq
+		}
+	}
+	return volgaReliableAck{Session: st.peerSession, Base: st.base, Ranges: ranges}, true
+}
+
+func (w *wsListener) volgaReliableAckLoop(st *volgaReliableRecvState) {
+	ticker := time.NewTicker(volgaReliableAckInterval)
+	defer ticker.Stop()
+	dirty := false
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-st.ackWake:
+			dirty = true
+		case <-ticker.C:
+			if !dirty {
+				continue
+			}
+			ack, ok := w.volgaReliableAckSnapshot(st)
+			if !ok || w.relay == nil {
+				continue
+			}
+			if err := w.relay.volgaReliableSendAck(ack); err != nil {
+				utils.Debugf("[VOLGA-RELIABLE] ACK send failed base=%d ranges=%d: %v", ack.Base, len(ack.Ranges), err)
+				continue
+			}
+			st.ackTx.Add(1)
+			dirty = false
+		}
+	}
+}
+
+func (w *wsListener) handleVolgaReliableRecords(records [][]byte, decodedBytes int) {
+	if len(records) == 0 {
+		return
+	}
+	w.stats.BytesReceived.Add(uint64(decodedBytes))
+
+	if session, seq, ok := parseVolgaReliableDataMeta(records[0]); ok {
+		w.volgaReliableHandleData(session, seq, records[1:])
+		return
+	}
+	if ack, ok := parseVolgaReliableAckRecord(records[0]); ok && len(records) == 1 {
+		if w.relay != nil {
+			w.relay.volgaReliableHandleAck(ack)
+		}
+		return
+	}
+
+	st := w.volgaReliableRecvState()
+	st.legacyDrops.Add(1)
+	utils.Debugf("[VOLGA-RELIABLE] ignored non-V5 data bundle records=%d", len(records))
+}
+
+func (w *wsListener) volgaReliableRecvSnapshot() (peer, base, pending, ackTx, duplicates, resets, stale, legacy uint64) {
+	st := w.volgaReliableRecvState()
+	st.mu.Lock()
+	peer = st.peerSession
+	base = st.base
+	pending = uint64(len(st.seen))
+	st.mu.Unlock()
+	return peer,
+		base,
+		pending,
+		st.ackTx.Load(),
+		st.duplicates.Load(),
+		st.resets.Load(),
+		st.stale.Load(),
+		st.legacyDrops.Load()
+}
