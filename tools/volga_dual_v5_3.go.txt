@@ -22,14 +22,31 @@ func dualVolgaCarrierIndex(elapsed, rotation time.Duration) uint32 {
 	return uint32((elapsed / rotation) & 1)
 }
 
+func stopDualApplicationKeepAlive(t *YandexVolgaTransport) {
+	if t == nil {
+		return
+	}
+	select {
+	case <-t.keepAliveStop:
+	default:
+		close(t.keepAliveStop)
+	}
+}
+
 type DualYandexVolgaTransport struct {
 	primary   *YandexVolgaTransport
 	secondary *YandexVolgaTransport
 	rotation  time.Duration
 	started   time.Time
-	active    atomic.Uint32
-	onDataMu  sync.RWMutex
-	onData    func([]byte)
+
+	// Rotation starts on the first real tunnel Send(), not on process Start().
+	// This prevents an EXIT that has been warm for a while from beginning a new
+	// peer connection on carrier B with an old standby replay history.
+	rotationStartUnixNano atomic.Int64
+	active                atomic.Uint32
+
+	onDataMu sync.RWMutex
+	onData   func([]byte)
 }
 
 func NewDualYandexVolgaTransport(primaryURL, secondaryURL string, rotation time.Duration, cfg transport.TransportConfig) *DualYandexVolgaTransport {
@@ -54,14 +71,23 @@ func (d *DualYandexVolgaTransport) Start() error {
 	if err := d.primary.Start(); err != nil {
 		return fmt.Errorf("dual carrier A start: %w", err)
 	}
+	// The ordinary single-carrier transport sends a synthetic application DATA
+	// record every 10s. In dual mode that is harmful on a warm standby: it can
+	// build replay history before the peer's matching carrier exists. The Yandex
+	// WS itself remains connected and receives its normal service pings, so keep
+	// both carriers warm without injecting tunnel DATA while idle.
+	stopDualApplicationKeepAlive(d.primary)
+
 	if err := d.secondary.Start(); err != nil {
 		_ = d.primary.Stop()
 		return fmt.Errorf("dual carrier B start: %w", err)
 	}
+	stopDualApplicationKeepAlive(d.secondary)
 
 	d.started = time.Now()
+	d.rotationStartUnixNano.Store(0)
 	d.active.Store(0)
-	utils.Debugf("[VOLGA-DUAL] started carriers=A+B rotate=%v active=A", d.rotation)
+	utils.Debugf("[VOLGA-DUAL] started carriers=A+B rotate=%v active=A rotation-start=first-data app-keepalive=off", d.rotation)
 	return nil
 }
 
@@ -85,14 +111,29 @@ func (d *DualYandexVolgaTransport) Send(data []byte) error {
 		return fmt.Errorf("dual Volga transport not started")
 	}
 
-	idx := dualVolgaCarrierIndex(time.Since(d.started), d.rotation)
+	now := time.Now()
+	startNS := d.rotationStartUnixNano.Load()
+	if startNS == 0 {
+		if d.rotationStartUnixNano.CompareAndSwap(0, now.UnixNano()) {
+			startNS = now.UnixNano()
+			utils.Debugf("[VOLGA-DUAL] first DATA starts rotation active=A")
+		} else {
+			startNS = d.rotationStartUnixNano.Load()
+		}
+	}
+	if startNS == 0 {
+		startNS = now.UnixNano()
+	}
+
+	elapsed := now.Sub(time.Unix(0, startNS))
+	idx := dualVolgaCarrierIndex(elapsed, d.rotation)
 	prev := d.active.Swap(idx)
 	if prev != idx {
 		name := "A"
 		if idx == 1 {
 			name = "B"
 		}
-		utils.Debugf("[VOLGA-DUAL] rotate active=%s elapsed=%v", name, time.Since(d.started).Round(time.Millisecond))
+		utils.Debugf("[VOLGA-DUAL] rotate active=%s elapsed=%v", name, elapsed.Round(time.Millisecond))
 	}
 
 	if idx == 0 {
