@@ -8,6 +8,8 @@ on:
     paths:
       - 'transport/yandex/volga_v6_reliable.go'
       - 'transport/yandex/volga_v6_reliable_test.go'
+      - 'transport/yandex/volga_v6_carrier_manager.go'
+      - 'transport/yandex/volga_v6_carrier_manager_test.go'
       - 'docs/volga-v6-design.md'
       - '.github/workflows/volga-v6-simulator.yml'
 
@@ -27,7 +29,12 @@ jobs:
           go-version: '1.26.4'
 
       - name: Format V6 source
-        run: gofmt -w transport/yandex/volga_v6_reliable.go transport/yandex/volga_v6_reliable_test.go
+        run: |
+          gofmt -w \
+            transport/yandex/volga_v6_reliable.go \
+            transport/yandex/volga_v6_reliable_test.go \
+            transport/yandex/volga_v6_carrier_manager.go \
+            transport/yandex/volga_v6_carrier_manager_test.go
 
       - name: V6 deterministic reliability tests
         run: go test -timeout 2m ./transport/yandex -run '^TestVolgaV6' -count=1 -v
@@ -37,4 +44,9 @@ jobs:
 
       - name: Show formatting diff
         if: always()
-        run: git diff -- transport/yandex/volga_v6_reliable.go transport/yandex/volga_v6_reliable_test.go || true
+        run: |
+          git diff -- \
+            transport/yandex/volga_v6_reliable.go \
+            transport/yandex/volga_v6_reliable_test.go \
+            transport/yandex/volga_v6_carrier_manager.go \
+            transport/yandex/volga_v6_carrier_manager_test.go || true
