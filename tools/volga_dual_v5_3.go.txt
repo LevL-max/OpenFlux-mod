@@ -1,0 +1,147 @@
+package yandex
+
+import (
+	"fmt"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"universal-bypass-tool/transport"
+	"universal-bypass-tool/utils"
+)
+
+const volgaDualDefaultRotation = 25 * time.Second
+
+func dualVolgaCarrierIndex(elapsed, rotation time.Duration) uint32 {
+	if rotation <= 0 {
+		rotation = volgaDualDefaultRotation
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return uint32((elapsed / rotation) & 1)
+}
+
+type DualYandexVolgaTransport struct {
+	primary   *YandexVolgaTransport
+	secondary *YandexVolgaTransport
+	rotation  time.Duration
+	started   time.Time
+	active    atomic.Uint32
+	onDataMu  sync.RWMutex
+	onData    func([]byte)
+}
+
+func NewDualYandexVolgaTransport(primaryURL, secondaryURL string, rotation time.Duration, cfg transport.TransportConfig) *DualYandexVolgaTransport {
+	if rotation <= 0 {
+		rotation = volgaDualDefaultRotation
+	}
+	return &DualYandexVolgaTransport{
+		primary:   NewYandexVolgaTransport(primaryURL, cfg),
+		secondary: NewYandexVolgaTransport(secondaryURL, cfg),
+		rotation:  rotation,
+	}
+}
+
+func (d *DualYandexVolgaTransport) Start() error {
+	if d.primary == nil || d.secondary == nil {
+		return fmt.Errorf("dual Volga carriers are not configured")
+	}
+
+	d.primary.Receive(d.emit)
+	d.secondary.Receive(d.emit)
+
+	if err := d.primary.Start(); err != nil {
+		return fmt.Errorf("dual carrier A start: %w", err)
+	}
+	if err := d.secondary.Start(); err != nil {
+		_ = d.primary.Stop()
+		return fmt.Errorf("dual carrier B start: %w", err)
+	}
+
+	d.started = time.Now()
+	d.active.Store(0)
+	utils.Debugf("[VOLGA-DUAL] started carriers=A+B rotate=%v active=A", d.rotation)
+	return nil
+}
+
+func (d *DualYandexVolgaTransport) Stop() error {
+	var first error
+	if d.primary != nil {
+		if err := d.primary.Stop(); err != nil && first == nil {
+			first = err
+		}
+	}
+	if d.secondary != nil {
+		if err := d.secondary.Stop(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (d *DualYandexVolgaTransport) Send(data []byte) error {
+	if d.started.IsZero() {
+		return fmt.Errorf("dual Volga transport not started")
+	}
+
+	idx := dualVolgaCarrierIndex(time.Since(d.started), d.rotation)
+	prev := d.active.Swap(idx)
+	if prev != idx {
+		name := "A"
+		if idx == 1 {
+			name = "B"
+		}
+		utils.Debugf("[VOLGA-DUAL] rotate active=%s elapsed=%v", name, time.Since(d.started).Round(time.Millisecond))
+	}
+
+	if idx == 0 {
+		return d.primary.Send(data)
+	}
+	return d.secondary.Send(data)
+}
+
+func (d *DualYandexVolgaTransport) Receive(callback func([]byte)) {
+	d.onDataMu.Lock()
+	d.onData = callback
+	d.onDataMu.Unlock()
+}
+
+func (d *DualYandexVolgaTransport) emit(data []byte) {
+	d.onDataMu.RLock()
+	cb := d.onData
+	d.onDataMu.RUnlock()
+	if cb != nil {
+		cb(data)
+	}
+}
+
+func (d *DualYandexVolgaTransport) IsConnected() bool {
+	if d.primary == nil || d.secondary == nil {
+		return false
+	}
+	return d.primary.IsConnected() || d.secondary.IsConnected()
+}
+
+func (d *DualYandexVolgaTransport) Stats() transport.TransportStats {
+	var a, b transport.TransportStats
+	if d.primary != nil {
+		a = d.primary.Stats()
+	}
+	if d.secondary != nil {
+		b = d.secondary.Stats()
+	}
+	uptime := time.Duration(0)
+	if !d.started.IsZero() {
+		uptime = time.Since(d.started)
+	}
+	return transport.TransportStats{
+		BytesSent:     a.BytesSent + b.BytesSent,
+		BytesReceived: a.BytesReceived + b.BytesReceived,
+		PacketsSent:   a.PacketsSent + b.PacketsSent,
+		PacketsRecv:   a.PacketsRecv + b.PacketsRecv,
+		Reconnects:    a.Reconnects + b.Reconnects,
+		Connected:     d.IsConnected(),
+		Uptime:        uptime,
+	}
+}
