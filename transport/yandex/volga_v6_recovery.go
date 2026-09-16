@@ -7,13 +7,13 @@ import (
 )
 
 type volgaV6RecoveryConfig struct {
-	ProgressStall time.Duration
+	ProgressStall    time.Duration
 	RecycleCooldown time.Duration
 
-	MaxWindow      int
-	HighWatermark  int
+	MaxWindow         int
+	HighWatermark     int
 	CriticalWatermark int
-	MinWindow      int
+	MinWindow         int
 
 	RetryRatePerSecond float64
 	RetryBurst         int
@@ -47,10 +47,10 @@ type volgaV6RecoveryController struct {
 
 	mu sync.Mutex
 
-	initialized bool
-	lastAckBase uint64
+	initialized  bool
+	lastAckBase  uint64
 	lastProgress time.Time
-	lastRecycle time.Time
+	lastRecycle  time.Time
 
 	retryTokens float64
 	retryRefill time.Time
@@ -113,6 +113,12 @@ func (c *volgaV6RecoveryController) admissionLimitLocked(replayDepth int) int {
 		return limit
 	}
 	return c.config.MaxWindow
+}
+
+func (c *volgaV6RecoveryController) AdmissionLimit(replayDepth int) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.admissionLimitLocked(replayDepth)
 }
 
 func (c *volgaV6RecoveryController) Observe(now time.Time, snap volgaV6ReliableSnapshot) volgaV6RecoveryDecision {
