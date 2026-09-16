@@ -109,12 +109,34 @@ jobs:
 
       - name: Verify V5 reliability source
         run: |
-          grep -F 'func (r *relayClient) postBatchV5' transport/yandex/vyandex.go >/dev/null
-          grep -F 'makeVolgaReliableDataMeta' transport/yandex/vyandex.go >/dev/null
-          grep -F 'w.handleVolgaReliableRecords(records, len(decoded))' transport/yandex/vyandex.go >/dev/null
-          grep -F 'volgaReliableReplayCap        = 16384' transport/yandex/volga_reliable_v5.go >/dev/null
-          grep -F 'volgaReliableAckMaxRanges     = 32' transport/yandex/volga_reliable_v5.go >/dev/null
-          grep -F '[VOLGA-RELIABLE]' transport/yandex/volga_reliable_v5.go >/dev/null
+          python3 - <<'PY'
+          import re
+          from pathlib import Path
+
+          vy = Path('transport/yandex/vyandex.go').read_text()
+          rel = Path('transport/yandex/volga_reliable_v5.go').read_text()
+
+          checks = {
+              'postBatchV5 wrapper': r'func\s+\(r\s+\*relayClient\)\s+postBatchV5\s*\(',
+              'DATA metadata injection': r'makeVolgaReliableDataMeta\s*\(',
+              'V5 receive decoder': r'handleVolgaReliableRecords\s*\(records,\s*len\(decoded\)\)',
+          }
+          for name, pattern in checks.items():
+              if not re.search(pattern, vy):
+                  raise SystemExit(f'missing V5 source invariant: {name}')
+
+          const_checks = {
+              'replay cap': r'volgaReliableReplayCap\s*=\s*16384\b',
+              'ACK range cap': r'volgaReliableAckMaxRanges\s*=\s*32\b',
+              'retry concurrency': r'volgaReliableRetryConcurrency\s*=\s*32\b',
+          }
+          for name, pattern in const_checks.items():
+              if not re.search(pattern, rel):
+                  raise SystemExit(f'missing V5 constant invariant: {name}')
+
+          if '[VOLGA-RELIABLE]' not in rel and '[VOLGA-RELIABLE]' not in vy:
+              raise SystemExit('missing V5 reliability telemetry marker')
+          PY
 
       - name: Verify V5 wire isolation from V4 ordered receive
         run: |
