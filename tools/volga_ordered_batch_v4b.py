@@ -88,11 +88,11 @@ s = replace_once(
 # ---------------------------------------------------------------------------
 insert_marker = "type relayClient struct {\n"
 ordered_type = r'''type volgaOrderedBatch struct {
-\tseq     uint64
-\tpackets [][]byte
+	seq     uint64
+	packets [][]byte
 }
 
-'''
+'''.replace('\\t', '\t')
 s = insert_before_once(s, insert_marker, ordered_type, "ordered batch type")
 s = replace_once(
     s,
@@ -243,7 +243,7 @@ func (r *relayClient) worker(id int) {
 \t}
 }
 
-'''
+'''.replace('\\t', '\t')
 s = s[:batcher_start] + ordered_workers + s[send_start:]
 
 s = replace_once(
@@ -269,7 +269,6 @@ s = replace_once(
     "ordered operation IDs",
 )
 
-# Keep Yandex's local/bundle IDs aligned with the same logical sequence too.
 local_id_marker = '"localId":    r.localID.Add(1),'
 if s.count(local_id_marker) != 2:
     raise SystemExit(f"localId markers: expected 2, got {s.count(local_id_marker)}")
@@ -278,8 +277,7 @@ s = s.replace(local_id_marker, '"localId":    relaySeq,', 1)
 s = replace_once(s, '"bundleId": r.bundleID.Add(1),', '"bundleId": batchSeq,', "ordered bundleId")
 
 # ---------------------------------------------------------------------------
-# Receive-side bounded reorder buffer. Entire Yandex bundles are held/released
-# so the existing decode + fragment reassembly path remains byte-for-byte.
+# Receive-side bounded reorder buffer.
 # ---------------------------------------------------------------------------
 ws_marker = "type wsListener struct {\n"
 ws_helpers = r'''const (
@@ -325,10 +323,9 @@ func cloneVolgaRawItems(items []json.RawMessage) []json.RawMessage {
 \treturn out
 }
 
-'''
+'''.replace('\\t', '\t')
 s = insert_before_once(s, ws_marker, ws_helpers, "receive ordering helpers")
 
-# Add receive-order state to wsListener without disturbing the fragment reassembler.
 struct_start = s.index(ws_marker)
 struct_end = s.index("}\n", struct_start)
 ws_struct = s[struct_start:struct_end]
@@ -343,7 +340,6 @@ order_fields = (
 )
 s = s[:struct_end] + order_fields + s[struct_end:]
 
-# Initialize the reorder map in the production constructor.
 constructor_marker = "func newWSListener(auth *volgaAuth, cfg VolgaConfig, stats *VolgaStats,"
 cs = s.index(constructor_marker)
 ce = s.index("}\n", s.index("return &wsListener{", cs))
@@ -358,8 +354,6 @@ constructor_region = constructor_region.replace(
 )
 s = s[:cs] + constructor_region + s[ce:]
 
-# Pass the remote Yandex user ID to bundle handlers so a peer process restart
-# can reset sequence state when its collaboration user/session changes.
 s = replace_once(
     s,
     "\tswitch inner.T {\n"
@@ -511,11 +505,9 @@ func (w *wsListener) orderState() (pending int, next uint64) {
 \treturn len(w.orderPending), w.orderNextSeq
 }
 
-'''
+'''.replace('\\t', '\t')
 s = s[:handlers_start] + ordered_handlers + s[item_start:]
 
-# Add ordering telemetry as a separate line so the established benchmark lines
-# remain directly comparable with V3/V4a logs.
 telemetry_anchor = "\t\t\tlastSent, lastBytes = sent, bytes\n"
 if s.count(telemetry_anchor) != 1:
     raise SystemExit("stats loop anchor missing or duplicated")
@@ -532,9 +524,6 @@ s = s.replace(telemetry_anchor, telemetry + telemetry_anchor, 1)
 
 p.write_text(s)
 
-# ---------------------------------------------------------------------------
-# Unit tests generated into the transformed workspace.
-# ---------------------------------------------------------------------------
 Path("transport/yandex/volga_ordered_batch_v4b_test.go").write_text(r'''package yandex
 
 import (
@@ -634,9 +623,8 @@ func TestVolgaOrderedBundlesSkipExpiredGap(t *testing.T) {
 \t\tt.Fatalf("gap-skip=%d want 1", stats.OrderGapSkips.Load())
 \t}
 }
-''')
+'''.replace('\\t', '\t'))
 
-# The generated test uses strconv explicitly.
 tp = Path("transport/yandex/volga_ordered_batch_v4b_test.go")
 ts = tp.read_text()
 ts = ts.replace('"reflect"\n', '"reflect"\n\t"strconv"\n', 1)
