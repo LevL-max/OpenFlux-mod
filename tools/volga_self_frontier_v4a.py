@@ -25,10 +25,10 @@ def replace_in_region(text: str, start_marker: str, end_marker: str,
 # HTTP-shards-v3 transforms.
 #
 # Experiment goal:
-#   Yandex echoes our own collaboration operations on the websocket.  The
+#   Yandex echoes our own collaboration operations on the websocket. The
 #   current transport discards every self-authored websocket message before
 #   reading operation IDs, so the sender frontier can remain stale while many
-#   relay POSTs fan out from the same generation.  Keep suppressing our own
+#   relay POSTs fan out from the same generation. Keep suppressing our own
 #   encoded tunnel payload (no loopback), but consume self operation IDs so the
 #   confirmed Yandex frontier can advance.
 #
@@ -166,16 +166,16 @@ func makeVolgaWSMessage(t *testing.T, userID int, opID string, packet []byte) []
 }
 
 func TestVolgaSelfMessageAdvancesFrontierWithoutLoopback(t *testing.T) {
-    relay := &relayClient{stats: &VolgaStats{}}
+    stats := &VolgaStats{}
+    relay := &relayClient{stats: stats}
     delivered := 0
-    w := &wsListener{
-        auth:  &volgaAuth{UserID: 42},
-        stats: &VolgaStats{},
-        relay: relay,
-        onData: func([]byte) {
-            delivered++
-        },
-    }
+    w := newWSListener(
+        &volgaAuth{UserID: 42},
+        DefaultVolgaConfig(),
+        stats,
+        relay,
+        func([]byte) { delivered++ },
+    )
 
     w.handleMessage(makeVolgaWSMessage(t, 42, "1-42.123", []byte("self")))
 
@@ -189,16 +189,16 @@ func TestVolgaSelfMessageAdvancesFrontierWithoutLoopback(t *testing.T) {
 }
 
 func TestVolgaPeerMessageStillDeliversPayload(t *testing.T) {
-    relay := &relayClient{stats: &VolgaStats{}}
+    stats := &VolgaStats{}
+    relay := &relayClient{stats: stats}
     var got []byte
-    w := &wsListener{
-        auth:  &volgaAuth{UserID: 42},
-        stats: &VolgaStats{},
-        relay: relay,
-        onData: func(pkt []byte) {
-            got = append([]byte(nil), pkt...)
-        },
-    }
+    w := newWSListener(
+        &volgaAuth{UserID: 42},
+        DefaultVolgaConfig(),
+        stats,
+        relay,
+        func(pkt []byte) { got = append([]byte(nil), pkt...) },
+    )
 
     w.handleMessage(makeVolgaWSMessage(t, 99, "1-99.456", []byte("peer")))
 
