@@ -145,7 +145,7 @@ func newLinkedVolgaV6Pair(t *testing.T, cfg volgaV6RuntimeConfig) (*volgaV6Runti
 
 func TestVolgaV6RuntimeNormalDataAndAckClearsReplay(t *testing.T) {
 	cfg := defaultVolgaV6RuntimeConfig()
-	a, _, _, _, _, gotB := newLinkedVolgaV6Pair(t, cfg)
+	a, b, _, _, _, gotB := newLinkedVolgaV6Pair(t, cfg)
 	now := time.Unix(1001, 0)
 
 	seq, err := a.sendAt([][]byte{[]byte("hello")}, now)
@@ -155,8 +155,55 @@ func TestVolgaV6RuntimeNormalDataAndAckClearsReplay(t *testing.T) {
 	if seq != 1 || len(*gotB) != 1 || (*gotB)[0] != "hello" {
 		t.Fatalf("seq=%d peer delivery=%v", seq, *gotB)
 	}
-	if snap := a.Snapshot(now); snap.Reliable.ReplayDepth != 0 || snap.Reliable.AckBase != 1 {
+	if snap := a.Snapshot(now); snap.Reliable.ReplayDepth != 1 {
+		t.Fatalf("replay cleared before coalesced ACK tick: %+v", snap.Reliable)
+	}
+	if result := b.Tick(context.Background(), now.Add(time.Millisecond)); result.AckErr != nil {
+		t.Fatalf("ACK tick failed: %v", result.AckErr)
+	}
+	if snap := a.Snapshot(now.Add(time.Millisecond)); snap.Reliable.ReplayDepth != 0 || snap.Reliable.AckBase != 1 {
 		t.Fatalf("sender replay after ACK=%+v", snap.Reliable)
+	}
+}
+
+func TestVolgaV6RuntimeCoalescesManyDataIntoOneCumulativeAck(t *testing.T) {
+	cfg := defaultVolgaV6RuntimeConfig()
+	a, b, _, factoryB, _, gotB := newLinkedVolgaV6Pair(t, cfg)
+	start := time.Unix(1050, 0)
+
+	for i, value := range []string{"one", "two", "three"} {
+		if _, err := a.sendAt([][]byte{[]byte(value)}, start.Add(time.Duration(i)*time.Millisecond)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(*gotB) != 3 {
+		t.Fatalf("peer deliveries=%v", *gotB)
+	}
+	before := factoryB.sentSnapshot()
+	for _, item := range before {
+		if item.frame.Kind == volgaV6FrameAck {
+			t.Fatalf("ACK emitted synchronously in websocket path: %+v", before)
+		}
+	}
+
+	if result := b.Tick(context.Background(), start.Add(10*time.Millisecond)); result.AckErr != nil {
+		t.Fatal(result.AckErr)
+	}
+	after := factoryB.sentSnapshot()
+	acks := 0
+	for _, item := range after {
+		if item.frame.Kind == volgaV6FrameAck {
+			acks++
+			if item.frame.Ack.Base != 3 {
+				t.Fatalf("cumulative ACK base=%d want 3", item.frame.Ack.Base)
+			}
+		}
+	}
+	if acks != 1 {
+		t.Fatalf("ACK frames=%d want 1, sent=%+v", acks, after)
+	}
+	if snap := a.Snapshot(start.Add(10 * time.Millisecond)); snap.Reliable.ReplayDepth != 0 || snap.Reliable.AckBase != 3 {
+		t.Fatalf("sender replay after cumulative ACK=%+v", snap.Reliable)
 	}
 }
 
@@ -173,10 +220,18 @@ func TestVolgaV6RuntimeLostAckRecoveredByRepeatedAckState(t *testing.T) {
 	if len(*gotB) != 1 {
 		t.Fatalf("peer DATA delivery=%v", *gotB)
 	}
-	if snap := a.Snapshot(start); snap.Reliable.ReplayDepth != 1 {
+
+	// First ACK is accepted by the fake Volga carrier but deliberately not
+	// delivered to the sender.
+	if result := b.Tick(context.Background(), start.Add(10*time.Millisecond)); result.AckErr != nil {
+		t.Fatalf("first ACK send failed locally: %v", result.AckErr)
+	}
+	if snap := a.Snapshot(start.Add(10 * time.Millisecond)); snap.Reliable.ReplayDepth != 1 {
 		t.Fatalf("lost ACK unexpectedly cleared replay: %+v", snap.Reliable)
 	}
 
+	// No duplicate DATA is required. Periodic ACK state is repeated and clears
+	// the sender replay once that control operation reaches the peer.
 	result := b.Tick(context.Background(), start.Add(150*time.Millisecond))
 	if result.AckErr != nil {
 		t.Fatalf("repeat ACK failed: %v", result.AckErr)
@@ -195,7 +250,7 @@ func TestVolgaV6RuntimeProgressStallHandoffsBeforeRepair(t *testing.T) {
 	cfg.Recovery.RetryRatePerSecond = 2
 	cfg.DrainGrace = 500 * time.Millisecond
 
-	a, _, factoryA, _, _, gotB := newLinkedVolgaV6Pair(t, cfg)
+	a, b, factoryA, _, _, gotB := newLinkedVolgaV6Pair(t, cfg)
 	start := time.Unix(1200, 0)
 	factoryA.setDropData(1)
 
@@ -214,7 +269,12 @@ func TestVolgaV6RuntimeProgressStallHandoffsBeforeRepair(t *testing.T) {
 	if result.Repairs != 1 || len(*gotB) != 1 || (*gotB)[0] != "repair-me" {
 		t.Fatalf("post-handoff repair result=%+v delivery=%v", result, *gotB)
 	}
-	if snap := a.Snapshot(start.Add(600 * time.Millisecond)); snap.Reliable.ReplayDepth != 0 || snap.Carrier.ActiveGeneration != 2 {
+	// The repaired DATA has reached B, but B intentionally coalesces ACK state
+	// until its Tick instead of blocking its receive path on an HTTP ACK POST.
+	if ackResult := b.Tick(context.Background(), start.Add(601*time.Millisecond)); ackResult.AckErr != nil {
+		t.Fatalf("peer ACK tick failed: %v", ackResult.AckErr)
+	}
+	if snap := a.Snapshot(start.Add(601 * time.Millisecond)); snap.Reliable.ReplayDepth != 0 || snap.Carrier.ActiveGeneration != 2 {
 		t.Fatalf("post-repair snapshot=%+v", snap)
 	}
 
