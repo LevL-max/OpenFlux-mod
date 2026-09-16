@@ -170,6 +170,7 @@ func TestVolgaSelfMessageAdvancesFrontierWithoutLoopback(t *testing.T) {
     delivered := 0
     w := &wsListener{
         auth:  &volgaAuth{UserID: 42},
+        stats: &VolgaStats{},
         relay: relay,
         onData: func([]byte) {
             delivered++
@@ -192,6 +193,7 @@ func TestVolgaPeerMessageStillDeliversPayload(t *testing.T) {
     var got []byte
     w := &wsListener{
         auth:  &volgaAuth{UserID: 42},
+        stats: &VolgaStats{},
         relay: relay,
         onData: func(pkt []byte) {
             got = append([]byte(nil), pkt...)
