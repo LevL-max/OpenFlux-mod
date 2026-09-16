@@ -3,6 +3,8 @@ package yandex
 import (
 	"fmt"
 	"strings"
+
+	"universal-bypass-tool/transport"
 )
 
 // newVolgaV6SingleDocumentCarrierFactory is the only concrete Yandex factory
@@ -25,4 +27,10 @@ func newVolgaV6SingleDocumentCarrierFactory(documents []string, cfg volgaV6Yande
 		}
 		return newVolgaV6YandexCarrier(generation, docURL, cfg, onFrame), nil
 	}
+}
+
+func NewYandexVolgaV6SingleDocumentTransport(document string, cfg transport.TransportConfig) *YandexVolgaV6Transport {
+	v6cfg := DefaultVolgaV6TransportConfig([]string{document})
+	factory := newVolgaV6SingleDocumentCarrierFactory(v6cfg.Documents, v6cfg.Yandex)
+	return newYandexVolgaV6TransportWithFactory(cfg, v6cfg, factory)
 }
