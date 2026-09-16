@@ -31,7 +31,7 @@ func main() {
 	client := flag.Bool("client", false, "Run as client")
 	debug := flag.Bool("debug", false, "Enable verbose debug logging")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
-	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, vyandex-v6, oneme)")
+	transportType := flag.String("transport", "yandex", "Transport type (yandex, vyandex, vyandex-v6, vyandex-v6-raw, oneme)")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
 	compressionEnabled := flag.Bool("compression", true, "Enable transport LZ4 wrapper")
 	tcpBufferDefault := flag.Int("tcp-buffer-default", 262144, "gVisor TCP default send/receive buffer bytes")
@@ -98,6 +98,16 @@ func main() {
 		log.Printf("Volga V6 experimental: single-document fresh reauth, shared logical reliability")
 		log.Printf("Volga V6 defaults: batch=20/5000B/2ms send-workers=32 progress-based-recycle=true")
 		log.Printf("Compression: %t", *compressionEnabled)
+	case "vyandex-v6-raw":
+		raw := yandex.NewYandexVolgaV6RawTransport(globalDocUrl, config)
+		if *compressionEnabled {
+			trans = transport.NewCompressedTransport(raw)
+		} else {
+			trans = raw
+		}
+		log.Printf("Volga V6 RAW control: one physical carrier, no ACK/SACK/replay/retry/recovery/handoff")
+		log.Printf("Volga V6 RAW defaults: batch=20/5000B/2ms send-workers=32")
+		log.Printf("Compression: %t", *compressionEnabled)
 	case "yandex":
 		yandexTransport := yandex.NewYandexDocsTransport(globalDocUrl, config)
 		if *compressionEnabled {
@@ -115,7 +125,7 @@ func main() {
 	}
 
 	// Keep the proven private 4-packet/1ms batching wrapper scoped to the legacy
-	// Yandex transport only. Both Volga implementations own their batching.
+	// Yandex transport only. All Volga implementations own their batching.
 	if *transportType == "yandex" && *batchPackets > 1 {
 		trans = transport.NewBatchingTransport(
 			trans,
@@ -124,7 +134,7 @@ func main() {
 			time.Duration(*batchDelayUs)*time.Microsecond,
 		)
 		log.Printf("Batching: packets=%d max_bytes=32768 delay=%dus", *batchPackets, *batchDelayUs)
-	} else if *transportType == "vyandex" || *transportType == "vyandex-v6" {
+	} else if *transportType == "vyandex" || *transportType == "vyandex-v6" || *transportType == "vyandex-v6-raw" {
 		log.Printf("External batching: disabled (Volga uses internal batching)")
 	} else {
 		log.Printf("Batching: disabled")
