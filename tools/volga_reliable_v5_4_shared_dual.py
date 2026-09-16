@@ -53,8 +53,44 @@ s = insert_struct_field(
     "wsListener V5.4 owner",
 )
 
+s = insert_struct_field(
+    s,
+    "type YandexVolgaTransport struct {",
+    "\nfunc NewYandexVolgaTransport(",
+    "\n\t// V5.4 dual-only hooks. Single-carrier construction leaves them nil.\n"
+    "\tvolgaReliableOwner        *wsListener\n"
+    "\tvolgaReliableWireSelector func() *relayClient\n",
+    "YandexVolgaTransport V5.4 hooks",
+)
+
+# Install the immutable wire selector before relay workers can send DATA.
+needle = "\tt.relay = newRelayClient(auth, t.config, t.stats)\n\tt.relay.Start()\n"
+replace = (
+    "\tt.relay = newRelayClient(auth, t.config, t.stats)\n"
+    "\tif t.volgaReliableWireSelector != nil {\n"
+    "\t\tt.relay.volgaReliableWireSelector = t.volgaReliableWireSelector\n"
+    "\t}\n"
+    "\tt.relay.Start()\n"
+)
+if needle not in s:
+    raise SystemExit("V5.4 relay start hook not found")
+s = s.replace(needle, replace, 1)
+
+# The secondary receive owner must be attached before its WS goroutine starts,
+# otherwise fetch_history can briefly instantiate a second reliability state.
+needle = "\tt.ws.Start()\n"
+replace = (
+    "\tif t.volgaReliableOwner != nil {\n"
+    "\t\tt.ws.volgaReliableOwner = t.volgaReliableOwner\n"
+    "\t}\n"
+    "\tt.ws.Start()\n"
+)
+if needle not in s:
+    raise SystemExit("V5.4 WS start hook not found")
+s = s.replace(needle, replace, 1)
+
 # Add the carrier selector helper before SetFrontier. Single-carrier mode has no
-# selector and therefore remains byte-for-byte equivalent in behaviour.
+# selector and therefore remains equivalent in behaviour.
 anchor = "func (r *relayClient) SetFrontier(opID string) {\n"
 if anchor not in s:
     raise SystemExit("V5.4 wire target anchor not found")
@@ -101,9 +137,9 @@ if "wire := r.volgaReliableWireTarget()" not in body:
 p.write_text(s)
 
 # Share receive state across both warm WS listeners. Delegating at the record
-# boundary also means ACK frames arriving through either document release the
-# same replay map, while action/frontier objects are still handled by each
-# document's own wsListener/relay pair before this point.
+# boundary means ACK frames arriving through either document release the same
+# replay map. Action/frontier objects are still handled by each document's own
+# listener/relay before this record boundary.
 p = Path("transport/yandex/volga_reliable_v5.go")
 s = p.read_text()
 
