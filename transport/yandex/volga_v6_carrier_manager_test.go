@@ -5,7 +5,13 @@ import (
 	"errors"
 	"reflect"
 	"testing"
+	"time"
 )
+
+type volgaV6PhysicalFrame struct {
+	Generation uint64
+	Frame      volgaV6WireFrame
+}
 
 type fakeVolgaV6PhysicalCarrier struct {
 	generation uint64
