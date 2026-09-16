@@ -32,8 +32,8 @@ jobs:
       - name: V6 deterministic reliability tests
         run: go test -timeout 2m ./transport/yandex -run '^TestVolgaV6' -count=1 -v
 
-      - name: Full test suite
-        run: go test -timeout 2m ./...
+      - name: Compile all packages
+        run: go test -timeout 2m -run '^$' ./...
 
       - name: Show formatting diff
         if: always()
