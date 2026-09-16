@@ -62,6 +62,7 @@ type volgaV6Runtime struct {
 	ackSent         atomic.Uint64
 	ackSendFailures atomic.Uint64
 	repairsSent     atomic.Uint64
+	ackDirty        atomic.Bool
 
 	mu          sync.Mutex
 	lastAckSent time.Time
@@ -130,7 +131,11 @@ func (r *volgaV6Runtime) handleIncoming(frame volgaV6WireFrame) {
 		if !ok && ack.Session == 0 {
 			return
 		}
-		_ = r.sendAck(ack)
+		// ACK is state, not a per-DATA synchronous response. Mark it dirty and
+		// let Tick coalesce many received DATA frames into one cumulative ACK.
+		// This is important for Volga because sending an HTTP ACK while running
+		// inside the websocket reader would block further websocket delivery.
+		r.ackDirty.Store(true)
 	case volgaV6FrameAck:
 		r.session.HandleAck(frame.Ack)
 	}
@@ -154,20 +159,30 @@ func (r *volgaV6Runtime) sendAck(ack volgaV6Ack) error {
 }
 
 func (r *volgaV6Runtime) repeatAckIfDue(now time.Time) error {
+	dirty := r.ackDirty.Load()
+
 	r.mu.Lock()
 	last := r.lastAckSent
-	if !last.IsZero() && now.Sub(last) < r.config.AckRepeatInterval {
+	if !dirty && !last.IsZero() && now.Sub(last) < r.config.AckRepeatInterval {
 		r.mu.Unlock()
 		return nil
 	}
-	r.lastAckSent = now
 	r.mu.Unlock()
 
 	ack, ok := r.receiver.AckSnapshot()
 	if !ok {
 		return nil
 	}
-	return r.sendAck(ack)
+	if err := r.sendAck(ack); err != nil {
+		// Keep dirty state on failure so the next Tick tries again.
+		return err
+	}
+
+	r.mu.Lock()
+	r.lastAckSent = now
+	r.mu.Unlock()
+	r.ackDirty.Store(false)
+	return nil
 }
 
 func (r *volgaV6Runtime) retireDue(now time.Time) []uint64 {
