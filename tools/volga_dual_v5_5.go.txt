@@ -1,0 +1,397 @@
+package yandex
+
+import (
+	"fmt"
+	"sync"
+	"time"
+
+	"universal-bypass-tool/transport"
+	"universal-bypass-tool/utils"
+)
+
+const (
+	volgaDualDefaultRotation = 15 * time.Second
+	volgaDualDefaultPrewarm  = 3 * time.Second
+	volgaDualDefaultRetire   = 2 * time.Second
+)
+
+func dualVolgaCarrierIndex(elapsed, rotation time.Duration) uint32 {
+	if rotation <= 0 {
+		rotation = volgaDualDefaultRotation
+	}
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return uint32((elapsed / rotation) & 1)
+}
+
+func dualVolgaPrewarm(rotation time.Duration) time.Duration {
+	if rotation <= 0 {
+		rotation = volgaDualDefaultRotation
+	}
+	lead := volgaDualDefaultPrewarm
+	if rotation <= 2*lead {
+		lead = rotation / 3
+	}
+	if lead < time.Second {
+		lead = time.Second
+	}
+	return lead
+}
+
+func stopDualApplicationKeepAlive(t *YandexVolgaTransport) {
+	if t == nil {
+		return
+	}
+	select {
+	case <-t.keepAliveStop:
+	default:
+		close(t.keepAliveStop)
+	}
+}
+
+type dualFreshSlot struct {
+	url        string
+	transport  *YandexVolgaTransport
+	readyCycle uint64
+	preparing  bool
+}
+
+type DualYandexVolgaTransport struct {
+	cfg         transport.TransportConfig
+	rotation    time.Duration
+	prewarm     time.Duration
+	retireGrace time.Duration
+
+	stateMu       sync.RWMutex
+	slots         [2]dualFreshSlot
+	active        uint32
+	rotationStart time.Time
+	lastData      time.Time
+	started       time.Time
+	stopped       bool
+	delayedCycle  uint64
+
+	onDataMu sync.RWMutex
+	onData   func([]byte)
+}
+
+func NewDualYandexVolgaTransport(primaryURL, secondaryURL string, rotation time.Duration, cfg transport.TransportConfig) *DualYandexVolgaTransport {
+	if rotation <= 0 {
+		rotation = volgaDualDefaultRotation
+	}
+	return &DualYandexVolgaTransport{
+		cfg:         cfg,
+		rotation:    rotation,
+		prewarm:     dualVolgaPrewarm(rotation),
+		retireGrace: volgaDualDefaultRetire,
+		slots: [2]dualFreshSlot{
+			{url: primaryURL},
+			{url: secondaryURL},
+		},
+	}
+}
+
+func (d *DualYandexVolgaTransport) newFreshCarrier(idx uint32) (*YandexVolgaTransport, error) {
+	if idx > 1 {
+		return nil, fmt.Errorf("invalid Volga carrier index %d", idx)
+	}
+
+	d.stateMu.RLock()
+	url := d.slots[idx].url
+	d.stateMu.RUnlock()
+	if url == "" {
+		return nil, fmt.Errorf("Volga carrier %d URL is empty", idx)
+	}
+
+	t := NewYandexVolgaTransport(url, d.cfg)
+	t.Receive(d.emit)
+	if err := t.Start(); err != nil {
+		return nil, err
+	}
+	stopDualApplicationKeepAlive(t)
+
+	deadline := time.Now().Add(8 * time.Second)
+	for {
+		if t.ws != nil && t.ws.IsConnected() {
+			return t, nil
+		}
+		if time.Now().After(deadline) {
+			_ = t.Stop()
+			return nil, fmt.Errorf("Volga carrier %d WS readiness timeout", idx)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func (d *DualYandexVolgaTransport) Start() error {
+	d.stateMu.Lock()
+	if d.slots[0].url == "" || d.slots[1].url == "" {
+		d.stateMu.Unlock()
+		return fmt.Errorf("dual Volga carriers are not configured")
+	}
+	if !d.started.IsZero() && !d.stopped {
+		d.stateMu.Unlock()
+		return nil
+	}
+	d.stopped = false
+	d.stateMu.Unlock()
+
+	primary, err := d.newFreshCarrier(0)
+	if err != nil {
+		return fmt.Errorf("dual fresh carrier A start: %w", err)
+	}
+	secondary, err := d.newFreshCarrier(1)
+	if err != nil {
+		_ = primary.Stop()
+		return fmt.Errorf("dual fresh carrier B start: %w", err)
+	}
+
+	d.stateMu.Lock()
+	d.slots[0].transport = primary
+	d.slots[0].readyCycle = 0
+	d.slots[0].preparing = false
+	d.slots[1].transport = secondary
+	d.slots[1].readyCycle = 0
+	d.slots[1].preparing = false
+	d.active = 0
+	d.rotationStart = time.Time{}
+	d.lastData = time.Time{}
+	d.started = time.Now()
+	d.delayedCycle = 0
+	d.stateMu.Unlock()
+
+	utils.Debugf("[VOLGA-DUAL] V5.5 started carriers=A+B rotate=%v prewarm=%v retire=%v mode=fresh-reauth rotation-start=first-data app-keepalive=off", d.rotation, d.prewarm, d.retireGrace)
+	return nil
+}
+
+func (d *DualYandexVolgaTransport) Stop() error {
+	d.stateMu.Lock()
+	if d.stopped {
+		d.stateMu.Unlock()
+		return nil
+	}
+	d.stopped = true
+	a := d.slots[0].transport
+	b := d.slots[1].transport
+	d.slots[0].transport = nil
+	d.slots[1].transport = nil
+	d.stateMu.Unlock()
+
+	var first error
+	if a != nil {
+		if err := a.Stop(); err != nil && first == nil {
+			first = err
+		}
+	}
+	if b != nil && b != a {
+		if err := b.Stop(); err != nil && first == nil {
+			first = err
+		}
+	}
+	return first
+}
+
+func (d *DualYandexVolgaTransport) prepareFresh(idx uint32, cycle uint64) {
+	name := "A"
+	if idx == 1 {
+		name = "B"
+	}
+	start := time.Now()
+	utils.Debugf("[VOLGA-DUAL] prewarm start carrier=%s cycle=%d", name, cycle)
+
+	fresh, err := d.newFreshCarrier(idx)
+	if err != nil {
+		d.stateMu.Lock()
+		if idx <= 1 {
+			d.slots[idx].preparing = false
+		}
+		d.stateMu.Unlock()
+		utils.Debugf("[VOLGA-DUAL] prewarm failed carrier=%s cycle=%d err=%v", name, cycle, err)
+		return
+	}
+
+	d.stateMu.Lock()
+	if d.stopped || d.slots[idx].readyCycle >= cycle {
+		d.slots[idx].preparing = false
+		d.stateMu.Unlock()
+		_ = fresh.Stop()
+		return
+	}
+	old := d.slots[idx].transport
+	d.slots[idx].transport = fresh
+	d.slots[idx].readyCycle = cycle
+	d.slots[idx].preparing = false
+	d.stateMu.Unlock()
+
+	if old != nil && old != fresh {
+		_ = old.Stop()
+	}
+	utils.Debugf("[VOLGA-DUAL] fresh carrier ready=%s cycle=%d auth-to-ws=%v", name, cycle, time.Since(start).Round(time.Millisecond))
+}
+
+func (d *DualYandexVolgaTransport) retireCarrierLater(idx uint32, old *YandexVolgaTransport, cycle uint64) {
+	if old == nil {
+		return
+	}
+	go func() {
+		timer := time.NewTimer(d.retireGrace)
+		defer timer.Stop()
+		<-timer.C
+
+		d.stateMu.Lock()
+		if d.stopped {
+			d.stateMu.Unlock()
+			return
+		}
+		if d.active == idx || d.slots[idx].transport != old {
+			d.stateMu.Unlock()
+			return
+		}
+		d.slots[idx].transport = nil
+		d.stateMu.Unlock()
+
+		_ = old.Stop()
+		name := "A"
+		if idx == 1 {
+			name = "B"
+		}
+		utils.Debugf("[VOLGA-DUAL] retired stale carrier=%s after-cycle=%d", name, cycle)
+	}()
+}
+
+func (d *DualYandexVolgaTransport) maybePrepareNextLocked(now time.Time, cycle uint64, elapsed time.Duration) (uint32, uint64, bool) {
+	if d.rotation <= 0 || d.prewarm <= 0 {
+		return 0, 0, false
+	}
+	within := elapsed % d.rotation
+	if within < d.rotation-d.prewarm {
+		return 0, 0, false
+	}
+	nextCycle := cycle + 1
+	target := uint32(nextCycle & 1)
+	slot := &d.slots[target]
+	if slot.readyCycle >= nextCycle || slot.preparing {
+		return 0, 0, false
+	}
+	slot.preparing = true
+	return target, nextCycle, true
+}
+
+func (d *DualYandexVolgaTransport) Send(data []byte) error {
+	now := time.Now()
+
+	d.stateMu.Lock()
+	if d.started.IsZero() || d.stopped {
+		d.stateMu.Unlock()
+		return fmt.Errorf("dual Volga transport not started")
+	}
+	if d.rotationStart.IsZero() {
+		d.rotationStart = now
+		d.lastData = now
+		d.active = 0
+		utils.Debugf("[VOLGA-DUAL] first DATA starts fresh-session schedule active=A")
+	}
+
+	elapsed := now.Sub(d.rotationStart)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	cycle := uint64(elapsed / d.rotation)
+	desired := uint32(cycle & 1)
+	oldActive := d.active
+	oldCarrier := d.slots[oldActive].transport
+
+	if desired != d.active {
+		target := &d.slots[desired]
+		if target.transport != nil && target.readyCycle >= cycle {
+			d.active = desired
+			d.delayedCycle = 0
+			name := "A"
+			if desired == 1 {
+				name = "B"
+			}
+			utils.Debugf("[VOLGA-DUAL] handoff active=%s cycle=%d elapsed=%v fresh=true", name, cycle, elapsed.Round(time.Millisecond))
+		} else if d.delayedCycle != cycle {
+			d.delayedCycle = cycle
+			name := "A"
+			if desired == 1 {
+				name = "B"
+			}
+			utils.Debugf("[VOLGA-DUAL] handoff delayed target=%s cycle=%d reason=fresh-not-ready", name, cycle)
+		}
+	}
+
+	active := d.active
+	carrier := d.slots[active].transport
+	prepIdx, prepCycle, prepare := d.maybePrepareNextLocked(now, cycle, elapsed)
+	d.lastData = now
+	switched := active != oldActive
+	d.stateMu.Unlock()
+
+	if prepare {
+		go d.prepareFresh(prepIdx, prepCycle)
+	}
+	if switched {
+		d.retireCarrierLater(oldActive, oldCarrier, cycle)
+	}
+	if carrier == nil {
+		return fmt.Errorf("active Volga carrier %d unavailable", active)
+	}
+	return carrier.Send(data)
+}
+
+func (d *DualYandexVolgaTransport) Receive(callback func([]byte)) {
+	d.onDataMu.Lock()
+	d.onData = callback
+	d.onDataMu.Unlock()
+}
+
+func (d *DualYandexVolgaTransport) emit(data []byte) {
+	d.onDataMu.RLock()
+	cb := d.onData
+	d.onDataMu.RUnlock()
+	if cb != nil {
+		cb(data)
+	}
+}
+
+func (d *DualYandexVolgaTransport) IsConnected() bool {
+	d.stateMu.RLock()
+	defer d.stateMu.RUnlock()
+	for i := range d.slots {
+		if d.slots[i].transport != nil && d.slots[i].transport.IsConnected() {
+			return true
+		}
+	}
+	return false
+}
+
+func (d *DualYandexVolgaTransport) Stats() transport.TransportStats {
+	d.stateMu.RLock()
+	a := d.slots[0].transport
+	b := d.slots[1].transport
+	started := d.started
+	d.stateMu.RUnlock()
+
+	var sa, sb transport.TransportStats
+	if a != nil {
+		sa = a.Stats()
+	}
+	if b != nil {
+		sb = b.Stats()
+	}
+	uptime := time.Duration(0)
+	if !started.IsZero() {
+		uptime = time.Since(started)
+	}
+	return transport.TransportStats{
+		BytesSent:     sa.BytesSent + sb.BytesSent,
+		BytesReceived: sa.BytesReceived + sb.BytesReceived,
+		PacketsSent:   sa.PacketsSent + sb.PacketsSent,
+		PacketsRecv:   sa.PacketsRecv + sb.PacketsRecv,
+		Reconnects:    sa.Reconnects + sb.Reconnects,
+		Connected:     d.IsConnected(),
+		Uptime:        uptime,
+	}
+}
