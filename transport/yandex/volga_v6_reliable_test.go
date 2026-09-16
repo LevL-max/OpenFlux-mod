@@ -153,8 +153,6 @@ func TestVolgaV6AckCanBeRepeatedAfterControlLoss(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Simulate the first ACK control operation being accepted by Yandex but not
-	// observed by the sender: obtain it, then deliberately do not apply it.
 	first, ok := receiver.AckSnapshot()
 	if !ok {
 		t.Fatal("missing ACK snapshot")
@@ -163,8 +161,6 @@ func TestVolgaV6AckCanBeRepeatedAfterControlLoss(t *testing.T) {
 		t.Fatalf("replay unexpectedly cleared after lost ACK: %+v", snap)
 	}
 
-	// The receiver can send the same state again without receiving duplicate
-	// DATA. Applying the repeated ACK clears the sender replay.
 	second, ok := receiver.AckSnapshot()
 	if !ok || !reflect.DeepEqual(first, second) {
 		t.Fatalf("ACK is not repeatable: first=%+v second=%+v", first, second)
@@ -229,8 +225,6 @@ func TestVolgaV6ReceiverResumeUsesReplayFloor(t *testing.T) {
 	wire.receiver = freshReceiver
 	wire.frames = nil
 
-	// Replay seq 3 first. The replay floor must still be 2, so the restarted
-	// receiver can establish base=1 instead of waiting forever for seq 1.
 	if err := session.replayAt(3, time.Unix(1, 0)); err != nil {
 		t.Fatal(err)
 	}
@@ -248,6 +242,49 @@ func TestVolgaV6ReceiverResumeUsesReplayFloor(t *testing.T) {
 	end := freshReceiver.Snapshot()
 	if end.Base != 3 || end.Pending != 0 {
 		t.Fatalf("resume final=%+v", end)
+	}
+}
+
+func TestVolgaV6SACKDoesNotDestroyRestartRecovery(t *testing.T) {
+	wire := newFakeVolgaV6CarrierManager(nil)
+	cfg := defaultVolgaV6ReliableConfig()
+	cfg.BaseRTO = 100 * time.Millisecond
+	session := newVolgaV6ReliableSession(6506, wire, cfg)
+	start := time.Unix(5, 0)
+
+	for i := 0; i < 3; i++ {
+		if _, err := session.sendAt([][]byte{[]byte{byte(i + 1)}}, start); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Receiver has cumulatively received seq 1, missed seq 2, but SACKed seq 3.
+	// Seq 3 must remain in replay storage while being suppressed from repair.
+	released := session.HandleAck(volgaV6Ack{
+		Session: 6506,
+		Base:    1,
+		Ranges:  []volgaV6AckRange{{Start: 3, End: 3}},
+	})
+	if released != 1 {
+		t.Fatalf("released=%d want only cumulative seq 1", released)
+	}
+	snap := session.Snapshot(start.Add(time.Second))
+	if snap.ReplayDepth != 2 || snap.SackedDepth != 1 {
+		t.Fatalf("SACK replay retention=%+v", snap)
+	}
+	if got := session.DueRepairs(start.Add(time.Second)); !reflect.DeepEqual(got, []uint64{2}) {
+		t.Fatalf("repairs while seq3 SACKed=%v want [2]", got)
+	}
+
+	// A restarted receiver loses its previous SACK memory. Its next ACK no
+	// longer advertises seq 3, so the retained payload becomes repairable again.
+	session.HandleAck(volgaV6Ack{Session: 6506, Base: 1})
+	snap = session.Snapshot(start.Add(time.Second))
+	if snap.SackedDepth != 0 || snap.ReplayDepth != 2 {
+		t.Fatalf("SACK state did not reopen after receiver reset: %+v", snap)
+	}
+	if got := session.DueRepairs(start.Add(time.Second)); !reflect.DeepEqual(got, []uint64{2, 3}) {
+		t.Fatalf("repairs after SACK reset=%v want [2 3]", got)
 	}
 }
 
