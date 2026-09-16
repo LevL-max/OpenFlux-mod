@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"universal-bypass-tool/transport"
+	"universal-bypass-tool/utils"
 )
 
 var (
@@ -19,13 +20,15 @@ var (
 type VolgaV6TransportConfig struct {
 	Documents []string
 
-	BatchPackets  int
-	BatchBytes    int
-	BatchTimeout  time.Duration
-	QueueSize     int
-	SendQueueSize int
-	SendWorkers   int
-	TickInterval  time.Duration
+	BatchPackets     int
+	BatchBytes       int
+	BatchTimeout     time.Duration
+	QueueSize        int
+	SendQueueSize    int
+	SendWorkers      int
+	TickInterval     time.Duration
+	Telemetry        bool
+	TelemetryInterval time.Duration
 
 	Runtime volgaV6RuntimeConfig
 	Yandex  volgaV6YandexConfig
@@ -33,16 +36,18 @@ type VolgaV6TransportConfig struct {
 
 func DefaultVolgaV6TransportConfig(documents []string) VolgaV6TransportConfig {
 	return VolgaV6TransportConfig{
-		Documents:     append([]string(nil), documents...),
-		BatchPackets:  20,
-		BatchBytes:    5000,
-		BatchTimeout:  2 * time.Millisecond,
-		QueueSize:     1_000_000,
-		SendQueueSize: 8192,
-		SendWorkers:   32,
-		TickInterval:  20 * time.Millisecond,
-		Runtime:       defaultVolgaV6RuntimeConfig(),
-		Yandex:        defaultVolgaV6YandexConfig(),
+		Documents:         append([]string(nil), documents...),
+		BatchPackets:      20,
+		BatchBytes:        5000,
+		BatchTimeout:      2 * time.Millisecond,
+		QueueSize:         1_000_000,
+		SendQueueSize:     8192,
+		SendWorkers:       32,
+		TickInterval:      20 * time.Millisecond,
+		Telemetry:         true,
+		TelemetryInterval: time.Second,
+		Runtime:           defaultVolgaV6RuntimeConfig(),
+		Yandex:            defaultVolgaV6YandexConfig(),
 	}
 }
 
@@ -93,6 +98,9 @@ func newYandexVolgaV6TransportWithFactory(baseCfg transport.TransportConfig, v6c
 	if v6cfg.TickInterval <= 0 {
 		v6cfg.TickInterval = defaults.TickInterval
 	}
+	if v6cfg.TelemetryInterval <= 0 {
+		v6cfg.TelemetryInterval = defaults.TelemetryInterval
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	t := &YandexVolgaV6Transport{
 		BaseTransport: transport.NewBaseTransport(baseCfg),
@@ -131,11 +139,18 @@ func (t *YandexVolgaV6Transport) Start() error {
 	}
 	t.SetConnected(true)
 
-	t.wg.Add(2 + t.config.SendWorkers)
+	goroutines := 2 + t.config.SendWorkers
+	if t.config.Telemetry {
+		goroutines++
+	}
+	t.wg.Add(goroutines)
 	go t.batchLoop()
 	go t.tickLoop()
 	for i := 0; i < t.config.SendWorkers; i++ {
 		go t.sendWorker()
+	}
+	if t.config.Telemetry {
+		go t.telemetryLoop()
 	}
 	return nil
 }
@@ -279,13 +294,106 @@ func (t *YandexVolgaV6Transport) tickLoop() {
 			result := t.runtime.Tick(t.ctx, now)
 			if result.Handoff {
 				t.RecordReconnect()
+				utils.Debugf("[VOLGA-V6-HANDOFF] old=%d new=%d reason=%s replay=%d oldest_ms=%d",
+					result.OldGeneration, result.NewGeneration, result.Recovery.Reason,
+					t.runtime.Snapshot(now).Reliable.ReplayDepth,
+					t.runtime.Snapshot(now).Reliable.OldestUnackedAge.Milliseconds())
 			}
 		}
 	}
 }
 
+func (t *YandexVolgaV6Transport) telemetryLoop() {
+	defer t.wg.Done()
+	ticker := time.NewTicker(t.config.TelemetryInterval)
+	defer ticker.Stop()
+
+	lastAt := time.Now()
+	last := t.runtime.Snapshot(lastAt)
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case now := <-ticker.C:
+			current := t.runtime.Snapshot(now)
+			seconds := now.Sub(lastAt).Seconds()
+			if seconds <= 0 {
+				seconds = 1
+			}
+			dataRate := float64(current.Reliable.NextSeq-last.Reliable.NextSeq) / seconds
+			retryRate := float64(current.RepairsSent-last.RepairsSent) / seconds
+			ackRate := float64(current.AckSent-last.AckSent) / seconds
+
+			health := current.Carrier.ActiveHealth
+			postDelta := health.Posts
+			microsDelta := health.PostMicros
+			failDelta := health.PostFailures
+			if health.Known && last.Carrier.ActiveHealth.Known &&
+				health.Generation == last.Carrier.ActiveHealth.Generation {
+				postDelta -= minU64(health.Posts, last.Carrier.ActiveHealth.Posts)
+				microsDelta -= minU64(health.PostMicros, last.Carrier.ActiveHealth.PostMicros)
+				failDelta -= minU64(health.PostFailures, last.Carrier.ActiveHealth.PostFailures)
+			}
+			postRate := float64(postDelta) / seconds
+			avgPostMs := float64(0)
+			if postDelta > 0 {
+				avgPostMs = float64(microsDelta) / float64(postDelta) / 1000.0
+			}
+			reason := current.LastHandoffReason
+			if reason == "" {
+				reason = "-"
+			}
+			doc := health.Document
+			if doc == "" {
+				doc = "-"
+			}
+
+			utils.Debugf("[VOLGA-V6] session=%d seq=%d ack=%d replay=%d sacked=%d oldest_ms=%d data=%.1f/s retry=%.1f/s acktx=%.1f/s gen=%d doc=%s age_ms=%d ws=%t post=%.1f/s post_fail=%d http_avg_ms=%.2f http_max_ms=%.2f handoffs=%d reason=%s draining=%v q=%d sendq=%d",
+				current.Reliable.Session,
+				current.Reliable.NextSeq,
+				current.Reliable.AckBase,
+				current.Reliable.ReplayDepth,
+				current.Reliable.SackedDepth,
+				current.Reliable.OldestUnackedAge.Milliseconds(),
+				dataRate,
+				retryRate,
+				ackRate,
+				current.Carrier.ActiveGeneration,
+				doc,
+				health.Age.Milliseconds(),
+				health.Connected,
+				postRate,
+				failDelta,
+				avgPostMs,
+				float64(health.MaxPostMicros)/1000.0,
+				current.Carrier.Handoffs,
+				reason,
+				current.Carrier.Draining,
+				len(t.queue),
+				len(t.sendQueue))
+
+			lastAt = now
+			last = current
+		}
+	}
+}
+
+func minU64(a, b uint64) uint64 {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func (t *YandexVolgaV6Transport) IsConnected() bool {
-	return t.started.Load() && !t.stopped.Load() && t.BaseTransport.IsConnected()
+	if !t.started.Load() || t.stopped.Load() || !t.BaseTransport.IsConnected() {
+		return false
+	}
+	snap := t.runtime.Snapshot(time.Now())
+	if snap.Carrier.ActiveHealth.Known {
+		return snap.Carrier.ActiveHealth.Connected
+	}
+	return true
 }
 
 func (t *YandexVolgaV6Transport) Snapshot(now time.Time) volgaV6RuntimeSnapshot {
