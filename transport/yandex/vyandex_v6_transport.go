@@ -19,13 +19,13 @@ var (
 type VolgaV6TransportConfig struct {
 	Documents []string
 
-	BatchPackets int
-	BatchBytes   int
-	BatchTimeout time.Duration
-	QueueSize    int
+	BatchPackets  int
+	BatchBytes    int
+	BatchTimeout  time.Duration
+	QueueSize     int
 	SendQueueSize int
-	SendWorkers  int
-	TickInterval time.Duration
+	SendWorkers   int
+	TickInterval  time.Duration
 
 	Runtime volgaV6RuntimeConfig
 	Yandex  volgaV6YandexConfig
@@ -144,9 +144,15 @@ func (t *YandexVolgaV6Transport) Stop() error {
 	if !t.stopped.CompareAndSwap(false, true) {
 		return nil
 	}
+
+	// Stop accepting new work and cancel physical carriers before waiting for
+	// workers. A worker may be blocked inside an HTTP relay POST; stopping the
+	// runtime first cancels that carrier context instead of making Stop wait for
+	// the full relay timeout.
 	t.cancel()
-	t.wg.Wait()
 	runtimeErr := t.runtime.Stop()
+	t.wg.Wait()
+
 	t.SetConnected(false)
 	baseErr := t.BaseTransport.Stop()
 	if runtimeErr != nil {
