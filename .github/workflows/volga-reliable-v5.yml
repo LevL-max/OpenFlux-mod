@@ -13,6 +13,7 @@ on:
       - 'tools/volga_reliable_v5.py'
       - 'tools/volga_reliable_v5_impl.go.txt'
       - 'tools/volga_reliable_v5_test.go.txt'
+      - 'tools/volga_reliable_v5_ci_compat.py'
       - '.github/workflows/volga-reliable-v5.yml'
 
 permissions:
@@ -77,6 +78,9 @@ jobs:
       - name: Apply reliable transport v5
         run: python3 tools/volga_reliable_v5.py
 
+      - name: Isolate superseded V4 receive tests
+        run: python3 tools/volga_reliable_v5_ci_compat.py
+
       - name: Format generated Go
         run: |
           gofmt -w \
@@ -92,7 +96,7 @@ jobs:
             transport/yandex/volga_reliable_v5_test.go
 
       - name: Test
-        run: go test ./...
+        run: go test -timeout 2m ./...
 
       - name: Build linux amd64
         run: |
