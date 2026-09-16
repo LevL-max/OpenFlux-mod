@@ -279,6 +279,7 @@ func (t *YandexVolgaV6Transport) sendWorker() {
 				return
 			}
 		}
+	}
 }
 
 func (t *YandexVolgaV6Transport) tickLoop() {
