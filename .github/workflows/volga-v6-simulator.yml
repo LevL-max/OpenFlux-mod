@@ -16,7 +16,10 @@ on:
       - 'transport/yandex/volga_v6_wire_test.go'
       - 'transport/yandex/volga_v6_runtime.go'
       - 'transport/yandex/volga_v6_runtime_test.go'
+      - 'transport/yandex/volga_v6_yandex_carrier.go'
+      - 'transport/yandex/volga_v6_yandex_carrier_test.go'
       - 'docs/volga-v6-design.md'
+      - 'docs/volga-v6-invariants.md'
       - '.github/workflows/volga-v6-simulator.yml'
 
 permissions:
@@ -46,7 +49,9 @@ jobs:
             transport/yandex/volga_v6_wire.go \
             transport/yandex/volga_v6_wire_test.go \
             transport/yandex/volga_v6_runtime.go \
-            transport/yandex/volga_v6_runtime_test.go
+            transport/yandex/volga_v6_runtime_test.go \
+            transport/yandex/volga_v6_yandex_carrier.go \
+            transport/yandex/volga_v6_yandex_carrier_test.go
 
       - name: V6 deterministic reliability tests
         run: go test -timeout 2m ./transport/yandex -run '^TestVolgaV6' -count=1 -v
@@ -70,4 +75,6 @@ jobs:
             transport/yandex/volga_v6_wire.go \
             transport/yandex/volga_v6_wire_test.go \
             transport/yandex/volga_v6_runtime.go \
-            transport/yandex/volga_v6_runtime_test.go || true
+            transport/yandex/volga_v6_runtime_test.go \
+            transport/yandex/volga_v6_yandex_carrier.go \
+            transport/yandex/volga_v6_yandex_carrier_test.go || true
