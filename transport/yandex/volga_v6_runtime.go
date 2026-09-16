@@ -43,9 +43,10 @@ type volgaV6RuntimeSnapshot struct {
 	Receiver volgaV6ReceiverSnapshot
 	Carrier  volgaV6CarrierManagerSnapshot
 
-	AckSent         uint64
-	AckSendFailures uint64
-	RepairsSent     uint64
+	AckSent           uint64
+	AckSendFailures   uint64
+	RepairsSent       uint64
+	LastHandoffReason string
 }
 
 // volgaV6Runtime joins the logical sender/receiver, recovery controller and
@@ -64,9 +65,10 @@ type volgaV6Runtime struct {
 	repairsSent     atomic.Uint64
 	ackDirty        atomic.Bool
 
-	mu          sync.Mutex
-	lastAckSent time.Time
-	retireAt    map[uint64]time.Time
+	mu                sync.Mutex
+	lastAckSent       time.Time
+	lastHandoffReason string
+	retireAt          map[uint64]time.Time
 }
 
 func newVolgaV6Runtime(sessionID uint64, factory volgaV6CarrierFactory, cfg volgaV6RuntimeConfig, onData func([][]byte)) *volgaV6Runtime {
@@ -233,6 +235,9 @@ func (r *volgaV6Runtime) Tick(ctx context.Context, now time.Time) volgaV6Runtime
 			result.OldGeneration = oldGen
 			result.NewGeneration = newGen
 			r.scheduleRetire(oldGen, now)
+			r.mu.Lock()
+			r.lastHandoffReason = result.Recovery.Reason
+			r.mu.Unlock()
 			// Permit a bounded immediate repair burst on the newly authorized
 			// carrier. Subsequent repairs are rate-refilled normally.
 			r.recovery.ResetRetryBudget(now)
@@ -259,12 +264,16 @@ func (r *volgaV6Runtime) Tick(ctx context.Context, now time.Time) volgaV6Runtime
 }
 
 func (r *volgaV6Runtime) Snapshot(now time.Time) volgaV6RuntimeSnapshot {
+	r.mu.Lock()
+	lastReason := r.lastHandoffReason
+	r.mu.Unlock()
 	return volgaV6RuntimeSnapshot{
-		Reliable:        r.session.Snapshot(now),
-		Receiver:        r.receiver.Snapshot(),
-		Carrier:         r.manager.Snapshot(),
-		AckSent:         r.ackSent.Load(),
-		AckSendFailures: r.ackSendFailures.Load(),
-		RepairsSent:     r.repairsSent.Load(),
+		Reliable:          r.session.Snapshot(now),
+		Receiver:          r.receiver.Snapshot(),
+		Carrier:           r.manager.snapshotAt(now),
+		AckSent:           r.ackSent.Load(),
+		AckSendFailures:   r.ackSendFailures.Load(),
+		RepairsSent:       r.repairsSent.Load(),
+		LastHandoffReason: lastReason,
 	}
 }
