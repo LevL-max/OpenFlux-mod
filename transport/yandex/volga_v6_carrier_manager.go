@@ -24,17 +24,17 @@ type volgaV6PhysicalCarrier interface {
 }
 
 type volgaV6PhysicalHealth struct {
-	Known          bool
-	Generation     uint64
-	Document       string
-	Connected      bool
-	Age            time.Duration
-	Posts          uint64
-	PostFailures   uint64
-	PostBytes      uint64
-	PostMicros     uint64
-	MaxPostMicros  uint64
-	WSReconnects   uint64
+	Known         bool
+	Generation    uint64
+	Document      string
+	Connected     bool
+	Age           time.Duration
+	Posts         uint64
+	PostFailures  uint64
+	PostBytes     uint64
+	PostMicros    uint64
+	MaxPostMicros uint64
+	WSReconnects  uint64
 }
 
 type volgaV6PhysicalHealthReporter interface {
@@ -62,6 +62,7 @@ type volgaV6CarrierManager struct {
 	lifecycleMu sync.Mutex
 	mu          sync.RWMutex
 	active      volgaV6PhysicalCarrier
+	activeSince time.Time
 	draining    map[uint64]volgaV6PhysicalCarrier
 	nextGen     uint64
 	handoffs    uint64
@@ -131,6 +132,7 @@ func (m *volgaV6CarrierManager) Start(ctx context.Context) error {
 		return fmt.Errorf("volga v6 carrier manager already started")
 	}
 	m.active = carrier
+	m.activeSince = time.Now()
 	return nil
 }
 
@@ -155,11 +157,13 @@ func (m *volgaV6CarrierManager) Handoff(ctx context.Context) (oldGeneration, new
 	old := m.active
 	if old == nil {
 		m.active = replacement
+		m.activeSince = time.Now()
 		m.mu.Unlock()
 		return 0, replacement.Generation(), nil
 	}
 	m.draining[old.Generation()] = old
 	m.active = replacement
+	m.activeSince = time.Now()
 	m.handoffs++
 	oldGeneration = old.Generation()
 	newGeneration = replacement.Generation()
@@ -202,6 +206,7 @@ func (m *volgaV6CarrierManager) Snapshot() volgaV6CarrierManagerSnapshot {
 func (m *volgaV6CarrierManager) snapshotAt(now time.Time) volgaV6CarrierManagerSnapshot {
 	m.mu.RLock()
 	activeCarrier := m.active
+	activeSince := m.activeSince
 	active := uint64(0)
 	if activeCarrier != nil {
 		active = activeCarrier.Generation()
@@ -217,6 +222,9 @@ func (m *volgaV6CarrierManager) snapshotAt(now time.Time) volgaV6CarrierManagerS
 	health := volgaV6PhysicalHealth{}
 	if reporter, ok := activeCarrier.(volgaV6PhysicalHealthReporter); ok {
 		health = reporter.VolgaV6PhysicalHealth(now)
+	}
+	if !activeSince.IsZero() && now.After(activeSince) {
+		health.Age = now.Sub(activeSince)
 	}
 	return volgaV6CarrierManagerSnapshot{
 		ActiveGeneration: active,
@@ -238,6 +246,7 @@ func (m *volgaV6CarrierManager) Stop() error {
 	m.stopped = true
 	active := m.active
 	m.active = nil
+	m.activeSince = time.Time{}
 	draining := make([]volgaV6PhysicalCarrier, 0, len(m.draining))
 	for _, carrier := range m.draining {
 		draining = append(draining, carrier)
