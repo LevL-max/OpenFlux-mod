@@ -1,0 +1,97 @@
+package yandex
+
+import (
+	"reflect"
+	"testing"
+)
+
+func TestVolgaReliableV5DataMetaRoundTrip(t *testing.T) {
+	const session = uint64(123456789)
+	const seq = uint64(4242)
+	record := makeVolgaReliableDataMeta(session, seq)
+	gotSession, gotSeq, ok := parseVolgaReliableDataMeta(record)
+	if !ok || gotSession != session || gotSeq != seq {
+		t.Fatalf("round trip got session=%d seq=%d ok=%v", gotSession, gotSeq, ok)
+	}
+}
+
+func TestVolgaReliableV5AckRoundTrip(t *testing.T) {
+	want := volgaReliableAck{
+		Session: 991,
+		Base:    100,
+		Ranges: []volgaReliableAckRange{
+			{Start: 105, End: 110},
+			{Start: 120, End: 125},
+		},
+	}
+	record := makeVolgaReliableAckRecord(want)
+	got, ok := parseVolgaReliableAckRecord(record)
+	if !ok {
+		t.Fatal("ACK record did not parse")
+	}
+	if got.Session != want.Session || got.Base != want.Base || !reflect.DeepEqual(got.Ranges, want.Ranges) {
+		t.Fatalf("ACK round trip got=%+v want=%+v", got, want)
+	}
+	for _, seq := range []uint64{1, 100, 105, 108, 110, 120, 125} {
+		if !volgaReliableAckContains(got, seq) {
+			t.Fatalf("ACK should contain seq %d", seq)
+		}
+	}
+	for _, seq := range []uint64{101, 104, 111, 119, 126} {
+		if volgaReliableAckContains(got, seq) {
+			t.Fatalf("ACK should not contain seq %d", seq)
+		}
+	}
+}
+
+func TestVolgaReliableV5ImmediateDeliveryAndDedupe(t *testing.T) {
+	stats := &VolgaStats{}
+	var got []string
+	w := &wsListener{
+		stats:       stats,
+		reassembler: newVolgaFragmentReassembler(volgaReassemblyTimeout, DefaultVolgaConfig().MaxPayloadBytes, stats),
+		onData:      func(pkt []byte) { got = append(got, string(pkt)) },
+	}
+
+	w.volgaReliableHandleData(1000, 1, [][]byte{[]byte("one")})
+	w.volgaReliableHandleData(1000, 3, [][]byte{[]byte("three")})
+	w.volgaReliableHandleData(1000, 3, [][]byte{[]byte("three-duplicate")})
+	w.volgaReliableHandleData(1000, 2, [][]byte{[]byte("two")})
+
+	want := []string{"one", "three", "two"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("delivery=%v want=%v", got, want)
+	}
+
+	peer, base, pending, _, duplicates, resets, stale, _ := w.volgaReliableRecvSnapshot()
+	if peer != 1000 || base != 3 || pending != 0 {
+		t.Fatalf("state peer=%d base=%d pending=%d want 1000,3,0", peer, base, pending)
+	}
+	if duplicates != 1 || resets != 1 || stale != 0 {
+		t.Fatalf("duplicates=%d resets=%d stale=%d want 1,1,0", duplicates, resets, stale)
+	}
+}
+
+func TestVolgaReliableV5NewerSessionWinsAndOldSessionIsIgnored(t *testing.T) {
+	stats := &VolgaStats{}
+	var got []string
+	w := &wsListener{
+		stats:       stats,
+		reassembler: newVolgaFragmentReassembler(volgaReassemblyTimeout, DefaultVolgaConfig().MaxPayloadBytes, stats),
+		onData:      func(pkt []byte) { got = append(got, string(pkt)) },
+	}
+
+	w.volgaReliableHandleData(1000, 1, [][]byte{[]byte("old-1")})
+	w.volgaReliableHandleData(2000, 1, [][]byte{[]byte("new-1")})
+	w.volgaReliableHandleData(1000, 2, [][]byte{[]byte("old-2")})
+	w.volgaReliableHandleData(2000, 2, [][]byte{[]byte("new-2")})
+
+	want := []string{"old-1", "new-1", "new-2"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("delivery=%v want=%v", got, want)
+	}
+	peer, base, _, _, _, resets, stale, _ := w.volgaReliableRecvSnapshot()
+	if peer != 2000 || base != 2 || resets != 2 || stale != 1 {
+		t.Fatalf("peer=%d base=%d resets=%d stale=%d want 2000,2,2,1", peer, base, resets, stale)
+	}
+}
