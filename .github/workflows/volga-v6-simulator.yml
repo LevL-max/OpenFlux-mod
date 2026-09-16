@@ -1,0 +1,37 @@
+name: Volga V6 reliability simulator
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - design/volga-v6-reliable-carrier-manager
+    paths:
+      - 'transport/yandex/volga_v6_reliable.go'
+      - 'transport/yandex/volga_v6_reliable_test.go'
+      - 'docs/volga-v6-design.md'
+      - '.github/workflows/volga-v6-simulator.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  simulator:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+
+      - name: Format check
+        run: |
+          test -z "$(gofmt -d transport/yandex/volga_v6_reliable.go transport/yandex/volga_v6_reliable_test.go)"
+
+      - name: V6 deterministic reliability tests
+        run: go test -timeout 2m ./transport/yandex -run '^TestVolgaV6' -count=1 -v
+
+      - name: Full test suite
+        run: go test -timeout 2m ./...
