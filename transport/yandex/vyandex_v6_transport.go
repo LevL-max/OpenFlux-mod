@@ -23,6 +23,8 @@ type VolgaV6TransportConfig struct {
 	BatchBytes   int
 	BatchTimeout time.Duration
 	QueueSize    int
+	SendQueueSize int
+	SendWorkers  int
 	TickInterval time.Duration
 
 	Runtime volgaV6RuntimeConfig
@@ -31,14 +33,16 @@ type VolgaV6TransportConfig struct {
 
 func DefaultVolgaV6TransportConfig(documents []string) VolgaV6TransportConfig {
 	return VolgaV6TransportConfig{
-		Documents:    append([]string(nil), documents...),
-		BatchPackets: 20,
-		BatchBytes:   5000,
-		BatchTimeout: 2 * time.Millisecond,
-		QueueSize:    1_000_000,
-		TickInterval: 50 * time.Millisecond,
-		Runtime:      defaultVolgaV6RuntimeConfig(),
-		Yandex:       defaultVolgaV6YandexConfig(),
+		Documents:     append([]string(nil), documents...),
+		BatchPackets:  20,
+		BatchBytes:    5000,
+		BatchTimeout:  2 * time.Millisecond,
+		QueueSize:     1_000_000,
+		SendQueueSize: 8192,
+		SendWorkers:   32,
+		TickInterval:  20 * time.Millisecond,
+		Runtime:       defaultVolgaV6RuntimeConfig(),
+		Yandex:        defaultVolgaV6YandexConfig(),
 	}
 }
 
@@ -52,8 +56,9 @@ type YandexVolgaV6Transport struct {
 	ctx    context.Context
 	cancel context.CancelFunc
 
-	queue chan []byte
-	wg    sync.WaitGroup
+	queue     chan []byte
+	sendQueue chan [][]byte
+	wg        sync.WaitGroup
 
 	started atomic.Bool
 	stopped atomic.Bool
@@ -79,6 +84,12 @@ func newYandexVolgaV6TransportWithFactory(baseCfg transport.TransportConfig, v6c
 	if v6cfg.QueueSize <= 0 {
 		v6cfg.QueueSize = defaults.QueueSize
 	}
+	if v6cfg.SendQueueSize <= 0 {
+		v6cfg.SendQueueSize = defaults.SendQueueSize
+	}
+	if v6cfg.SendWorkers <= 0 {
+		v6cfg.SendWorkers = defaults.SendWorkers
+	}
 	if v6cfg.TickInterval <= 0 {
 		v6cfg.TickInterval = defaults.TickInterval
 	}
@@ -90,6 +101,7 @@ func newYandexVolgaV6TransportWithFactory(baseCfg transport.TransportConfig, v6c
 		ctx:           ctx,
 		cancel:        cancel,
 		queue:         make(chan []byte, v6cfg.QueueSize),
+		sendQueue:     make(chan [][]byte, v6cfg.SendQueueSize),
 	}
 	t.runtime = newVolgaV6Runtime(0, factory, v6cfg.Runtime, func(payload [][]byte) {
 		for _, packet := range payload {
@@ -118,9 +130,13 @@ func (t *YandexVolgaV6Transport) Start() error {
 		return err
 	}
 	t.SetConnected(true)
-	t.wg.Add(2)
+
+	t.wg.Add(2 + t.config.SendWorkers)
 	go t.batchLoop()
 	go t.tickLoop()
+	for i := 0; i < t.config.SendWorkers; i++ {
+		go t.sendWorker()
+	}
 	return nil
 }
 
@@ -162,6 +178,9 @@ func (t *YandexVolgaV6Transport) acceptBatch(batch [][]byte) bool {
 	for {
 		seq, err := t.runtime.Send(batch)
 		if err == nil || seq != 0 {
+			// Once seq is allocated the logical replay buffer owns the batch even
+			// if the current physical POST returned an error. Recovery must reuse
+			// that seq instead of the outer transport allocating a duplicate.
 			for _, packet := range batch {
 				t.RecordSend(len(packet))
 			}
@@ -175,6 +194,19 @@ func (t *YandexVolgaV6Transport) acceptBatch(batch [][]byte) bool {
 		case <-t.ctx.Done():
 			return false
 		}
+	}
+}
+
+func (t *YandexVolgaV6Transport) enqueueBatch(batch [][]byte) bool {
+	if len(batch) == 0 {
+		return true
+	}
+	copyBatch := cloneVolgaV6Payload(batch)
+	select {
+	case t.sendQueue <- copyBatch:
+		return true
+	case <-t.ctx.Done():
+		return false
 	}
 }
 
@@ -192,7 +224,7 @@ func (t *YandexVolgaV6Transport) batchLoop() {
 		toSend := cloneVolgaV6Payload(batch)
 		batch = batch[:0]
 		bytesInBatch = 0
-		return t.acceptBatch(toSend)
+		return t.enqueueBatch(toSend)
 	}
 
 	for {
@@ -209,6 +241,20 @@ func (t *YandexVolgaV6Transport) batchLoop() {
 			}
 		case <-ticker.C:
 			if !flush() {
+				return
+			}
+		}
+	}
+}
+
+func (t *YandexVolgaV6Transport) sendWorker() {
+	defer t.wg.Done()
+	for {
+		select {
+		case <-t.ctx.Done():
+			return
+		case batch := <-t.sendQueue:
+			if !t.acceptBatch(batch) {
 				return
 			}
 		}
