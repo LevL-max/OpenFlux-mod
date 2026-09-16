@@ -1,4 +1,4 @@
-name: Volga reliable v5.1
+name: Volga reliable v5.2
 
 on:
   workflow_dispatch:
@@ -15,6 +15,7 @@ on:
       - 'tools/volga_reliable_v5_test.go.txt'
       - 'tools/volga_reliable_v5_ci_compat.py'
       - 'tools/volga_reliable_v5_1_congestion.py'
+      - 'tools/volga_reliable_v5_2_resume.py'
       - '.github/workflows/volga-reliable-v5.yml'
 
 permissions:
@@ -82,6 +83,9 @@ jobs:
       - name: Apply V5.1 congestion control
         run: python3 tools/volga_reliable_v5_1_congestion.py
 
+      - name: Apply V5.2 receiver resume floor
+        run: python3 tools/volga_reliable_v5_2_resume.py
+
       - name: Isolate superseded V4 receive tests
         run: python3 tools/volga_reliable_v5_ci_compat.py
 
@@ -98,7 +102,8 @@ jobs:
             transport/yandex/volga_bounded_reorder_v4e_test.go \
             transport/yandex/volga_reliable_v5.go \
             transport/yandex/volga_reliable_v5_test.go \
-            transport/yandex/volga_reliable_v5_1_test.go
+            transport/yandex/volga_reliable_v5_1_test.go \
+            transport/yandex/volga_reliable_v5_2_test.go
 
       - name: Test
         run: go test -timeout 2m ./...
@@ -106,13 +111,13 @@ jobs:
       - name: Build linux amd64
         run: |
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
-            go build -buildvcs=false -trimpath -o openflux-volga-reliable-v5 .
+            go build -buildvcs=false -trimpath -o openflux-volga-reliable-v5-2 .
 
       - name: Verify runtime knobs
         run: |
-          ./openflux-volga-reliable-v5 -h 2>&1 | grep -E -- 'volga-workers|volga-http-shards|volga-batch-bytes|volga-http-body-limit|volga-normalize-mtu' >/dev/null
+          ./openflux-volga-reliable-v5-2 -h 2>&1 | grep -E -- 'volga-workers|volga-http-shards|volga-batch-bytes|volga-http-body-limit|volga-normalize-mtu' >/dev/null
 
-      - name: Verify V5.1 reliability source
+      - name: Verify V5.2 reliability source
         run: |
           python3 - <<'PY'
           import re
@@ -122,13 +127,15 @@ jobs:
           rel = Path('transport/yandex/volga_reliable_v5.go').read_text()
 
           checks = {
-              'postBatchV5 wrapper': r'func\s+\(r\s+\*relayClient\)\s+postBatchV5\s*\(',
-              'DATA metadata injection': r'makeVolgaReliableDataMeta\s*\(',
-              'V5 receive decoder': r'handleVolgaReliableRecords\s*\(records,\s*len\(decoded\)\)',
+              'V5.2 live DATA metadata': r'makeVolgaReliableDataMetaV52\s*\(',
+              'replay floor sender': r'volgaReliableReplayFloor\s*\(',
+              'V5.2 metadata parser': r'parseVolgaReliableDataMetaV52\s*\(',
+              'V5.2 receiver baseline': r'volgaReliableHandleDataV52\s*\(',
+              'baseline telemetry': r'receiver baseline session=',
           }
           for name, pattern in checks.items():
-              if not re.search(pattern, vy):
-                  raise SystemExit(f'missing V5 source invariant: {name}')
+              if not re.search(pattern, vy + '\n' + rel):
+                  raise SystemExit(f'missing V5.2 source invariant: {name}')
 
           const_checks = {
               'replay cap': r'volgaReliableReplayCap\s*=\s*16384\b',
@@ -141,11 +148,10 @@ jobs:
           }
           for name, pattern in const_checks.items():
               if not re.search(pattern, rel):
-                  raise SystemExit(f'missing V5.1 constant invariant: {name}')
+                  raise SystemExit(f'missing V5.2 constant invariant: {name}')
 
-          for marker in ['volgaReliableRetryDelay', 'volgaReliableFastRetryEligible', 'attempt=%d']:
-              if marker not in rel:
-                  raise SystemExit(f'missing V5.1 congestion-control marker: {marker}')
+          if 'volgaReliableDataMetaV5Bytes' not in rel or '+ 8 + 8 + 8' not in rel:
+              raise SystemExit('missing V5.2 replay-floor metadata width')
           PY
 
       - name: Verify V5 wire isolation from V4 ordered receive
@@ -162,13 +168,15 @@ jobs:
 
       - name: Checksums and metadata
         run: |
-          sha256sum openflux-volga-reliable-v5 > SHA256SUMS
+          sha256sum openflux-volga-reliable-v5-2 > SHA256SUMS
           {
             echo "source_branch=test/volga-reliable-v5"
             echo "workflow_commit=${GITHUB_SHA}"
-            echo "base=v5-end-to-end-reliable-volga"
-            echo "experiment=v5.1-congestion-controlled-retransmit"
-            echo "reliability=payload-session-seq+cumulative-ack+sack-ranges+selective-retransmit+dedupe"
+            echo "base=v5.1-congestion-controlled-retransmit"
+            echo "experiment=v5.2-receiver-resume-replay-floor"
+            echo "reliability=payload-session-seq+replay-floor+cumulative-ack+sack-ranges+selective-retransmit+dedupe"
+            echo "receiver_resume=sender-replay-floor"
+            echo "legacy_v5_metadata_parse=true"
             echo "replay_cap_batches=16384"
             echo "ack_max_ranges=32"
             echo "retry_concurrency=8"
@@ -192,9 +200,9 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: openflux-volga-reliable-v5-1-${{ github.sha }}
+          name: openflux-volga-reliable-v5-2-${{ github.sha }}
           path: |
-            openflux-volga-reliable-v5
+            openflux-volga-reliable-v5-2
             SHA256SUMS
             BUILD-METADATA
           retention-days: 7
