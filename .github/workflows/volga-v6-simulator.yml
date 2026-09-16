@@ -25,6 +25,7 @@ on:
       - 'transport/yandex/vyandex_v6_transport_test.go'
       - 'transport/yandex/vyandex_v6_concurrency_test.go'
       - 'transport/yandex/vyandex_v6_load_test.go'
+      - 'transport/yandex/volga_v6_single_doc_factory.go'
       - 'docs/volga-v6-design.md'
       - 'docs/volga-v6-invariants.md'
       - '.github/workflows/volga-v6-simulator.yml'
@@ -65,7 +66,8 @@ jobs:
             transport/yandex/vyandex_v6_transport.go \
             transport/yandex/vyandex_v6_transport_test.go \
             transport/yandex/vyandex_v6_concurrency_test.go \
-            transport/yandex/vyandex_v6_load_test.go
+            transport/yandex/vyandex_v6_load_test.go \
+            transport/yandex/volga_v6_single_doc_factory.go
 
       - name: V6 deterministic reliability tests
         run: go test -timeout 2m ./transport/yandex -run '^TestVolgaV6' -count=1 -v
@@ -82,7 +84,12 @@ jobs:
           CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
             go build -buildvcs=false -trimpath \
             -o dist/openflux-volga-v6 .
-          ./dist/openflux-volga-v6 -h 2>&1 | grep -q 'volga-url-secondary'
+          HELP="$(./dist/openflux-volga-v6 -h 2>&1 || true)"
+          grep -q 'vyandex-v6' <<<"${HELP}"
+          if grep -q 'volga-url-secondary' <<<"${HELP}"; then
+            echo 'unsafe multi-document V6 CLI flag is still exposed'
+            exit 1
+          fi
           sha256sum dist/openflux-volga-v6 | tee dist/SHA256SUMS
           {
             echo "branch=${GITHUB_REF_NAME}"
@@ -92,6 +99,8 @@ jobs:
             echo "wire=OFV6REL1"
             echo "logical_reliability=shared-across-physical-generations"
             echo "physical_carrier=recyclable-yandex-auth-session"
+            echo "live_document_mode=single-document-fresh-reauth"
+            echo "multi_document_handoff=disabled-until-peer-coordinated"
             echo "batch=20-packets-5000-bytes-2ms"
             echo "send_workers=32"
             echo "ack=coalesced-repeatable-state"
@@ -129,4 +138,5 @@ jobs:
             transport/yandex/vyandex_v6_transport.go \
             transport/yandex/vyandex_v6_transport_test.go \
             transport/yandex/vyandex_v6_concurrency_test.go \
-            transport/yandex/vyandex_v6_load_test.go || true
+            transport/yandex/vyandex_v6_load_test.go \
+            transport/yandex/volga_v6_single_doc_factory.go || true
