@@ -9,6 +9,23 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     return text.replace(old, new, 1)
 
 
+def insert_struct_field(text: str, struct_marker: str, end_marker: str, field: str, label: str) -> str:
+    start = text.find(struct_marker)
+    if start < 0:
+        raise SystemExit(f"{label}: struct marker not found")
+    end = text.find(end_marker, start)
+    if end < 0:
+        raise SystemExit(f"{label}: end marker not found")
+    region = text[start:end]
+    close = region.rfind("\n}")
+    if close < 0:
+        raise SystemExit(f"{label}: struct close not found")
+    if field.strip() in region:
+        return text
+    region = region[:close] + field + region[close:]
+    return text[:start] + region + text[end:]
+
+
 # Applied AFTER V5.3.1 and intentionally INSTEAD OF V5.4.
 #
 # Field testing showed the useful throughput burst follows a fresh Yandex
@@ -38,24 +55,25 @@ p.write_text(s)
 p = Path("transport/yandex/vyandex.go")
 s = p.read_text()
 
-s = replace_once(
+s = insert_struct_field(
     s,
-    '\tctx    context.Context\n\tcancel context.CancelFunc\n}\n',
-    '\tctx       context.Context\n\tcancel    context.CancelFunc\n\tconnected atomic.Bool\n}\n',
+    "type wsListener struct {",
+    "\nfunc newWSListener(",
+    "\n\t// V5.5 readiness only: does not alter DATA/reliability routing.\n\tconnected atomic.Bool\n",
     "V5.5 WS connected state",
 )
 
 s = replace_once(
     s,
-    'func (w *wsListener) Stop() {\n\tw.cancel()\n}\n\nfunc (w *wsListener) run() {\n',
-    'func (w *wsListener) Stop() {\n\tw.cancel()\n}\n\nfunc (w *wsListener) IsConnected() bool {\n\treturn w != nil && w.connected.Load()\n}\n\nfunc (w *wsListener) run() {\n',
+    'func (w *wsListener) Stop() {\n\tw.cancel()\n}\n',
+    'func (w *wsListener) Stop() {\n\tw.cancel()\n}\n\nfunc (w *wsListener) IsConnected() bool {\n\treturn w != nil && w.connected.Load()\n}\n',
     "V5.5 WS readiness method",
 )
 
 s = replace_once(
     s,
-    '\tconn, _, err := dialer.Dial(wsURL, header)\n\tif err != nil {\n\t\treturn fmt.Errorf("dial: %w", err)\n\t}\n\tdefer conn.Close()\n\n\tutils.Debugf("[VOLGA] WS connected: user=%s", w.auth.UserIDStr)\n',
-    '\tconn, _, err := dialer.Dial(wsURL, header)\n\tif err != nil {\n\t\treturn fmt.Errorf("dial: %w", err)\n\t}\n\tw.connected.Store(true)\n\tdefer w.connected.Store(false)\n\tdefer conn.Close()\n\n\tutils.Debugf("[VOLGA] WS connected: user=%s", w.auth.UserIDStr)\n',
+    '\tconn, _, err := dialer.Dial(wsURL, header)\n\tif err != nil {\n\t\treturn fmt.Errorf("dial: %w", err)\n\t}\n\tdefer conn.Close()\n',
+    '\tconn, _, err := dialer.Dial(wsURL, header)\n\tif err != nil {\n\t\treturn fmt.Errorf("dial: %w", err)\n\t}\n\tw.connected.Store(true)\n\tdefer w.connected.Store(false)\n\tdefer conn.Close()\n',
     "V5.5 WS readiness lifecycle",
 )
 
