@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import re
 from pathlib import Path
 
 
@@ -63,7 +64,6 @@ s = insert_struct_field(
     "YandexVolgaTransport V5.4 hooks",
 )
 
-# Install the immutable wire selector before relay workers can send DATA.
 needle = "\tt.relay = newRelayClient(auth, t.config, t.stats)\n\tt.relay.Start()\n"
 replace = (
     "\tt.relay = newRelayClient(auth, t.config, t.stats)\n"
@@ -76,8 +76,6 @@ if needle not in s:
     raise SystemExit("V5.4 relay start hook not found")
 s = s.replace(needle, replace, 1)
 
-# The secondary receive owner must be attached before its WS goroutine starts,
-# otherwise fetch_history can briefly instantiate a second reliability state.
 needle = "\tt.ws.Start()\n"
 replace = (
     "\tif t.volgaReliableOwner != nil {\n"
@@ -89,8 +87,6 @@ if needle not in s:
     raise SystemExit("V5.4 WS start hook not found")
 s = s.replace(needle, replace, 1)
 
-# Add the carrier selector helper before SetFrontier. Single-carrier mode has no
-# selector and therefore remains equivalent in behaviour.
 anchor = "func (r *relayClient) SetFrontier(opID string) {\n"
 if anchor not in s:
     raise SystemExit("V5.4 wire target anchor not found")
@@ -107,10 +103,6 @@ helper = '''func (r *relayClient) volgaReliableWireTarget() *relayClient {
 if helper not in s:
     s = s.replace(anchor, helper + anchor, 1)
 
-# postBatchV5 owns the V5 logical metadata but also performs the Yandex POST.
-# Route only the wire-specific part through the selected carrier. The logical
-# session remains the primary relay's session, and adaptive requeue stays on
-# the logical owner rather than creating a second reliability engine.
 start = s.find("func (r *relayClient) postBatchV5(")
 if start < 0:
     raise SystemExit("V5.4 postBatchV5 start not found")
@@ -126,8 +118,9 @@ if brace < 0:
 head = region[: brace + 2]
 body = region[brace + 2 :]
 if "wire := r.volgaReliableWireTarget()" not in body:
-    body = body.replace("r.", "wire.")
-    # These operations belong to the one logical reliability owner.
+    # Rewrite only the relay receiver token `r.`. A plain string replacement
+    # corrupts identifiers such as req.Header -> req.Headewire.
+    body = re.sub(r"\br\.", "wire.", body)
     body = body.replace("wire.volgaReliableSession()", "r.volgaReliableSession()")
     body = body.replace("wire.queueFragments(", "r.queueFragments(")
     body = body.replace("wire.lowerAdaptiveSingleBodyLimit(", "r.lowerAdaptiveSingleBodyLimit(")
@@ -136,10 +129,6 @@ if "wire := r.volgaReliableWireTarget()" not in body:
 
 p.write_text(s)
 
-# Share receive state across both warm WS listeners. Delegating at the record
-# boundary means ACK frames arriving through either document release the same
-# replay map. Action/frontier objects are still handled by each document's own
-# listener/relay before this record boundary.
 p = Path("transport/yandex/volga_reliable_v5.go")
 s = p.read_text()
 
