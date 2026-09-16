@@ -14,6 +14,8 @@ on:
       - 'transport/yandex/volga_v6_recovery_test.go'
       - 'transport/yandex/volga_v6_wire.go'
       - 'transport/yandex/volga_v6_wire_test.go'
+      - 'transport/yandex/volga_v6_runtime.go'
+      - 'transport/yandex/volga_v6_runtime_test.go'
       - 'docs/volga-v6-design.md'
       - '.github/workflows/volga-v6-simulator.yml'
 
@@ -42,10 +44,15 @@ jobs:
             transport/yandex/volga_v6_recovery.go \
             transport/yandex/volga_v6_recovery_test.go \
             transport/yandex/volga_v6_wire.go \
-            transport/yandex/volga_v6_wire_test.go
+            transport/yandex/volga_v6_wire_test.go \
+            transport/yandex/volga_v6_runtime.go \
+            transport/yandex/volga_v6_runtime_test.go
 
       - name: V6 deterministic reliability tests
         run: go test -timeout 2m ./transport/yandex -run '^TestVolgaV6' -count=1 -v
+
+      - name: V6 race check
+        run: go test -race -timeout 2m ./transport/yandex -run '^TestVolgaV6' -count=1
 
       - name: Compile all packages
         run: go test -timeout 2m -run '^$' ./...
@@ -61,4 +68,6 @@ jobs:
             transport/yandex/volga_v6_recovery.go \
             transport/yandex/volga_v6_recovery_test.go \
             transport/yandex/volga_v6_wire.go \
-            transport/yandex/volga_v6_wire_test.go || true
+            transport/yandex/volga_v6_wire_test.go \
+            transport/yandex/volga_v6_runtime.go \
+            transport/yandex/volga_v6_runtime_test.go || true
