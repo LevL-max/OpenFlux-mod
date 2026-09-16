@@ -20,14 +20,14 @@ var (
 type VolgaV6TransportConfig struct {
 	Documents []string
 
-	BatchPackets     int
-	BatchBytes       int
-	BatchTimeout     time.Duration
-	QueueSize        int
-	SendQueueSize    int
-	SendWorkers      int
-	TickInterval     time.Duration
-	Telemetry        bool
+	BatchPackets      int
+	BatchBytes        int
+	BatchTimeout      time.Duration
+	QueueSize         int
+	SendQueueSize     int
+	SendWorkers       int
+	TickInterval      time.Duration
+	Telemetry         bool
 	TelemetryInterval time.Duration
 
 	Runtime volgaV6RuntimeConfig
@@ -279,7 +279,6 @@ func (t *YandexVolgaV6Transport) sendWorker() {
 				return
 			}
 		}
-	}
 }
 
 func (t *YandexVolgaV6Transport) tickLoop() {
@@ -371,6 +370,18 @@ func (t *YandexVolgaV6Transport) telemetryLoop() {
 				current.Carrier.Draining,
 				len(t.queue),
 				len(t.sendQueue))
+
+			headSeq, headRetries := t.runtime.session.diagnosticHead()
+			utils.Debugf("[VOLGA-V6-DIAG] session=%d head_seq=%d head_retries=%d rx_session=%d rx_base=%d rx_pending=%d rx_duplicates=%d rx_resets=%d rx_stale=%d",
+				current.Reliable.Session,
+				headSeq,
+				headRetries,
+				current.Receiver.PeerSession,
+				current.Receiver.Base,
+				current.Receiver.Pending,
+				current.Receiver.Duplicates,
+				current.Receiver.Resets,
+				current.Receiver.Stale)
 
 			lastAt = now
 			last = current
