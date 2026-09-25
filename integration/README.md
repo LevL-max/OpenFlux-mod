@@ -195,7 +195,10 @@ sudo python3 openflux-node.py adopt --role client --backend systemd \
   --document-url 'YOUR_DOCUMENT_URL' --router-updater
 ```
 
-For an existing server use `--role server` and its service, or `--backend docker --container NAME`.
+For an existing server use `--role server --backend systemd --service YOUR_SERVER.service`
+when systemd starts the process or Docker container. Use `--backend docker --container NAME`
+only for a persistent container managed directly by Docker. A service-owned `docker run --rm`
+container must be controlled through its systemd service, which recreates it on start.
 Docker adoption requires the configured host binary mounted at `/usr/local/bin/openflux` in the
 container. Adoption records the verified installed release and adds CLI support; it does not
 restart the runtime. The `--router-updater` option delegates software updates to the existing

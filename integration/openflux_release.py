@@ -87,7 +87,7 @@ def prepare(core,route):
         extract_bundle(temp/BUNDLE,temp/'integration')
     os.replace(temp/ASSETS[0],temp/'binary');os.chmod(temp/'binary',0o755)
     os.replace(temp/ASSETS[1],temp/'helper');os.chmod(temp/'helper',0o755)
-    helpresult=core.run([str(temp/'binary'),'--help'],record=False);helptext=helpresult.stdout+getattr(helpresult,'stderr','')
+    helpresult=core.run([str(temp/'binary'),'--help'],record=False);helptext=(helpresult.stdout or '')+(getattr(helpresult,'stderr',None) or '')
     if 'yandex-cookie-store' not in helptext:raise ValueError('Candidate lacks persistent cookie-store support')
     core.run(['python3',str(temp/'helper'),'--help'],record=False)
     candidate.update(directory=temp.name,binary_sha256=core.sha(temp/'binary'),helper_sha256=core.sha(temp/'helper'),integration_sha256=candidate['assets'].get(BUNDLE,{}).get('sha256'),
@@ -139,7 +139,7 @@ def install_support(core,source,metadata):
         if text.count(marker)!=1:raise ValueError('Unknown OpenFlux runner layout')
         text=text.replace(marker,'  --yandex-cookie-store '+str(STORE)+' \\\n'+marker)
     # Older binaries emit auth events only with --debug; discover support from this artifact.
-    helpresult=core.run([str(source),'--help'],record=False);helptext=helpresult.stdout+getattr(helpresult,'stderr','')
+    helpresult=core.run([str(source),'--help'],record=False);helptext=(helpresult.stdout or '')+(getattr(helpresult,'stderr',None) or '')
     if '--status-events' in helptext or '-status-events' in helptext:
         text=text.replace('  --debug \\\n','')
     elif '  --debug ' not in text:
