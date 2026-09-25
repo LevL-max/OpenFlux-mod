@@ -368,9 +368,6 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		}
 
 		writeQueue := make(chan []byte, t.GetConfig().MaxQueueSize)
-		// Cover every handshake error and panic path, including those that return
-		// before the normal read-loop close. Close is safe after explicit closes.
-		defer conn.Close()
 		if existingSession != nil {
 			writeQueue = existingSession.WriteQueue
 		}
