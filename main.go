@@ -33,6 +33,8 @@ func main() {
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, google, custom)")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
+	yandexCookieFile := flag.String("yandex-cookie-file", "", "Path to raw browser Cookie header for Yandex bootstrap")
+	yandexUserAgent := flag.String("yandex-user-agent", "Mozilla/5.0", "User-Agent used for Yandex HTTP/WebSocket bootstrap")
 	compressionEnabled := flag.Bool("compression", true, "Enable transport LZ4 wrapper")
 	tcpBufferDefault := flag.Int("tcp-buffer-default", 262144, "gVisor TCP default send/receive buffer bytes")
 	tcpBufferMax := flag.Int("tcp-buffer-max", 1048576, "gVisor TCP max send/receive buffer bytes")
@@ -78,6 +80,12 @@ func main() {
 	switch *transportType {
 	case "yandex":
 		yandexTransport := yandex.NewYandexDocsTransport(globalDocUrl, config)
+		if *yandexCookieFile != "" {
+			if err := yandexTransport.LoadBrowserCookies(*yandexCookieFile, *yandexUserAgent); err != nil {
+				log.Fatalf("Failed to load Yandex browser cookies: %v", err)
+			}
+			log.Printf("Yandex browser cookie bootstrap: enabled")
+		}
 		if *compressionEnabled {
 			trans = transport.NewCompressedTransport(yandexTransport)
 		} else {
