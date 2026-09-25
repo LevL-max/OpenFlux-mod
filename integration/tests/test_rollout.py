@@ -6,6 +6,18 @@ import openflux_auth as a
 def digest(p):return hashlib.sha256(pathlib.Path(p).read_bytes()).hexdigest()
 
 class ReleaseTests(unittest.TestCase):
+ def test_prepare_accepts_merged_stderr_from_existing_router_core(self):
+  with tempfile.TemporaryDirectory() as tmp:
+   root=pathlib.Path(tmp);old=root/'installed';old.write_bytes(b'old')
+   files={'openflux-linux-amd64':b'candidate','openflux-yandex-cookie-import':b'helper'}
+   files['SHA256SUMS']=''.join(hashlib.sha256(data).hexdigest()+'  '+name+'\n' for name,data in files.items()).encode()
+   candidate={'version':'v4.0.3','asset_sha256':hashlib.sha256(files['openflux-linux-amd64']).hexdigest(),'assets':{name:{'url':name,'sha256':hashlib.sha256(data).hexdigest()} for name,data in files.items()}}
+   core=types.SimpleNamespace(check_binary=lambda *args:candidate,installed=lambda n:{'version':'v4.0.1','sha256':digest(old)},component_dir=lambda n:root,
+    transport_for=lambda route:contextlib.nullcontext(None),download=lambda url,path,*args,**kw:path.write_bytes(files[url]),sha=digest,
+    run=lambda *args,**kw:subprocess.CompletedProcess(args,0,stdout='--yandex-cookie-store',stderr=None),COMPONENTS={'openflux':{'binary':str(old)}},
+    write_json=lambda path,data:path.write_text(json.dumps(data)),progress=lambda message:None)
+   r.prepare(core,'current')
+   self.assertEqual(json.loads((root/'staged.json').read_text())['version'],'v4.0.3')
  def test_new_bundle_version_with_identical_binary_is_an_update(self):
   self.assertFalse(r.is_current({'version':'v4.0.0','sha256':'a'},{'version':'v4.0.1','asset_sha256':'a'}))
   self.assertTrue(r.is_current({'version':'v4.0.1','sha256':'a'},{'version':'v4.0.1','asset_sha256':'a'}))
