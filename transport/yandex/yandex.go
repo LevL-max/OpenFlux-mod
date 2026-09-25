@@ -325,6 +325,11 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 
 		info, err := t.fetchDocInfo(t.url, userID)
 		if err != nil {
+			if errors.Is(err, ErrCaptchaRequired) || errors.Is(err, ErrLoginRequired) {
+				utils.Debugf("[YDOCS] CAPTCHA_REQUIRED: %v", err)
+				t.scheduleCaptchaWait(attempt)
+				return
+			}
 			utils.Debugf("[YDOCS] fetchDocInfo failed: %v", err)
 			t.scheduleReconnect(attempt)
 			return
@@ -342,7 +347,8 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			}).DialContext,
 		}
 		headers := http.Header{}
-		headers.Set("User-Agent", t.browserUserAgent)
+		_, browserUA := t.currentBrowserState()
+		headers.Set("User-Agent", browserUA)
 		headers.Set("Origin", info.Origin)
 		headers.Set("Cookie", info.CookieStr)
 		headers.Set("Host", info.Host)
@@ -732,6 +738,20 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	t.connectToDoc(next)
 }
 
+func (t *YandexDocsTransport) scheduleCaptchaWait(attempt int) {
+	if !t.IsRunning() {
+		return
+	}
+	const wait = 30 * time.Second
+	utils.Debugf("[YDOCS] SmartCaptcha/browser refresh required; retrying in %v", wait)
+	time.Sleep(wait)
+	if !t.IsRunning() {
+		return
+	}
+	t.RecordReconnect()
+	t.connectToDoc(attempt + 1)
+}
+
 func reconnectBackoff(n int) time.Duration {
 	if n < 1 {
 		n = 1
@@ -752,11 +772,12 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 	if strings.HasPrefix(url, "file://") {
 		return loadStaticDocInfo(strings.TrimPrefix(url, "file://"), userID)
 	}
+	cookieHeader, userAgent := t.currentBrowserState()
 	client := &http.Client{
 		Transport: browserStateRoundTripper{
 			base:      http.DefaultTransport,
-			cookie:    t.browserCookie,
-			userAgent: t.browserUserAgent,
+			cookie:    cookieHeader,
+			userAgent: userAgent,
 		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
@@ -767,21 +788,61 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 		Timeout: 15 * time.Second,
 	}
 
-	utils.Debugf("[YDOCS] fetchDocInfo GET %s", url)
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", t.browserUserAgent)
-	resp, err := client.Do(req)
-	if err != nil {
-		return YandexDocsInfo{}, err
+	var (
+		resp *http.Response
+		html string
+	)
+
+	for bootstrapAttempt := 0; bootstrapAttempt < 3; bootstrapAttempt++ {
+		cookieHeader, userAgent = t.currentBrowserState()
+		client.Transport = browserStateRoundTripper{
+			base:      http.DefaultTransport,
+			cookie:    cookieHeader,
+			userAgent: userAgent,
+		}
+
+		utils.Debugf("[YDOCS] fetchDocInfo GET %s", url)
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("User-Agent", userAgent)
+		var err error
+		resp, err = client.Do(req)
+		if err != nil {
+			return YandexDocsInfo{}, err
+		}
+
+		htmlBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		html = string(htmlBytes)
+		finalURL := resp.Request.URL.String()
+		utils.Debugf("[YDOCS] response status=%d finalURL=%s body=%dB",
+			resp.StatusCode, finalURL, len(html))
+
+		if strings.Contains(finalURL, "showcaptchafast") {
+			utils.Debugf("[YDOCS] first-tier captcha detected; solving PoW")
+			if err := t.solveFirstTierCaptcha(url, userAgent); err != nil {
+				return YandexDocsInfo{}, fmt.Errorf("first-tier captcha solve failed: %w", err)
+			}
+			continue
+		}
+
+		if strings.Contains(finalURL, "showcaptcha?") &&
+			!strings.Contains(finalURL, "showcaptchafast") {
+			return YandexDocsInfo{}, ErrCaptchaRequired
+		}
+		if strings.Contains(finalURL, "passport.yandex") {
+			return YandexDocsInfo{}, ErrLoginRequired
+		}
+
+		cookieHeader = mergeCookieHeader(cookieHeader, resp.Cookies())
+		if err := t.updateCookieState(parseCookieHeader(cookieHeader)); err != nil {
+			utils.Debugf("[YDOCS] cookie store save failed: %v", err)
+		}
+		break
 	}
-	defer resp.Body.Close()
 
-	htmlBytes, _ := io.ReadAll(resp.Body)
-	html := string(htmlBytes)
-	utils.Debugf("[YDOCS] response status=%d finalURL=%s body=%dB",
-		resp.StatusCode, resp.Request.URL.String(), len(html))
-
-	cookieHeader := mergeCookieHeader(t.browserCookie, resp.Cookies())
+	if resp == nil {
+		return YandexDocsInfo{}, fmt.Errorf("Yandex bootstrap returned no response")
+	}
 
 	re := regexp.MustCompile(`<script[^>]*id="client-config"[^>]*>(.*?)</script>`)
 	matches := re.FindStringSubmatch(html)
@@ -906,6 +967,54 @@ func fetchOnlyOfficeBuild(client *http.Client, balancerURL string) (string, erro
 	}
 
 	return string(m[1]), nil
+}
+
+func (t *YandexDocsTransport) solveFirstTierCaptcha(docURL, userAgent string) error {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return err
+	}
+
+	cookieHeader, _ := t.currentBrowserState()
+	values := parseCookieHeader(cookieHeader)
+
+	doc, err := url.Parse(docURL)
+	if err != nil {
+		return err
+	}
+	jar.SetCookies(doc, siteCookies(doc, values))
+
+	if _, err := solveCaptcha(docURL, jar, userAgent); err != nil {
+		return err
+	}
+
+	for _, raw := range []string{"https://disk.yandex.ru/", "https://docs.yandex.ru/"} {
+		u, _ := url.Parse(raw)
+		for _, cookie := range jar.Cookies(u) {
+			values[cookie.Name] = cookie.Value
+		}
+	}
+	return t.updateCookieState(values)
+}
+
+func siteCookies(u *url.URL, values map[string]string) []*http.Cookie {
+	domain := ""
+	if u != nil {
+		if labels := strings.Split(u.Hostname(), "."); len(labels) >= 3 {
+			domain = strings.Join(labels[1:], ".")
+		}
+	}
+	cookies := make([]*http.Cookie, 0, len(values))
+	for name, value := range values {
+		cookies = append(cookies, &http.Cookie{
+			Name:   name,
+			Value:  value,
+			Path:   "/",
+			Domain: domain,
+			Secure: true,
+		})
+	}
+	return cookies
 }
 
 func randUserID() string {
