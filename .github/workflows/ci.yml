@@ -26,6 +26,12 @@ jobs:
       - name: Test
         run: go test ./...
 
+      - name: Integration tests
+        run: |
+          python3 -m pip install cryptography
+          PYTHONPATH=integration python3 -m unittest discover -s integration/tests -v
+          python3 -m compileall -q integration
+
       - name: Build Linux amd64
         env:
           GOOS: linux

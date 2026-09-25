@@ -1,4 +1,4 @@
-name: Draft private release
+name: Draft release
 
 on:
   push:
@@ -59,6 +59,16 @@ jobs:
 
       - name: Test exact release source
         run: go test ./...
+
+      - name: Test and package integration
+        run: |
+          python3 -m pip install cryptography
+          PYTHONPATH=integration python3 -m unittest discover -s integration/tests -v
+          python3 -m compileall -q integration
+          mkdir -p dist
+          tar -czf dist/openflux-integration-linux.tar.gz integration/{openflux_release.py,openflux_auth.py,cookie_import.py,recovery_crypto.py,recovery_inbox.py,router_integration.py,install.py,README.md}
+          cd integration
+          zip -q ../dist/openflux-recovery-windows.zip desktop/*.py desktop/requirements.txt README.md
 
       - name: Build Linux amd64 release binary
         env:
@@ -135,16 +145,22 @@ jobs:
           cat > dist/RELEASE-NOTES.md <<EOF
           # OpenFlux-mod $VERSION
 
-          Private downstream release candidate built from GitHub main.
+          Downstream release built and tested from GitHub main.
 
-          - Functional baseline remains the proven private Yandex v4 line.
+          - Functional baseline remains the proven Yandex v4 line.
+          - Safe authentication events are visible without debug logging.
+          - Versioned Router Panel integration shows Connected, Connecting, AUTH_BLOCKED and retained authentication errors.
+          - Generic semantic-version updates verify the binary, cookie helper and integration bundle together, with complete local rollback.
+          - Cookie refresh works from the Router Panel or the included Windows recovery UI.
+          - Optional signed and encrypted Yandex Disk recovery lets the server refresh cookies without inbound SSH.
+          - See integration/README.md for installer, pairing and dependency instructions.
           - Dynamic Yandex bootstrap/session discovery is retained.
           - First-tier showcaptchafast PoW is solved automatically.
           - Persistent per-document Yandex cookie state is supported with an optional one-time browser seed.
           - Second-tier SmartCaptcha enters AUTH_BLOCKED and makes no further Yandex requests until the cookie store changes.
           - A safe openflux-yandex-cookie-import helper is included for browser cURL refresh without printing cookie values.
           - Private 4-packet / 1 ms batching and current reliability hardening are retained.
-          - Volga, CUPS and other experimental upstream transports are not promoted into this release candidate.
+          - Volga, CUPS and other experimental upstream transports are not promoted into this release.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart AWS, Mini-PC1 or Mini-PC2.
@@ -165,18 +181,24 @@ jobs:
           sha256sum \
             dist/openflux-linux-amd64 \
             dist/openflux-yandex-cookie-import \
+            dist/openflux-integration-linux.tar.gz \
+            dist/openflux-recovery-windows.zip \
             dist/openflux-container-linux-amd64.tar.gz \
             dist/BUILD-METADATA \
             dist/RELEASE-NOTES.md \
             > dist/SHA256SUMS
 
-      - name: Create draft prerelease
+      - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          prerelease=()
+          if [[ "$VERSION" == *-rc* ]]; then prerelease=(--prerelease); fi
           gh release create "$VERSION" \
             dist/openflux-linux-amd64 \
             dist/openflux-yandex-cookie-import \
+            dist/openflux-integration-linux.tar.gz \
+            dist/openflux-recovery-windows.zip \
             dist/openflux-container-linux-amd64.tar.gz \
             dist/SHA256SUMS \
             dist/BUILD-METADATA \
@@ -184,5 +206,5 @@ jobs:
             --target "$GITHUB_SHA" \
             --title "OpenFlux-mod $VERSION" \
             --draft \
-            --prerelease \
+            "${prerelease[@]}" \
             --notes-file dist/RELEASE-NOTES.md

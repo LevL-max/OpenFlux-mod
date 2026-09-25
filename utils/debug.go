@@ -7,9 +7,20 @@ import (
 )
 
 var (
-	debugLog *log.Logger
-	verbose  bool
+	debugLog     *log.Logger
+	verbose      bool
+	statusEvents = true
 )
+
+// EnableStatusEvents controls the safe operational events used by installers
+// and Router Panel. These never contain browser cookies or session tokens.
+func EnableStatusEvents(enabled bool) { statusEvents = enabled }
+
+func Statusf(format string, args ...interface{}) {
+	if statusEvents {
+		log.Printf(format, args...)
+	}
+}
 
 func EnableDebug() {
 	verbose = true
