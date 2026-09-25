@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"net/http"
+	"os"
 	"regexp"
 	"strings"
 	"sync"
@@ -53,6 +54,9 @@ type YandexDocsTransport struct {
 	url     string
 	session *DocSession
 
+	browserCookie    string
+	browserUserAgent string
+
 	userCounter atomic.Int32
 	baseUserID  string
 
@@ -63,13 +67,101 @@ type YandexDocsTransport struct {
 	perfQueuePeak   atomic.Int64
 }
 
+const defaultYandexUserAgent = "Mozilla/5.0"
+
 func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
 	t := &YandexDocsTransport{
-		BaseTransport: transport.NewBaseTransport(config),
-		url:           url,
+		BaseTransport:    transport.NewBaseTransport(config),
+		url:              url,
+		browserUserAgent: defaultYandexUserAgent,
 	}
 	t.baseUserID = randUserID()
 	return t
+}
+
+// LoadBrowserCookies loads a raw browser Cookie header from a local file.
+// The cookie values are kept in memory only and are never logged.
+func (t *YandexDocsTransport) LoadBrowserCookies(path, userAgent string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read Yandex cookie file: %w", err)
+	}
+
+	cookie := strings.TrimSpace(string(b))
+	if strings.HasPrefix(strings.ToLower(cookie), "cookie:") {
+		cookie = strings.TrimSpace(cookie[len("cookie:"):])
+	}
+	if cookie == "" {
+		return fmt.Errorf("Yandex cookie file is empty")
+	}
+	if strings.ContainsAny(cookie, "\r\n") {
+		return fmt.Errorf("Yandex cookie file must contain one raw Cookie header line")
+	}
+
+	t.browserCookie = cookie
+	if strings.TrimSpace(userAgent) != "" {
+		t.browserUserAgent = strings.TrimSpace(userAgent)
+	}
+	return nil
+}
+
+type browserStateRoundTripper struct {
+	base      http.RoundTripper
+	cookie    string
+	userAgent string
+}
+
+func (rt browserStateRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header = req.Header.Clone()
+	if rt.userAgent != "" {
+		clone.Header.Set("User-Agent", rt.userAgent)
+	}
+	if rt.cookie != "" {
+		clone.Header.Set("Cookie", rt.cookie)
+	}
+	base := rt.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(clone)
+}
+
+func mergeCookieHeader(base string, extras []*http.Cookie) string {
+	values := make(map[string]string)
+	order := make([]string, 0)
+
+	for _, part := range strings.Split(base, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 || strings.TrimSpace(kv[0]) == "" {
+			continue
+		}
+		name := strings.TrimSpace(kv[0])
+		if _, exists := values[name]; !exists {
+			order = append(order, name)
+		}
+		values[name] = kv[1]
+	}
+
+	for _, cookie := range extras {
+		if cookie == nil || cookie.Name == "" {
+			continue
+		}
+		if _, exists := values[cookie.Name]; !exists {
+			order = append(order, cookie.Name)
+		}
+		values[cookie.Name] = cookie.Value
+	}
+
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		parts = append(parts, name+"="+values[name])
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (t *YandexDocsTransport) Start() error {
@@ -154,7 +246,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			}).DialContext,
 		}
 		headers := http.Header{}
-		headers.Set("User-Agent", "Mozilla/5.0")
+		headers.Set("User-Agent", t.browserUserAgent)
 		headers.Set("Origin", info.Origin)
 		headers.Set("Cookie", info.CookieStr)
 		headers.Set("Host", info.Host)
@@ -565,6 +657,11 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 		return loadStaticDocInfo(strings.TrimPrefix(url, "file://"), userID)
 	}
 	client := &http.Client{
+		Transport: browserStateRoundTripper{
+			base:      http.DefaultTransport,
+			cookie:    t.browserCookie,
+			userAgent: t.browserUserAgent,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects (login required? doc not public?)")
@@ -576,7 +673,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 
 	utils.Debugf("[YDOCS] fetchDocInfo GET %s", url)
 	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
+	req.Header.Set("User-Agent", t.browserUserAgent)
 	resp, err := client.Do(req)
 	if err != nil {
 		return YandexDocsInfo{}, err
@@ -588,10 +685,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 	utils.Debugf("[YDOCS] response status=%d finalURL=%s body=%dB",
 		resp.StatusCode, resp.Request.URL.String(), len(html))
 
-	var cookies []string
-	for _, c := range resp.Cookies() {
-		cookies = append(cookies, fmt.Sprintf("%s=%s", c.Name, c.Value))
-	}
+	cookieHeader := mergeCookieHeader(t.browserCookie, resp.Cookies())
 
 	re := regexp.MustCompile(`<script[^>]*id="client-config"[^>]*>(.*?)</script>`)
 	matches := re.FindStringSubmatch(html)
@@ -665,7 +759,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 	}
 
 	return YandexDocsInfo{
-		CookieStr:   strings.Join(cookies, "; "),
+		CookieStr:   cookieHeader,
 		Token:       token,
 		DocID:       docKey,
 		UserID:      yandexUserID,
