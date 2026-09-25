@@ -355,3 +355,11 @@ func mustMarshal(v interface{}) []byte {
 	b, _ := json.Marshal(v)
 	return b
 }
+
+
+func shortStr(s string, max int) string {
+	if max <= 0 || len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
+}
