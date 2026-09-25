@@ -601,6 +601,10 @@ func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
 
 		t.RecordReceive(len(decoded))
 		t.CallReceive(decoded)
+		return
+	}
+	if _, err := acknowledgeCoediting(session, data); err != nil {
+		utils.Debugf("[YDOCS] Co-editing acknowledgment failed: %v", err)
 	}
 }
 
