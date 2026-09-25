@@ -3,13 +3,17 @@ package yandex
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -56,6 +60,8 @@ type YandexDocsTransport struct {
 
 	browserCookie    string
 	browserUserAgent string
+	cookieStore      *transport.CookieStore
+	cookieMu         sync.RWMutex
 
 	userCounter atomic.Int32
 	baseUserID  string
@@ -67,7 +73,12 @@ type YandexDocsTransport struct {
 	perfQueuePeak   atomic.Int64
 }
 
-const defaultYandexUserAgent = "Mozilla/5.0"
+var (
+	ErrCaptchaRequired = errors.New("yandex docs: SmartCaptcha requires browser refresh")
+	ErrLoginRequired   = errors.New("yandex docs: login required")
+)
+
+const defaultYandexUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
 
 func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
 	t := &YandexDocsTransport{
@@ -79,8 +90,26 @@ func NewYandexDocsTransport(url string, config transport.TransportConfig) *Yande
 	return t
 }
 
-// LoadBrowserCookies loads a raw browser Cookie header from a local file.
-// The cookie values are kept in memory only and are never logged.
+// SetCookieStore enables persistent per-document cookie state. A missing store
+// file is valid and starts empty; an existing store is loaded immediately.
+func (t *YandexDocsTransport) SetCookieStore(path string) error {
+	store, err := transport.NewCookieStore(path)
+	if err != nil {
+		return err
+	}
+	t.cookieStore = store
+	if cached := store.Load(t.url); len(cached) > 0 {
+		t.cookieMu.Lock()
+		t.browserCookie = cookieMapToHeader(cached)
+		t.cookieMu.Unlock()
+		utils.Debugf("[YDOCS] loaded %d persisted cookies", len(cached))
+	}
+	return nil
+}
+
+// LoadBrowserCookies imports a raw browser Cookie header from a local file.
+// If a persistent store is configured, the imported state is saved immediately.
+// Cookie values are never written to logs.
 func (t *YandexDocsTransport) LoadBrowserCookies(path, userAgent string) error {
 	b, err := os.ReadFile(path)
 	if err != nil {
@@ -98,11 +127,78 @@ func (t *YandexDocsTransport) LoadBrowserCookies(path, userAgent string) error {
 		return fmt.Errorf("Yandex cookie file must contain one raw Cookie header line")
 	}
 
-	t.browserCookie = cookie
+	values := parseCookieHeader(cookie)
+	if len(values) == 0 {
+		return fmt.Errorf("Yandex cookie file contains no valid cookies")
+	}
+
+	t.cookieMu.Lock()
+	t.browserCookie = cookieMapToHeader(values)
 	if strings.TrimSpace(userAgent) != "" {
 		t.browserUserAgent = strings.TrimSpace(userAgent)
 	}
-	return nil
+	t.cookieMu.Unlock()
+
+	return t.persistCookieMap(values)
+}
+
+func (t *YandexDocsTransport) persistCookieMap(values map[string]string) error {
+	if t.cookieStore == nil || len(values) == 0 {
+		return nil
+	}
+	return t.cookieStore.Save(t.url, values)
+}
+
+func (t *YandexDocsTransport) currentBrowserState() (string, string) {
+	t.cookieMu.RLock()
+	defer t.cookieMu.RUnlock()
+	return t.browserCookie, t.browserUserAgent
+}
+
+func (t *YandexDocsTransport) updateCookieState(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	t.cookieMu.Lock()
+	current := parseCookieHeader(t.browserCookie)
+	for k, v := range values {
+		current[k] = v
+	}
+	t.browserCookie = cookieMapToHeader(current)
+	t.cookieMu.Unlock()
+	return t.persistCookieMap(current)
+}
+
+func parseCookieHeader(header string) map[string]string {
+	out := make(map[string]string)
+	for _, part := range strings.Split(header, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 || strings.TrimSpace(kv[0]) == "" {
+			continue
+		}
+		out[strings.TrimSpace(kv[0])] = kv[1]
+	}
+	return out
+}
+
+func cookieMapToHeader(values map[string]string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"="+values[name])
+	}
+	return strings.Join(parts, "; ")
 }
 
 type browserStateRoundTripper struct {
