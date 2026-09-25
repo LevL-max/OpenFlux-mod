@@ -29,3 +29,5 @@ jobs:
             --prerelease \
             --title "OpenFlux-mod v4.0.0-rc3" \
             --notes-file release/RC3-NOTES.md
+
+# trigger publication
