@@ -317,6 +317,11 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		existingSession := t.session
 		t.Mu.Unlock()
 
+		t.SetConnected(false)
+		if existingSession != nil && existingSession.Conn != nil {
+			existingSession.Conn.Close()
+		}
+
 		var userID string
 		if existingSession != nil {
 			userID = existingSession.UserID
@@ -379,131 +384,28 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			UserID:     userID,
 		}
 
+		if err := authenticateDoc(session, 30*time.Second); err != nil {
+			var timeout net.Error
+			switch {
+			case errors.Is(err, errDocumentAuthRejected):
+				utils.Statusf("[YDOCS] AUTH_REJECTED: document authentication rejected")
+			case errors.As(err, &timeout) && timeout.Timeout():
+				utils.Statusf("[YDOCS] AUTH_WAIT_TIMEOUT: handshake timed out; retrying")
+			default:
+				utils.Statusf("[YDOCS] AUTH_HANDSHAKE_INTERRUPTED: retrying")
+			}
+			t.SetConnected(false)
+			t.scheduleReconnect(attempt)
+			return
+		}
+		// Publish only authenticated sessions: neither queued packets nor keepalive
+		// cursors may race the Engine.IO/OnlyOffice handshake.
 		t.Mu.Lock()
 		t.session = session
 		t.Mu.Unlock()
-
 		if existingSession == nil {
 			utils.SafeGo("yandex.writer", t.writerLoop)
 		}
-
-		// OnlyOffice 2026 / Engine.IO + Socket.IO handshake.
-		conn.SetReadDeadline(time.Now().Add(10 * time.Second))
-
-		_, hello, err := conn.ReadMessage()
-		if err != nil {
-			utils.Debugf("[YDOCS] Engine.IO hello failed: %v", err)
-			t.SetConnected(false)
-			t.scheduleReconnect(attempt)
-			return
-		}
-		if !strings.HasPrefix(string(hello), "0") {
-			utils.Debugf("[YDOCS] Unexpected Engine.IO hello")
-			conn.Close()
-			t.SetConnected(false)
-			t.scheduleReconnect(attempt)
-			return
-		}
-
-		auth1 := fmt.Sprintf(`40{"token":"%s"}`, info.Token)
-		if err := session.safeWrite(websocket.TextMessage, []byte(auth1)); err != nil {
-			utils.Debugf("[YDOCS] Socket.IO auth write failed: %v", err)
-			t.SetConnected(false)
-			t.scheduleReconnect(attempt)
-			return
-		}
-
-		licenseSeen := false
-		for i := 0; i < 10; i++ {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				utils.Debugf("[YDOCS] Pre-auth read failed: %v", err)
-				t.SetConnected(false)
-				t.scheduleReconnect(attempt)
-				return
-			}
-
-			text := string(message)
-			if text == "2" {
-				session.safeWrite(websocket.TextMessage, []byte("3"))
-				continue
-			}
-			if strings.Contains(text, `"type":"license"`) {
-				licenseSeen = true
-				break
-			}
-		}
-
-		if !licenseSeen {
-			utils.Debugf("[YDOCS] License message not received")
-			conn.Close()
-			t.SetConnected(false)
-			t.scheduleReconnect(attempt)
-			return
-		}
-
-		authData := map[string]interface{}{
-			"type": "auth", "docid": info.DocID, "token": "fghhfgsjdgfjs",
-			"user": map[string]interface{}{"id": userID}, "editorType": 0,
-			"lastOtherSaveTime": -1, "permissions": info.Permissions,
-			"openCmd": info.OpenCmd, "coEditingMode": "fast", "jwtOpen": info.Token,
-		}
-		messagePart, _ := json.Marshal([]interface{}{"message", authData})
-
-		if err := session.safeWrite(
-			websocket.TextMessage,
-			[]byte(fmt.Sprintf("42%s", string(messagePart))),
-		); err != nil {
-			utils.Debugf("[YDOCS] Document auth write failed: %v", err)
-			t.SetConnected(false)
-			t.scheduleReconnect(attempt)
-			return
-		}
-
-		authOK := false
-		for i := 0; i < 20; i++ {
-			_, message, err := conn.ReadMessage()
-			if err != nil {
-				utils.Statusf("[YDOCS] Auth response read failed")
-				t.SetConnected(false)
-				t.scheduleReconnect(attempt)
-				return
-			}
-
-			text := string(message)
-
-			if text == "2" {
-				session.safeWrite(websocket.TextMessage, []byte("3"))
-				continue
-			}
-
-			if strings.Contains(text, `"type":"authChanges"`) {
-				ack := `42["message",{"type":"authChangesAck"}]`
-				if err := session.safeWrite(websocket.TextMessage, []byte(ack)); err != nil {
-					utils.Debugf("[YDOCS] authChangesAck write failed: %v", err)
-					t.SetConnected(false)
-					t.scheduleReconnect(attempt)
-					return
-				}
-				continue
-			}
-
-			if strings.Contains(text, `"type":"auth"`) &&
-				strings.Contains(text, `"result":1`) {
-				authOK = true
-				break
-			}
-		}
-
-		if !authOK {
-			utils.Statusf("[YDOCS] Document authentication not accepted")
-			conn.Close()
-			t.SetConnected(false)
-			t.scheduleReconnect(attempt)
-			return
-		}
-
-		conn.SetReadDeadline(time.Time{})
 		t.authBlocked.Store(false)
 		t.SetConnected(true)
 		utils.Statusf("[YDOCS] OnlyOffice authentication successful")
@@ -533,7 +435,7 @@ func (t *YandexDocsTransport) writerLoop() {
 		session := t.session
 		t.Mu.Unlock()
 
-		if session == nil || session.Conn == nil {
+		if session == nil || session.Conn == nil || !t.IsConnected() {
 			time.Sleep(10 * time.Millisecond)
 			continue
 		}
@@ -658,7 +560,7 @@ func (t *YandexDocsTransport) keepAliveLoop() {
 		session := t.session
 		t.Mu.Unlock()
 
-		if session != nil && session.Conn != nil {
+		if session != nil && session.Conn != nil && t.IsConnected() {
 			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
 				utils.Debugf("[YDOCS] Keep-alive failed: %v", err)
 				t.SetConnected(false)
