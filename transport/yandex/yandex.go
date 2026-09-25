@@ -1,6 +1,7 @@
 package yandex
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -65,6 +66,7 @@ type YandexDocsTransport struct {
 
 	userCounter atomic.Int32
 	baseUserID  string
+	authBlocked atomic.Bool
 
 	perfQueueFull   atomic.Uint64
 	perfWSWrites    atomic.Uint64
@@ -299,7 +301,7 @@ func (t *YandexDocsTransport) Send(data []byte) error {
 }
 
 func (t *YandexDocsTransport) connectToDoc(attempt int) {
-	if !t.IsRunning() {
+	if !t.IsRunning() || t.authBlocked.Load() {
 		return
 	}
 
@@ -327,7 +329,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		if err != nil {
 			if errors.Is(err, ErrCaptchaRequired) || errors.Is(err, ErrLoginRequired) {
 				utils.Debugf("[YDOCS] CAPTCHA_REQUIRED: %v", err)
-				t.scheduleCaptchaWait(attempt)
+				t.blockUntilCookieStoreChange()
 				return
 			}
 			utils.Debugf("[YDOCS] fetchDocInfo failed: %v", err)
@@ -502,6 +504,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		}
 
 		conn.SetReadDeadline(time.Time{})
+		t.authBlocked.Store(false)
 		t.SetConnected(true)
 		utils.Debugf("[YDOCS] OnlyOffice authentication successful")
 
@@ -723,7 +726,7 @@ func (t *YandexDocsTransport) extractBase64String(response string) string {
 
 func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	next := attempt + 1
-	if !t.IsRunning() || next >= t.GetConfig().MaxReconnectAttempts {
+	if !t.IsRunning() || t.authBlocked.Load() || next >= t.GetConfig().MaxReconnectAttempts {
 		return
 	}
 
@@ -738,18 +741,103 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	t.connectToDoc(next)
 }
 
-func (t *YandexDocsTransport) scheduleCaptchaWait(attempt int) {
-	if !t.IsRunning() {
+func (t *YandexDocsTransport) cookieStorePath() string {
+	t.cookieMu.RLock()
+	defer t.cookieMu.RUnlock()
+	if t.cookieStore == nil {
+		return ""
+	}
+	return t.cookieStore.Path()
+}
+
+func cookieStoreFingerprint(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "missing", nil
+		}
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:]), nil
+}
+
+func (t *YandexDocsTransport) reloadCookieStore() error {
+	path := t.cookieStorePath()
+	if path == "" {
+		return errors.New("Yandex cookie store is not configured")
+	}
+
+	store, err := transport.NewCookieStore(path)
+	if err != nil {
+		return err
+	}
+	cached := store.Load(t.url)
+	if len(cached) == 0 {
+		return errors.New("Yandex cookie store contains no cookies for this document")
+	}
+
+	t.cookieMu.Lock()
+	t.cookieStore = store
+	t.browserCookie = cookieMapToHeader(cached)
+	t.cookieMu.Unlock()
+
+	utils.Debugf("[YDOCS] reloaded %d persisted cookies", len(cached))
+	return nil
+}
+
+// blockUntilCookieStoreChange is an authentication latch. Once Yandex returns
+// the second-tier SmartCaptcha/login wall, OpenFlux stops all Yandex retries.
+// It only leaves AUTH_BLOCKED after the persistent cookie-store changes and
+// the new state can be loaded successfully.
+func (t *YandexDocsTransport) blockUntilCookieStoreChange() {
+	if !t.authBlocked.CompareAndSwap(false, true) {
+		utils.Debugf("[YDOCS] AUTH_BLOCKED already active")
 		return
 	}
-	const wait = 30 * time.Second
-	utils.Debugf("[YDOCS] SmartCaptcha/browser refresh required; retrying in %v", wait)
-	time.Sleep(wait)
-	if !t.IsRunning() {
+	t.SetConnected(false)
+
+	path := t.cookieStorePath()
+	if path == "" {
+		utils.Debugf("[YDOCS] AUTH_BLOCKED: no cookie store configured; refresh browser authentication and restart OpenFlux")
 		return
 	}
-	t.RecordReconnect()
-	t.connectToDoc(attempt + 1)
+
+	baseline, err := cookieStoreFingerprint(path)
+	if err != nil {
+		utils.Debugf("[YDOCS] AUTH_BLOCKED: cannot fingerprint cookie store: %v", err)
+		baseline = ""
+	}
+	utils.Debugf("[YDOCS] AUTH_BLOCKED: waiting for cookie store change (%s)", path)
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for t.IsRunning() {
+		<-ticker.C
+		current, err := cookieStoreFingerprint(path)
+		if err != nil {
+			utils.Debugf("[YDOCS] AUTH_BLOCKED: cookie store check failed: %v", err)
+			continue
+		}
+		if current == baseline {
+			continue
+		}
+
+		if err := t.reloadCookieStore(); err != nil {
+			utils.Debugf("[YDOCS] AUTH_BLOCKED: changed cookie store is not usable yet: %v", err)
+			baseline = current
+			continue
+		}
+
+		t.authBlocked.Store(false)
+		utils.Debugf("[YDOCS] AUTH_BLOCKED cleared: cookie store changed; reconnecting now")
+		t.RecordReconnect()
+		t.connectToDoc(0)
+		return
+	}
+
+	t.authBlocked.Store(false)
 }
 
 func reconnectBackoff(n int) time.Duration {
