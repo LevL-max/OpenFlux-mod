@@ -12,6 +12,32 @@ import (
 
 var errDocumentAuthRejected = errors.New("document authentication rejected")
 
+// The first editor must acknowledge the transition to co-editing when another
+// participant joins. Otherwise OnlyOffice holds the new participant in waitAuth
+// and eventually disconnects the first editor when its document-lock timer fires.
+// OpenFlux has no pending document edits or editor locks to flush.
+func acknowledgeCoediting(session *DocSession, data []byte) (bool, error) {
+	if !strings.HasPrefix(string(data), "42") {
+		return false, nil
+	}
+	var parts []json.RawMessage
+	if json.Unmarshal(data[2:], &parts) != nil || len(parts) != 2 {
+		return false, nil
+	}
+	var name string
+	var event struct {
+		Type     string `json:"type"`
+		WaitAuth bool   `json:"waitAuth"`
+	}
+	if json.Unmarshal(parts[0], &name) != nil || name != "message" || json.Unmarshal(parts[1], &event) != nil || event.Type != "connectState" {
+		return false, nil
+	}
+	if !event.WaitAuth {
+		return true, nil
+	}
+	return true, session.safeWrite(websocket.TextMessage, []byte(`42["message",{"type":"unLockDocument","unlock":true,"isSave":false,"releaseLocks":false}]`))
+}
+
 type docAuthEvent struct {
 	Type   string `json:"type"`
 	Result *int   `json:"result"`

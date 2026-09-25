@@ -1,6 +1,7 @@
 package yandex
 
 import (
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,66 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func TestExistingParticipantUnlocksFirstJoin(t *testing.T) {
+	ready := make(chan struct{})
+	existing := handshakePeer(t, func(c *websocket.Conn) {
+		c.WriteMessage(websocket.TextMessage, []byte(`42["message",{"type":"connectState","waitAuth":true}]`))
+		_, ack, err := c.ReadMessage()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var parts []json.RawMessage
+		var command map[string]interface{}
+		if !strings.HasPrefix(string(ack), "42") || json.Unmarshal(ack[2:], &parts) != nil || len(parts) != 2 || json.Unmarshal(parts[1], &command) != nil {
+			t.Errorf("Invalid co-editing acknowledgment: %s", ack)
+			return
+		}
+		if command["type"] != "unLockDocument" || command["unlock"] != true || command["isSave"] != false || command["releaseLocks"] != false || len(command) != 4 {
+			t.Errorf("Acknowledgment must release only the authentication lock: %v", command)
+			return
+		}
+		close(ready)
+		c.ReadMessage() // Keep the existing participant connected until cleanup.
+	})
+	joining := handshakePeer(t, func(c *websocket.Conn) {
+		c.WriteMessage(websocket.TextMessage, []byte(`0{"sid":"joining"}`))
+		c.ReadMessage()
+		c.WriteMessage(websocket.TextMessage, []byte(`42["message",{"type":"license"}]`))
+		c.ReadMessage()
+		c.WriteMessage(websocket.TextMessage, []byte(`42["message",{"type":"waitAuth"}]`))
+		select {
+		case <-ready:
+			c.WriteMessage(websocket.TextMessage, []byte(`42["message",{"type":"auth","result":1}]`))
+		case <-time.After(time.Second):
+			t.Error("Existing participant did not release the authentication lock")
+		}
+	})
+	_, event, err := existing.Conn.ReadMessage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	(&YandexDocsTransport{}).handleMessage(existing, event)
+	if err := authenticateDoc(joining, time.Second); err != nil {
+		t.Fatalf("First join failed: %v", err)
+	}
+}
+
+func TestCoeditingAcknowledgmentRequiresWaitAuth(t *testing.T) {
+	for _, event := range []string{
+		`42["message",{"type":"connectState","waitAuth":false}]`,
+		`42["message",{"type":"connectState"}]`,
+		`42["other",{"type":"connectState","waitAuth":true}]`,
+		`42["message",{"type":"cursor","waitAuth":true}]`,
+		`42invalid`,
+	} {
+		// A nil session would panic if any of these frames attempted a write.
+		if _, err := acknowledgeCoediting(nil, []byte(event)); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
 
 func handshakePeer(t *testing.T, serve func(*websocket.Conn)) *DocSession {
 	t.Helper()
