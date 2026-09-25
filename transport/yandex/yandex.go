@@ -1,14 +1,20 @@
 package yandex
 
 import (
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
 	"net"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -53,8 +59,14 @@ type YandexDocsTransport struct {
 	url     string
 	session *DocSession
 
+	browserCookie    string
+	browserUserAgent string
+	cookieStore      *transport.CookieStore
+	cookieMu         sync.RWMutex
+
 	userCounter atomic.Int32
 	baseUserID  string
+	authBlocked atomic.Bool
 
 	perfQueueFull   atomic.Uint64
 	perfWSWrites    atomic.Uint64
@@ -63,13 +75,191 @@ type YandexDocsTransport struct {
 	perfQueuePeak   atomic.Int64
 }
 
+var (
+	ErrCaptchaRequired = errors.New("yandex docs: SmartCaptcha requires browser refresh")
+	ErrLoginRequired   = errors.New("yandex docs: login required")
+)
+
+const defaultYandexUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
+
 func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
 	t := &YandexDocsTransport{
-		BaseTransport: transport.NewBaseTransport(config),
-		url:           url,
+		BaseTransport:    transport.NewBaseTransport(config),
+		url:              url,
+		browserUserAgent: defaultYandexUserAgent,
 	}
 	t.baseUserID = randUserID()
 	return t
+}
+
+// SetCookieStore enables persistent per-document cookie state. A missing store
+// file is valid and starts empty; an existing store is loaded immediately.
+func (t *YandexDocsTransport) SetCookieStore(path string) error {
+	store, err := transport.NewCookieStore(path)
+	if err != nil {
+		return err
+	}
+	t.cookieStore = store
+	if cached := store.Load(t.url); len(cached) > 0 {
+		t.cookieMu.Lock()
+		t.browserCookie = cookieMapToHeader(cached)
+		t.cookieMu.Unlock()
+		utils.Debugf("[YDOCS] loaded %d persisted cookies", len(cached))
+	}
+	return nil
+}
+
+// LoadBrowserCookies imports a raw browser Cookie header from a local file.
+// If a persistent store is configured, the imported state is saved immediately.
+// Cookie values are never written to logs.
+func (t *YandexDocsTransport) LoadBrowserCookies(path, userAgent string) error {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Errorf("read Yandex cookie file: %w", err)
+	}
+
+	cookie := strings.TrimSpace(string(b))
+	if strings.HasPrefix(strings.ToLower(cookie), "cookie:") {
+		cookie = strings.TrimSpace(cookie[len("cookie:"):])
+	}
+	if cookie == "" {
+		return fmt.Errorf("Yandex cookie file is empty")
+	}
+	if strings.ContainsAny(cookie, "\r\n") {
+		return fmt.Errorf("Yandex cookie file must contain one raw Cookie header line")
+	}
+
+	values := parseCookieHeader(cookie)
+	if len(values) == 0 {
+		return fmt.Errorf("Yandex cookie file contains no valid cookies")
+	}
+
+	t.cookieMu.Lock()
+	t.browserCookie = cookieMapToHeader(values)
+	if strings.TrimSpace(userAgent) != "" {
+		t.browserUserAgent = strings.TrimSpace(userAgent)
+	}
+	t.cookieMu.Unlock()
+
+	return t.persistCookieMap(values)
+}
+
+func (t *YandexDocsTransport) persistCookieMap(values map[string]string) error {
+	if t.cookieStore == nil || len(values) == 0 {
+		return nil
+	}
+	return t.cookieStore.Save(t.url, values)
+}
+
+func (t *YandexDocsTransport) currentBrowserState() (string, string) {
+	t.cookieMu.RLock()
+	defer t.cookieMu.RUnlock()
+	return t.browserCookie, t.browserUserAgent
+}
+
+func (t *YandexDocsTransport) updateCookieState(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	t.cookieMu.Lock()
+	current := parseCookieHeader(t.browserCookie)
+	for k, v := range values {
+		current[k] = v
+	}
+	t.browserCookie = cookieMapToHeader(current)
+	t.cookieMu.Unlock()
+	return t.persistCookieMap(current)
+}
+
+func parseCookieHeader(header string) map[string]string {
+	out := make(map[string]string)
+	for _, part := range strings.Split(header, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 || strings.TrimSpace(kv[0]) == "" {
+			continue
+		}
+		out[strings.TrimSpace(kv[0])] = kv[1]
+	}
+	return out
+}
+
+func cookieMapToHeader(values map[string]string) string {
+	if len(values) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	parts := make([]string, 0, len(names))
+	for _, name := range names {
+		parts = append(parts, name+"="+values[name])
+	}
+	return strings.Join(parts, "; ")
+}
+
+type browserStateRoundTripper struct {
+	base      http.RoundTripper
+	cookie    string
+	userAgent string
+}
+
+func (rt browserStateRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header = req.Header.Clone()
+	if rt.userAgent != "" {
+		clone.Header.Set("User-Agent", rt.userAgent)
+	}
+	if rt.cookie != "" {
+		clone.Header.Set("Cookie", rt.cookie)
+	}
+	base := rt.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(clone)
+}
+
+func mergeCookieHeader(base string, extras []*http.Cookie) string {
+	values := make(map[string]string)
+	order := make([]string, 0)
+
+	for _, part := range strings.Split(base, ";") {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		kv := strings.SplitN(part, "=", 2)
+		if len(kv) != 2 || strings.TrimSpace(kv[0]) == "" {
+			continue
+		}
+		name := strings.TrimSpace(kv[0])
+		if _, exists := values[name]; !exists {
+			order = append(order, name)
+		}
+		values[name] = kv[1]
+	}
+
+	for _, cookie := range extras {
+		if cookie == nil || cookie.Name == "" {
+			continue
+		}
+		if _, exists := values[cookie.Name]; !exists {
+			order = append(order, cookie.Name)
+		}
+		values[cookie.Name] = cookie.Value
+	}
+
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		parts = append(parts, name+"="+values[name])
+	}
+	return strings.Join(parts, "; ")
 }
 
 func (t *YandexDocsTransport) Start() error {
@@ -111,7 +301,7 @@ func (t *YandexDocsTransport) Send(data []byte) error {
 }
 
 func (t *YandexDocsTransport) connectToDoc(attempt int) {
-	if !t.IsRunning() {
+	if !t.IsRunning() || t.authBlocked.Load() {
 		return
 	}
 
@@ -137,6 +327,11 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 
 		info, err := t.fetchDocInfo(t.url, userID)
 		if err != nil {
+			if errors.Is(err, ErrCaptchaRequired) || errors.Is(err, ErrLoginRequired) {
+				utils.Debugf("[YDOCS] CAPTCHA_REQUIRED: %v", err)
+				t.blockUntilCookieStoreChange()
+				return
+			}
 			utils.Debugf("[YDOCS] fetchDocInfo failed: %v", err)
 			t.scheduleReconnect(attempt)
 			return
@@ -154,7 +349,8 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			}).DialContext,
 		}
 		headers := http.Header{}
-		headers.Set("User-Agent", "Mozilla/5.0")
+		_, browserUA := t.currentBrowserState()
+		headers.Set("User-Agent", browserUA)
 		headers.Set("Origin", info.Origin)
 		headers.Set("Cookie", info.CookieStr)
 		headers.Set("Host", info.Host)
@@ -308,6 +504,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 		}
 
 		conn.SetReadDeadline(time.Time{})
+		t.authBlocked.Store(false)
 		t.SetConnected(true)
 		utils.Debugf("[YDOCS] OnlyOffice authentication successful")
 
@@ -529,7 +726,7 @@ func (t *YandexDocsTransport) extractBase64String(response string) string {
 
 func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	next := attempt + 1
-	if !t.IsRunning() || next >= t.GetConfig().MaxReconnectAttempts {
+	if !t.IsRunning() || t.authBlocked.Load() || next >= t.GetConfig().MaxReconnectAttempts {
 		return
 	}
 
@@ -542,6 +739,105 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 
 	t.RecordReconnect()
 	t.connectToDoc(next)
+}
+
+func (t *YandexDocsTransport) cookieStorePath() string {
+	t.cookieMu.RLock()
+	defer t.cookieMu.RUnlock()
+	if t.cookieStore == nil {
+		return ""
+	}
+	return t.cookieStore.Path()
+}
+
+func cookieStoreFingerprint(path string) (string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "missing", nil
+		}
+		return "", err
+	}
+	sum := sha256.Sum256(data)
+	return fmt.Sprintf("%x", sum[:]), nil
+}
+
+func (t *YandexDocsTransport) reloadCookieStore() error {
+	path := t.cookieStorePath()
+	if path == "" {
+		return errors.New("Yandex cookie store is not configured")
+	}
+
+	store, err := transport.NewCookieStore(path)
+	if err != nil {
+		return err
+	}
+	cached := store.Load(t.url)
+	if len(cached) == 0 {
+		return errors.New("Yandex cookie store contains no cookies for this document")
+	}
+
+	t.cookieMu.Lock()
+	t.cookieStore = store
+	t.browserCookie = cookieMapToHeader(cached)
+	t.cookieMu.Unlock()
+
+	utils.Debugf("[YDOCS] reloaded %d persisted cookies", len(cached))
+	return nil
+}
+
+// blockUntilCookieStoreChange is an authentication latch. Once Yandex returns
+// the second-tier SmartCaptcha/login wall, OpenFlux stops all Yandex retries.
+// It only leaves AUTH_BLOCKED after the persistent cookie-store changes and
+// the new state can be loaded successfully.
+func (t *YandexDocsTransport) blockUntilCookieStoreChange() {
+	if !t.authBlocked.CompareAndSwap(false, true) {
+		utils.Debugf("[YDOCS] AUTH_BLOCKED already active")
+		return
+	}
+	t.SetConnected(false)
+
+	path := t.cookieStorePath()
+	if path == "" {
+		utils.Debugf("[YDOCS] AUTH_BLOCKED: no cookie store configured; refresh browser authentication and restart OpenFlux")
+		return
+	}
+
+	baseline, err := cookieStoreFingerprint(path)
+	if err != nil {
+		utils.Debugf("[YDOCS] AUTH_BLOCKED: cannot fingerprint cookie store: %v", err)
+		baseline = ""
+	}
+	utils.Debugf("[YDOCS] AUTH_BLOCKED: waiting for cookie store change (%s)", path)
+
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	for t.IsRunning() {
+		<-ticker.C
+		current, err := cookieStoreFingerprint(path)
+		if err != nil {
+			utils.Debugf("[YDOCS] AUTH_BLOCKED: cookie store check failed: %v", err)
+			continue
+		}
+		if current == baseline {
+			continue
+		}
+
+		if err := t.reloadCookieStore(); err != nil {
+			utils.Debugf("[YDOCS] AUTH_BLOCKED: changed cookie store is not usable yet: %v", err)
+			baseline = current
+			continue
+		}
+
+		t.authBlocked.Store(false)
+		utils.Debugf("[YDOCS] AUTH_BLOCKED cleared: cookie store changed; reconnecting now")
+		t.RecordReconnect()
+		t.connectToDoc(0)
+		return
+	}
+
+	t.authBlocked.Store(false)
 }
 
 func reconnectBackoff(n int) time.Duration {
@@ -564,7 +860,13 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 	if strings.HasPrefix(url, "file://") {
 		return loadStaticDocInfo(strings.TrimPrefix(url, "file://"), userID)
 	}
+	cookieHeader, userAgent := t.currentBrowserState()
 	client := &http.Client{
+		Transport: browserStateRoundTripper{
+			base:      http.DefaultTransport,
+			cookie:    cookieHeader,
+			userAgent: userAgent,
+		},
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 10 {
 				return fmt.Errorf("stopped after 10 redirects (login required? doc not public?)")
@@ -574,23 +876,60 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 		Timeout: 15 * time.Second,
 	}
 
-	utils.Debugf("[YDOCS] fetchDocInfo GET %s", url)
-	req, _ := http.NewRequest("GET", url, nil)
-	req.Header.Set("User-Agent", "Mozilla/5.0")
-	resp, err := client.Do(req)
-	if err != nil {
-		return YandexDocsInfo{}, err
+	var (
+		resp *http.Response
+		html string
+	)
+
+	for bootstrapAttempt := 0; bootstrapAttempt < 3; bootstrapAttempt++ {
+		cookieHeader, userAgent = t.currentBrowserState()
+		client.Transport = browserStateRoundTripper{
+			base:      http.DefaultTransport,
+			cookie:    cookieHeader,
+			userAgent: userAgent,
+		}
+
+		utils.Debugf("[YDOCS] fetchDocInfo GET %s", url)
+		req, _ := http.NewRequest("GET", url, nil)
+		req.Header.Set("User-Agent", userAgent)
+		var err error
+		resp, err = client.Do(req)
+		if err != nil {
+			return YandexDocsInfo{}, err
+		}
+
+		htmlBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		html = string(htmlBytes)
+		finalURL := resp.Request.URL.String()
+		utils.Debugf("[YDOCS] response status=%d finalURL=%s body=%dB",
+			resp.StatusCode, finalURL, len(html))
+
+		if strings.Contains(finalURL, "showcaptchafast") {
+			utils.Debugf("[YDOCS] first-tier captcha detected; solving PoW")
+			if err := t.solveFirstTierCaptcha(url, userAgent); err != nil {
+				return YandexDocsInfo{}, fmt.Errorf("first-tier captcha solve failed: %w", err)
+			}
+			continue
+		}
+
+		if strings.Contains(finalURL, "showcaptcha?") &&
+			!strings.Contains(finalURL, "showcaptchafast") {
+			return YandexDocsInfo{}, ErrCaptchaRequired
+		}
+		if strings.Contains(finalURL, "passport.yandex") {
+			return YandexDocsInfo{}, ErrLoginRequired
+		}
+
+		cookieHeader = mergeCookieHeader(cookieHeader, resp.Cookies())
+		if err := t.updateCookieState(parseCookieHeader(cookieHeader)); err != nil {
+			utils.Debugf("[YDOCS] cookie store save failed: %v", err)
+		}
+		break
 	}
-	defer resp.Body.Close()
 
-	htmlBytes, _ := io.ReadAll(resp.Body)
-	html := string(htmlBytes)
-	utils.Debugf("[YDOCS] response status=%d finalURL=%s body=%dB",
-		resp.StatusCode, resp.Request.URL.String(), len(html))
-
-	var cookies []string
-	for _, c := range resp.Cookies() {
-		cookies = append(cookies, fmt.Sprintf("%s=%s", c.Name, c.Value))
+	if resp == nil {
+		return YandexDocsInfo{}, fmt.Errorf("Yandex bootstrap returned no response")
 	}
 
 	re := regexp.MustCompile(`<script[^>]*id="client-config"[^>]*>(.*?)</script>`)
@@ -665,7 +1004,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 	}
 
 	return YandexDocsInfo{
-		CookieStr:   strings.Join(cookies, "; "),
+		CookieStr:   cookieHeader,
 		Token:       token,
 		DocID:       docKey,
 		UserID:      yandexUserID,
@@ -716,6 +1055,54 @@ func fetchOnlyOfficeBuild(client *http.Client, balancerURL string) (string, erro
 	}
 
 	return string(m[1]), nil
+}
+
+func (t *YandexDocsTransport) solveFirstTierCaptcha(docURL, userAgent string) error {
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		return err
+	}
+
+	cookieHeader, _ := t.currentBrowserState()
+	values := parseCookieHeader(cookieHeader)
+
+	doc, err := url.Parse(docURL)
+	if err != nil {
+		return err
+	}
+	jar.SetCookies(doc, siteCookies(doc, values))
+
+	if _, err := solveCaptcha(docURL, jar, userAgent); err != nil {
+		return err
+	}
+
+	for _, raw := range []string{"https://disk.yandex.ru/", "https://docs.yandex.ru/"} {
+		u, _ := url.Parse(raw)
+		for _, cookie := range jar.Cookies(u) {
+			values[cookie.Name] = cookie.Value
+		}
+	}
+	return t.updateCookieState(values)
+}
+
+func siteCookies(u *url.URL, values map[string]string) []*http.Cookie {
+	domain := ""
+	if u != nil {
+		if labels := strings.Split(u.Hostname(), "."); len(labels) >= 3 {
+			domain = strings.Join(labels[1:], ".")
+		}
+	}
+	cookies := make([]*http.Cookie, 0, len(values))
+	for name, value := range values {
+		cookies = append(cookies, &http.Cookie{
+			Name:   name,
+			Value:  value,
+			Path:   "/",
+			Domain: domain,
+			Secure: true,
+		})
+	}
+	return cookies
 }
 
 func randUserID() string {

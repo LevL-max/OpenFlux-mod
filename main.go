@@ -33,6 +33,9 @@ func main() {
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, google, custom)")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
+	yandexCookieFile := flag.String("yandex-cookie-file", "", "Optional one-time raw browser Cookie header seed")
+	yandexCookieStore := flag.String("yandex-cookie-store", "", "Persistent Yandex cookie store JSON path")
+	yandexUserAgent := flag.String("yandex-user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0", "User-Agent used for Yandex HTTP/WebSocket bootstrap")
 	compressionEnabled := flag.Bool("compression", true, "Enable transport LZ4 wrapper")
 	tcpBufferDefault := flag.Int("tcp-buffer-default", 262144, "gVisor TCP default send/receive buffer bytes")
 	tcpBufferMax := flag.Int("tcp-buffer-max", 1048576, "gVisor TCP max send/receive buffer bytes")
@@ -78,6 +81,18 @@ func main() {
 	switch *transportType {
 	case "yandex":
 		yandexTransport := yandex.NewYandexDocsTransport(globalDocUrl, config)
+		if *yandexCookieStore != "" {
+			if err := yandexTransport.SetCookieStore(*yandexCookieStore); err != nil {
+				log.Fatalf("Failed to configure Yandex cookie store: %v", err)
+			}
+			log.Printf("Yandex persistent cookie store: %s", *yandexCookieStore)
+		}
+		if *yandexCookieFile != "" {
+			if err := yandexTransport.LoadBrowserCookies(*yandexCookieFile, *yandexUserAgent); err != nil {
+				log.Fatalf("Failed to import Yandex browser cookies: %v", err)
+			}
+			log.Printf("Yandex browser cookie seed imported")
+		}
 		if *compressionEnabled {
 			trans = transport.NewCompressedTransport(yandexTransport)
 		} else {

@@ -69,6 +69,8 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           go build -trimpath -ldflags='-s -w -buildid=' -o dist/openflux-linux-amd64 .
+          install -m 0755 scripts/openflux-yandex-cookie-import dist/openflux-yandex-cookie-import
+          python3 dist/openflux-yandex-cookie-import --help >/dev/null
 
       - name: Build and smoke-test runtime container
         shell: bash
@@ -109,6 +111,7 @@ jobs:
         run: |
           set -euo pipefail
           BINARY_SHA="$(sha256sum dist/openflux-linux-amd64 | awk '{print $1}')"
+          HELPER_SHA="$(sha256sum dist/openflux-yandex-cookie-import | awk '{print $1}')"
           IMAGE_ARCHIVE_SHA="$(sha256sum dist/openflux-container-linux-amd64.tar.gz | awk '{print $1}')"
           cat > dist/BUILD-METADATA <<EOF
           version=$VERSION
@@ -121,6 +124,7 @@ jobs:
           cgo_enabled=0
           go_build_flags=-trimpath -ldflags=-s -w -buildid=
           binary_sha256=$BINARY_SHA
+          yandex_cookie_import_helper_sha256=$HELPER_SHA
           container_archive_sha256=$IMAGE_ARCHIVE_SHA
           container_registry=$IMAGE:$VERSION
           container_registry_digest=$REGISTRY_DIGEST
@@ -135,6 +139,10 @@ jobs:
 
           - Functional baseline remains the proven private Yandex v4 line.
           - Dynamic Yandex bootstrap/session discovery is retained.
+          - First-tier showcaptchafast PoW is solved automatically.
+          - Persistent per-document Yandex cookie state is supported with an optional one-time browser seed.
+          - Second-tier SmartCaptcha enters AUTH_BLOCKED and makes no further Yandex requests until the cookie store changes.
+          - A safe openflux-yandex-cookie-import helper is included for browser cURL refresh without printing cookie values.
           - Private 4-packet / 1 ms batching and current reliability hardening are retained.
           - Volga, CUPS and other experimental upstream transports are not promoted into this release candidate.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
@@ -156,6 +164,7 @@ jobs:
 
           sha256sum \
             dist/openflux-linux-amd64 \
+            dist/openflux-yandex-cookie-import \
             dist/openflux-container-linux-amd64.tar.gz \
             dist/BUILD-METADATA \
             dist/RELEASE-NOTES.md \
@@ -167,6 +176,7 @@ jobs:
         run: |
           gh release create "$VERSION" \
             dist/openflux-linux-amd64 \
+            dist/openflux-yandex-cookie-import \
             dist/openflux-container-linux-amd64.tar.gz \
             dist/SHA256SUMS \
             dist/BUILD-METADATA \
