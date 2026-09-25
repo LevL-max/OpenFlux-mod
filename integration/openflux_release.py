@@ -4,6 +4,7 @@ import contextlib, ipaddress, json, os, pathlib, platform, pwd, re, shutil, subp
 REPO='LevL-max/OpenFlux-mod'
 ASSETS=('openflux-linux-amd64','openflux-yandex-cookie-import','SHA256SUMS')
 BUNDLE='openflux-integration-linux.tar.gz'
+NODE_ASSET='openflux-node.py'
 MODULES=('openflux_release.py','openflux_auth.py','cookie_import.py','recovery_crypto.py','recovery_inbox.py','router_integration.py')
 LIBDIR=pathlib.Path(__file__).parent
 RUNNER=pathlib.Path('/usr/local/sbin/openflux-yandex-client-run')
@@ -23,7 +24,7 @@ def metadata(data):
     base='https://github.com/'+REPO+'/releases/'
     if data.get('html_url')!=base+'tag/'+tag:raise ValueError('Unexpected release repository')
     assets={}
-    names=ASSETS+((BUNDLE,) if any(a.get('name')==BUNDLE for a in data.get('assets',[])) else ())
+    names=ASSETS+tuple(name for name in (BUNDLE,NODE_ASSET) if any(a.get('name')==name for a in data.get('assets',[])))
     for name in names:
         items=[a for a in data.get('assets',[]) if a.get('name')==name]
         if len(items)!=1:raise ValueError('Missing or duplicate release asset: '+name)
@@ -86,7 +87,7 @@ def prepare(core,route):
         extract_bundle(temp/BUNDLE,temp/'integration')
     os.replace(temp/ASSETS[0],temp/'binary');os.chmod(temp/'binary',0o755)
     os.replace(temp/ASSETS[1],temp/'helper');os.chmod(temp/'helper',0o755)
-    helptext=core.run([str(temp/'binary'),'--help'],record=False).stdout
+    helpresult=core.run([str(temp/'binary'),'--help'],record=False);helptext=helpresult.stdout+getattr(helpresult,'stderr','')
     if 'yandex-cookie-store' not in helptext:raise ValueError('Candidate lacks persistent cookie-store support')
     core.run(['python3',str(temp/'helper'),'--help'],record=False)
     candidate.update(directory=temp.name,binary_sha256=core.sha(temp/'binary'),helper_sha256=core.sha(temp/'helper'),integration_sha256=candidate['assets'].get(BUNDLE,{}).get('sha256'),
@@ -109,7 +110,7 @@ def extract_bundle(archive,destination):
             (destination/name).write_bytes(content)
     if not set(MODULES).issubset(found):raise ValueError('Incomplete integration bundle')
 
-def support_paths():return [('runner',RUNNER),('helper',HELPER),('cookie-dropin',DROPIN)]+[('integration-'+name,LIBDIR/name) for name in MODULES]
+def support_paths():return [('runner',RUNNER),('helper',HELPER),('cookie-dropin',DROPIN),('node-control',LIBDIR/'openflux_node.py')]+[('integration-'+name,LIBDIR/name) for name in MODULES]
 
 def backup_files(core,checkpoint):
     records={}
@@ -138,7 +139,7 @@ def install_support(core,source,metadata):
         if text.count(marker)!=1:raise ValueError('Unknown OpenFlux runner layout')
         text=text.replace(marker,'  --yandex-cookie-store '+str(STORE)+' \\\n'+marker)
     # Older binaries emit auth events only with --debug; discover support from this artifact.
-    helptext=core.run([str(source),'--help'],record=False).stdout
+    helpresult=core.run([str(source),'--help'],record=False);helptext=helpresult.stdout+getattr(helpresult,'stderr','')
     if '--status-events' in helptext or '-status-events' in helptext:
         text=text.replace('  --debug \\\n','')
     elif '  --debug ' not in text:
@@ -158,6 +159,10 @@ def install_support(core,source,metadata):
         for name in MODULES:
             module=source.parent/'integration'/name;compile(module.read_text(),str(module),'exec')
         for name in MODULES:core.atomic_binary(source.parent/'integration'/name,LIBDIR/name);os.chmod(LIBDIR/name,0o644)
+        if NODE_ASSET in metadata.get('assets',{}):
+            node=source.parent/NODE_ASSET
+            if core.sha(node)!=metadata['assets'][NODE_ASSET]['sha256']:raise ValueError('Node updater checksum changed')
+            compile(node.read_text(),NODE_ASSET,'exec');core.atomic_binary(node,LIBDIR/'openflux_node.py')
         core.run(['systemctl','try-restart','router-panel.service'],record=False)
 
 def health(core,seconds=100):

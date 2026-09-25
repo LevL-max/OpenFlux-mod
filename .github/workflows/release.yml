@@ -67,8 +67,7 @@ jobs:
           python3 -m compileall -q integration
           mkdir -p dist
           tar -czf dist/openflux-integration-linux.tar.gz integration/{openflux_release.py,openflux_auth.py,cookie_import.py,recovery_crypto.py,recovery_inbox.py,router_integration.py,install.py,README.md}
-          cd integration
-          zip -q ../dist/openflux-recovery-windows.zip desktop/*.py desktop/requirements.txt README.md
+          install -m 0755 integration/openflux_node.py dist/openflux-node.py
 
       - name: Build Linux amd64 release binary
         env:
@@ -151,7 +150,9 @@ jobs:
           - Safe authentication events are visible without debug logging.
           - Versioned Router Panel integration shows Connected, Connecting, AUTH_BLOCKED and retained authentication errors.
           - Generic semantic-version updates verify the binary, cookie helper and integration bundle together, with complete local rollback.
-          - Cookie refresh works from the Router Panel or the included Windows recovery UI.
+          - Install OpenFlux itself on a Linux amd64 client or server using openflux-node.py.
+          - The server includes openfluxctl menu, release updates, rollback and direct cookie import.
+          - Cookie recovery files are created on the client from Router Panel or CLI; no Windows application is required.
           - Optional signed and encrypted Yandex Disk recovery lets the server refresh cookies without inbound SSH.
           - See integration/README.md for installer, pairing and dependency instructions.
           - Dynamic Yandex bootstrap/session discovery is retained.
@@ -163,7 +164,7 @@ jobs:
           - Volga, CUPS and other experimental upstream transports are not promoted into this release.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
-          - Release creation does not deploy or restart AWS, Mini-PC1 or Mini-PC2.
+          - Release creation does not deploy or restart running installations.
 
           Container image:
 
@@ -182,11 +183,12 @@ jobs:
             dist/openflux-linux-amd64 \
             dist/openflux-yandex-cookie-import \
             dist/openflux-integration-linux.tar.gz \
-            dist/openflux-recovery-windows.zip \
+            dist/openflux-node.py \
             dist/openflux-container-linux-amd64.tar.gz \
             dist/BUILD-METADATA \
             dist/RELEASE-NOTES.md \
             > dist/SHA256SUMS
+          sed -i 's|  dist/|  |' dist/SHA256SUMS
 
       - name: Create draft release
         env:
@@ -198,7 +200,7 @@ jobs:
             dist/openflux-linux-amd64 \
             dist/openflux-yandex-cookie-import \
             dist/openflux-integration-linux.tar.gz \
-            dist/openflux-recovery-windows.zip \
+            dist/openflux-node.py \
             dist/openflux-container-linux-amd64.tar.gz \
             dist/SHA256SUMS \
             dist/BUILD-METADATA \

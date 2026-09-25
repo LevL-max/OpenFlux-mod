@@ -14,4 +14,11 @@ class RecoveryTests(unittest.TestCase):
   with self.assertRaises(Exception):r.unseal(e,self.server,ed25519.Ed25519PrivateKey.generate().public_key(),[],now=1001)
   e['target']='other'
   with self.assertRaises(Exception):r.unseal(e,self.server,self.sender.public_key(),[],now=1001)
+ def test_server_status_is_signed_redacted_and_expires(self):
+  report=r.sign_status({'state':'auth_failed','needs_cookies':False,'cookies':'SECRET','token':'SECRET'},self.server,now=1000)
+  self.assertNotIn('SECRET',json.dumps(report))
+  self.assertEqual(r.verify_status(report,self.server.public_key(),now=1001)['state'],'auth_failed')
+  self.assertTrue(r.verify_status(report,self.server.public_key(),now=1181)['stale'])
+  report['status']['state']='connected'
+  with self.assertRaises(Exception):r.verify_status(report,self.server.public_key(),now=1001)
 if __name__=='__main__':unittest.main()
