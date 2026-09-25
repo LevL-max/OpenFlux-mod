@@ -12,7 +12,7 @@ def main():
     parser.add_argument('--role', choices=('client', 'server'), required=True)
     parser.add_argument('--expected-exit-ip', help='Optional client health-check exit IP')
     parser.add_argument('--disk-token-file', type=pathlib.Path)
-    parser.add_argument('--disk-path', default='disk:/OpenFlux Recovery/aws-recovery.json')
+    parser.add_argument('--disk-path', default='disk:/OpenFlux Recovery/server-recovery.json')
     parser.add_argument('--sender-public-key', type=pathlib.Path)
     args = parser.parse_args()
     if os.geteuid() != 0: parser.error('Run with sudo')
@@ -75,7 +75,7 @@ exec /usr/bin/python3 /usr/local/lib/router-updater/router_update_core.py "$acti
     for name, cmd, seconds in timers:
         unit = pathlib.Path('/etc/systemd/system') / (name + '.service')
         files[unit] = (('[Unit]\nDescription=OpenFlux status and recovery\nAfter=network-online.target\n'
-            '[Service]\nType=oneshot\nUMask=0077\nNice=10\nTimeoutStartSec=55\nExecStart='+cmd+'\n').encode(), 0o644)
+            '[Service]\nType=oneshot\nUMask=0077\nNice=10\nTimeoutStartSec=150\nExecStart='+cmd+'\n').encode(), 0o644)
         files[unit.with_suffix('.timer')] = (('[Unit]\nDescription=OpenFlux support poll\n'
             '[Timer]\nOnBootSec=30\nOnUnitActiveSec='+str(seconds)+'\nAccuracySec=2\n'
             '[Install]\nWantedBy=timers.target\n').encode(), 0o644)

@@ -70,7 +70,7 @@ class ReleaseTests(unittest.TestCase):
   self.assertEqual(a.classify('OnlyOffice authentication successful')[0],'connected')
   self.assertEqual(a.classify('Document authentication not accepted')[0],'auth_failed')
   self.assertIsNone(a.classify('Cookie: SECRET_VALUE'))
-  with tempfile.TemporaryDirectory() as tmp,patch.object(a,'CLIENT',True),patch.object(a,'STORE',pathlib.Path(tmp)/'cookies.json'),patch.object(a,'STATE',pathlib.Path(tmp)/'state.json'),patch.object(a,'runtime',return_value=(True,'a'*32)):
+  with tempfile.TemporaryDirectory() as tmp,patch.object(a,'CLIENT',True),patch.object(a,'NATIVE',True),patch.object(a,'STORE',pathlib.Path(tmp)/'cookies.json'),patch.object(a,'STATE',pathlib.Path(tmp)/'state.json'),patch.object(a,'runtime',return_value=(True,'a'*32)):
    events=[{'__REALTIME_TIMESTAMP':'1000000','MESSAGE':'AUTH_BLOCKED SECRET_VALUE'},{'__REALTIME_TIMESTAMP':'2000000','MESSAGE':'AUTH_BLOCKED cleared'},{'__REALTIME_TIMESTAMP':'3000000','MESSAGE':'OnlyOffice authentication successful'}]
    with patch.object(a,'command',return_value=types.SimpleNamespace(stdout='\n'.join(json.dumps(e) for e in events))):result=a._status()
    self.assertEqual(result['state'],'connected');self.assertEqual(result['last_failure']['state'],'auth_blocked')

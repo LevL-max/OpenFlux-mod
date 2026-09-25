@@ -19,6 +19,39 @@ $('#openfluxCookieImport').onclick=async()=>{
 };
 '''
 
+RECOVERY_HTML='''
+  <div class="small" id="openfluxServerState" style="margin-top:12px">Server authentication: checking…</div>
+  <div class="small" id="openfluxServerFailure"></div>
+  <details id="openfluxServerRecovery" style="margin-top:14px">
+   <summary style="cursor:pointer">Server cookies via Yandex Disk</summary>
+   <p class="small">Paste Copy as cURL above. Create an encrypted recovery file and upload it to your configured Disk folder, replacing the previous file. This runs on the client; no Windows application is needed. Pairing and the Disk path are configured with openfluxctl recovery.</p>
+   <button id="openfluxRecoveryDownload">Download encrypted file</button>
+   <button id="openfluxRecoverySend">Upload through Disk API</button>
+   <p class="small" id="openfluxRecoveryResult" role="status" aria-live="polite"></p>
+  </details>'''
+
+RECOVERY_JS='''
+async function openfluxRecovery(upload){
+ const result=$('#openfluxRecoveryResult');result.textContent='Preparing server cookies…';
+ try{
+  const d=await api('/api/openflux/recovery',{method:'POST',headers:{'Content-Type':'application/json','X-Router-Panel':'1'},body:JSON.stringify({curl:$('#openfluxCurl').value,upload})});
+  if(d.package){const blob=new Blob([JSON.stringify(d.package)],{type:'application/json'}),url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=d.filename;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
+  $('#openfluxCurl').value='';result.textContent=d.message;
+ }catch(e){result.textContent=e.message;}
+}
+$('#openfluxRecoveryDownload').onclick=()=>openfluxRecovery(false);
+$('#openfluxRecoverySend').onclick=()=>openfluxRecovery(true);
+'''
+
+def patch_recovery(text):
+    if 'id="openfluxServerRecovery"' in text:return text
+    text=replace(text,COOKIE_HTML,COOKIE_HTML+RECOVERY_HTML)
+    text=replace(text,COOKIE_JS,COOKIE_JS+RECOVERY_JS)
+    marker="$('#openfluxLastFailure').textContent=of.last_failure?'Last authentication issue: '+new Date(of.last_failure.at*1000).toLocaleString()+' — '+of.last_failure.reason:'';"
+    text=replace(text,marker,marker+"\n  $('#openfluxRecoveryDownload').disabled=!of.recovery_sender_ready;\n  $('#openfluxRecoverySend').disabled=!of.recovery_upload_ready;\n  const peer=of.server_authentication||{}, ps=peer.status||{};\n  $('#openfluxServerState').textContent='Server authentication: '+(peer.stale?'Unknown — no fresh verified response':({connected:'Connected',connecting:'Connecting',auth_blocked:'AUTH_BLOCKED — update server cookies',auth_failed:'Authentication failed on server',stopped:'Stopped'})[peer.state]||'Unknown')+(peer.reported_at?' · Last response: '+new Date(peer.reported_at*1000).toLocaleString():'');\n  $('#openfluxServerFailure').textContent=ps.last_failure?'Last server authentication issue: '+new Date(ps.last_failure.at*1000).toLocaleString()+' — '+ps.last_failure.reason:'';")
+    text=text.replace("'Last authentication issue: '","'Last client authentication issue: '")
+    return text
+
 def replace(text,old,new):
     if text.count(old)!=1:raise ValueError('Patch context count '+str(text.count(old))+': '+old[:80])
     return text.replace(old,new)
@@ -33,7 +66,7 @@ def patch_core(text):
     return text
 
 def patch_panel(text):
-    if 'import openflux_auth' in text:return text
+    if 'import openflux_auth' in text:return patch_recovery(text)
     text=replace(text,'import panel_updates as updater_ui','import panel_updates as updater_ui\nimport openflux_auth')
     text=replace(text,'"openflux":{"client_active":','"openflux":{**openflux_auth.snapshot(), "client_active":')
     text=replace(text,'    def do_POST(self):\n','    def do_POST(self):\n        if openflux_auth.post(self):return\n')
@@ -45,4 +78,4 @@ def patch_panel(text):
     text=replace(text,old,"dot('#openfluxDot',of.state==='connected'?'ok':of.state==='connecting'?'warn':'bad');")
     text=replace(text,"$('#openfluxHealth').textContent=s.mode==='openflux'?(s.health?.summary||''):'';", "$('#openfluxHealth').textContent=(of.reason||'')+(s.mode==='openflux'?' · '+(s.health?.summary||''):'');\n  $('#openfluxLastFailure').textContent=of.last_failure?'Last authentication issue: '+new Date(of.last_failure.at*1000).toLocaleString()+' — '+of.last_failure.reason:'';")
     text=replace(text,'refreshNetwork();setInterval(refreshNetwork,5000);',COOKIE_JS+'\nrefreshNetwork();setInterval(refreshNetwork,5000);')
-    return text
+    return patch_recovery(text)

@@ -37,3 +37,18 @@ def unseal(envelope,server_private,sender_public,seen,now=None):
     curl=payload.get('curl')
     if not isinstance(curl,str) or not 1<=len(curl.encode())<=131072:raise ValueError('Invalid cookie payload')
     return curl,ident
+
+def sign_status(status,server_private,now=None):
+    """Publish operational status only; never cookies, URLs, arguments or tokens."""
+    safe={k:status[k] for k in ('state','reason','active','needs_cookies','last_failure') if k in status}
+    value={'schema':'openflux-server-status-v1','created':int(time.time() if now is None else now),'status':safe}
+    value['signature']=encode(server_private.sign(canonical(value),padding.PSS(mgf=padding.MGF1(hashes.SHA256()),salt_length=padding.PSS.MAX_LENGTH),hashes.SHA256()))
+    return value
+
+def verify_status(value,server_public,now=None):
+    if not isinstance(value,dict) or len(canonical(value))>16000:raise ValueError('Invalid server status')
+    signed=dict(value);signature=signed.pop('signature',None)
+    server_public.verify(decode(signature),canonical(signed),padding.PSS(mgf=padding.MGF1(hashes.SHA256()),salt_length=padding.PSS.MAX_LENGTH),hashes.SHA256())
+    now=int(time.time() if now is None else now);created=signed.get('created')
+    if signed.get('schema')!='openflux-server-status-v1' or not isinstance(created,int) or created>now+120 or not isinstance(signed.get('status'),dict):raise ValueError('Invalid server status timestamp')
+    return {'state':signed['status'].get('state','unknown'),'status':signed['status'],'reported_at':created,'stale':now-created>180}

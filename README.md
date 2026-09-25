@@ -1,5 +1,8 @@
 # OpenFlux-mod
 
+Install OpenFlux on a Linux client or server, update releases, and configure cookie recovery:
+[Installation and operation guide](integration/README.md). No Windows helper or particular router setup is required.
+
 Private downstream of `p1neappleXpress/OpenFlux` used for the maintained OpenFlux production line.
 
 Repository model:
@@ -125,4 +128,3 @@ Third-party licenses are listed in [NOTICE](NOTICE).
 ## Disclaimer
 
 Educational use only. Test on your own machines and networks.
-
