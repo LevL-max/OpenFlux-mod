@@ -19,9 +19,12 @@ EVENTS = [
  ('AUTH_BLOCKED cleared','connecting','Fresh cookies loaded. Reconnecting…'),
  ('AUTH_BLOCKED','auth_blocked','Authentication blocked. Refresh browser cookies to reconnect.'),
  ('CAPTCHA_REQUIRED','auth_blocked','Yandex requires browser verification. Refresh cookies.'),
- ('Document authentication not accepted','auth_failed','OnlyOffice authentication failed. Retrying; refresh cookies if this persists.'),
+ ('AUTH_REJECTED:','auth_failed','Server rejected document authentication. Refresh cookies if this persists.'),
+ ('AUTH_WAIT_TIMEOUT:','connecting','Authentication handshake timed out. Retrying; cookie expiry is not confirmed.'),
+ ('AUTH_HANDSHAKE_INTERRUPTED:','connecting','Authentication handshake was interrupted. Retrying; cookie expiry is not confirmed.'),
+ ('Document authentication not accepted','connecting','Authentication handshake did not complete. Retrying; cookie expiry is not confirmed.'),
  ('Authentication failed','auth_failed','Authentication failed. Refresh browser cookies if this persists.'),
- ('Auth response read failed','auth_failed','Authentication response failed. Retrying…'),
+ ('Auth response read failed','connecting','Authentication response was interrupted. Retrying; cookie expiry is not confirmed.'),
  ('Read error:','connecting','Connection interrupted. Reconnecting…'),
  ('WebSocket dial failed','connecting','Connection attempt failed. Retrying…'),
  ('fetchDocInfo failed','connecting','Yandex bootstrap failed. Retrying…'),
@@ -67,6 +70,9 @@ def snapshot():
 def _status():
     try:previous=json.loads(STATE.read_text())
     except (OSError,ValueError):previous={}
+    failure=previous.get('last_failure') or {}
+    if failure.get('reason') in ('OnlyOffice authentication failed. Retrying; refresh cookies if this persists.','Authentication response failed. Retrying…'):
+        failure['reason']='Previous authentication handshake did not complete; this did not confirm expired cookies.'
     active,invocation=runtime()
     same=previous.get('invocation')==invocation
     out=dict(previous) if same else {'last_failure':previous.get('last_failure')}
