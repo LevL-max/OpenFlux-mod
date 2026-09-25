@@ -70,3 +70,54 @@ func TestParseCookieHeaderKeepsEqualsInValue(t *testing.T) {
 		t.Fatalf("unexpected parsed cookies: %#v", got)
 	}
 }
+
+
+func TestCookieStoreFingerprintChanges(t *testing.T) {
+	dir := t.TempDir()
+	store := filepath.Join(dir, "cookies.json")
+
+	before, err := cookieStoreFingerprint(store)
+	if err != nil {
+		t.Fatalf("initial fingerprint failed: %v", err)
+	}
+	if before != "missing" {
+		t.Fatalf("initial fingerprint = %q, want missing", before)
+	}
+
+	if err := os.WriteFile(store, []byte(`{"one":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	after, err := cookieStoreFingerprint(store)
+	if err != nil {
+		t.Fatalf("updated fingerprint failed: %v", err)
+	}
+	if after == before || after == "" {
+		t.Fatalf("fingerprint did not change: before=%q after=%q", before, after)
+	}
+}
+
+func TestReloadCookieStorePicksUpExternalUpdate(t *testing.T) {
+	dir := t.TempDir()
+	storePath := filepath.Join(dir, "cookies.json")
+	docURL := "https://disk.yandex.ru/i/test"
+
+	tr := NewYandexDocsTransport(docURL, transport.DefaultConfig())
+	if err := tr.SetCookieStore(storePath); err != nil {
+		t.Fatalf("SetCookieStore failed: %v", err)
+	}
+
+	external, err := transport.NewCookieStore(storePath)
+	if err != nil {
+		t.Fatalf("NewCookieStore failed: %v", err)
+	}
+	if err := external.Save(docURL, map[string]string{"fresh": "2", "token": "abc=="}); err != nil {
+		t.Fatalf("external Save failed: %v", err)
+	}
+
+	if err := tr.reloadCookieStore(); err != nil {
+		t.Fatalf("reloadCookieStore failed: %v", err)
+	}
+	if tr.browserCookie != "fresh=2; token=abc==" {
+		t.Fatalf("reloaded cookie header = %q", tr.browserCookie)
+	}
+}
