@@ -39,9 +39,21 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -o dist/openflux .
-          sha256sum dist/openflux | tee dist/SHA256SUMS
+          go build -trimpath -o dist/volga-probe ./cmd/volga-probe
+          sha256sum dist/openflux dist/volga-probe | tee dist/SHA256SUMS
           printf 'git_commit=%s\n' "$GITHUB_SHA" > dist/BUILD-METADATA
           printf 'go_version=%s\n' "$(go version)" >> dist/BUILD-METADATA
+
+      - name: Volga probe CLI smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          ./dist/volga-probe >/tmp/volga-probe.out 2>/tmp/volga-probe.err
+          rc=$?
+          set -e
+          test "$rc" -eq 2
+          grep -Fq 'Usage: volga-probe <classify|auth|ws>' /tmp/volga-probe.err
 
       - name: Upload Linux amd64 artifact
         uses: actions/upload-artifact@v4
@@ -49,6 +61,7 @@ jobs:
           name: openflux-linux-amd64-${{ github.sha }}
           path: |
             dist/openflux
+            dist/volga-probe
             dist/SHA256SUMS
             dist/BUILD-METADATA
           if-no-files-found: error
