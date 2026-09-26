@@ -103,6 +103,28 @@ change those using their established deployment configuration when switching tra
 
 ## 4. Optional Yandex Disk backup channel — any installation
 
+On an existing Router Panel, the integration installer also extends **Configuration
+Files** with individual Download / Upload entries for the node profile, updater
+settings, Disk OAuth token, server public key, client private/public signing keys
+and client cookie store. Existing bridge, document URL and transport entries have
+short descriptions. Only installed files are listed. Token downloads use the name
+`disk-token.txt`; key files use PEM.
+
+Uploads validate the format, reject stale revisions and save backups under
+`/var/backups/router-configs`. Document URL changes synchronize the runner env and
+node profile; release-channel changes synchronize the profile and router updater.
+Managed executable/service paths and settings of unrelated components cannot be
+changed through the OpenFlux profile upload. Importing a client private key derives
+its matching public key; the server must trust that public key. A public-key-only
+upload must match the existing private key. Tokens, private keys and cookies are
+secret files, downloaded only through the panel's existing LAN access policy.
+
+Uploads do not restart services. Document/transport/bridge changes need an explicit
+OpenFlux restart. Recovery settings are read by subsequent operations, and a blocked
+client reloads changed cookies automatically. No server SSH configuration is added.
+For an existing older panel, run the integration installer once (`install.py
+--role client`) to add the UI hooks; future support updates preserve these hooks.
+
 This feature is available to a newly installed client/server, not just a Router Panel extension.
 Use it when inbound SSH to the server is unavailable. Both nodes still need outbound access
 to the Yandex Disk API. The document's browser cookies and the Disk OAuth token are separate
