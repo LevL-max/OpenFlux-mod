@@ -110,7 +110,7 @@ def extract_bundle(archive,destination):
             (destination/name).write_bytes(content)
     if not set(MODULES).issubset(found):raise ValueError('Incomplete integration bundle')
 
-def support_paths():return [('runner',RUNNER),('helper',HELPER),('cookie-dropin',DROPIN),('node-control',LIBDIR/'openflux_node.py')]+[('integration-'+name,LIBDIR/name) for name in MODULES]
+def support_paths():return [('runner',RUNNER),('helper',HELPER),('cookie-dropin',DROPIN),('node-control',LIBDIR/'openflux_node.py'),('router-panel',pathlib.Path('/usr/local/lib/router-panel/router-panel.py'))]+[('integration-'+name,LIBDIR/name) for name in MODULES]
 
 def backup_files(core,checkpoint):
     records={}
@@ -163,6 +163,15 @@ def install_support(core,source,metadata):
             node=source.parent/NODE_ASSET
             if core.sha(node)!=metadata['assets'][NODE_ASSET]['sha256']:raise ValueError('Node updater checksum changed')
             compile(node.read_text(),NODE_ASSET,'exec');core.atomic_binary(node,LIBDIR/'openflux_node.py')
+        # Use the newly extracted module, not an older module cached by the updater.
+        import importlib.util
+        spec=importlib.util.spec_from_file_location('openflux_new_router_integration',source.parent/'integration'/'router_integration.py')
+        integration=importlib.util.module_from_spec(spec);spec.loader.exec_module(integration)
+        panel=pathlib.Path('/usr/local/lib/router-panel/router-panel.py')
+        if panel.exists():
+            patched=integration.patch_panel(panel.read_text());compile(patched,str(panel),'exec')
+            staged=source.parent/'panel-new';staged.write_text(patched)
+            core.atomic_binary(staged,panel);os.chmod(panel,0o644)
         core.run(['systemctl','try-restart','router-panel.service'],record=False)
 
 def health(core,seconds=100):
