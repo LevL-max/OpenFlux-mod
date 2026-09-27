@@ -80,6 +80,9 @@ var (
 	ErrLoginRequired   = errors.New("yandex docs: login required")
 )
 
+// cursorPayloadRe runs on every inbound message, so it is compiled once.
+var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
+
 const defaultYandexUserAgent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0"
 
 func NewYandexDocsTransport(url string, config transport.TransportConfig) *YandexDocsTransport {
@@ -430,30 +433,50 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 }
 
 func (t *YandexDocsTransport) writerLoop() {
-	for t.IsRunning() {
-		t.Mu.Lock()
-		session := t.session
-		t.Mu.Unlock()
+	t.Mu.RLock()
+	session := t.session
+	t.Mu.RUnlock()
+	if session == nil {
+		return
+	}
+	// Reconnects reuse the first session's queue, so wait on it instead of
+	// polling: a 10 ms idle poll delayed the first packet after every pause.
+	queue := session.WriteQueue
+	idle := time.NewTicker(time.Second)
+	defer idle.Stop()
 
-		if session == nil || session.Conn == nil || !t.IsConnected() {
-			time.Sleep(10 * time.Millisecond)
+	for t.IsRunning() {
+		var packet []byte
+		select {
+		case packet = <-queue:
+		case <-idle.C:
 			continue
 		}
 
-		select {
-		case packet := <-session.WriteQueue:
-			payload := base64.StdEncoding.EncodeToString(packet)
-			msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, payload)
-
-			if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
-				t.perfWriteErrors.Add(1)
-				utils.Debugf("[YDOCS] Write error: %v", err)
-			} else {
-				t.perfWSWrites.Add(1)
-				t.perfWSBytes.Add(uint64(len(msg)))
+		// While a reconnect is in progress the packet waits here, as it
+		// previously waited in the queue.
+		for {
+			t.Mu.RLock()
+			session = t.session
+			t.Mu.RUnlock()
+			if session != nil && session.Conn != nil && t.IsConnected() {
+				break
 			}
-		default:
+			if !t.IsRunning() {
+				return
+			}
 			time.Sleep(10 * time.Millisecond)
+		}
+
+		payload := base64.StdEncoding.EncodeToString(packet)
+		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, payload)
+
+		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
+			t.perfWriteErrors.Add(1)
+			utils.Debugf("[YDOCS] Write error: %v", err)
+		} else {
+			t.perfWSWrites.Add(1)
+			t.perfWSBytes.Add(uint64(len(msg)))
 		}
 	}
 }
@@ -622,8 +645,7 @@ func (t *YandexDocsTransport) extractBase64String(response string) string {
 		return response[left : left+right]
 	}
 
-	re := regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
-	matches := re.FindStringSubmatch(response)
+	matches := cursorPayloadRe.FindStringSubmatch(response)
 	if len(matches) > 1 {
 		return matches[1]
 	}
@@ -983,13 +1005,23 @@ func (t *YandexDocsTransport) solveFirstTierCaptcha(docURL, userAgent string) er
 		return err
 	}
 
-	for _, raw := range []string{"https://disk.yandex.ru/", "https://docs.yandex.ru/"} {
-		u, _ := url.Parse(raw)
-		for _, cookie := range jar.Cookies(u) {
+	for _, host := range captchaCookieHosts(doc) {
+		for _, cookie := range jar.Cookies(&url.URL{Scheme: "https", Host: host, Path: "/"}) {
 			values[cookie.Name] = cookie.Value
 		}
 	}
 	return t.updateCookieState(values)
+}
+
+// captchaCookieHosts returns the document host and its editor host, where the
+// solved captcha sets its cookies: disk.yandex.ru and docs.yandex.ru, or the
+// .com pair for a .com document.
+func captchaCookieHosts(doc *url.URL) []string {
+	hosts := []string{doc.Hostname()}
+	if labels := strings.Split(doc.Hostname(), "."); len(labels) >= 3 {
+		hosts = append(hosts, "docs."+strings.Join(labels[1:], "."))
+	}
+	return hosts
 }
 
 func siteCookies(u *url.URL, values map[string]string) []*http.Cookie {

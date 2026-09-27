@@ -1,8 +1,9 @@
 package tunnel
 
 import (
+	"encoding/binary"
 	"fmt"
-	"net"
+	"log"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -16,6 +17,11 @@ import (
 	"universal-bypass-tool/utils"
 )
 
+const (
+	rawSocketBufferBytes = 4 << 20
+	localIPRefreshPeriod = 5 * time.Second
+)
+
 type RawSocketEndpoint struct {
 	dispatcher      stack.NetworkDispatcher
 	sendFd          int
@@ -26,6 +32,9 @@ type RawSocketEndpoint struct {
 	outgoingSYNs    sync.Map
 	activePorts     sync.Map
 	sendToTransport func([]byte)
+	localIP         atomic.Uint32
+	closeOnce       sync.Once
+	closed          chan struct{}
 }
 
 func NewRawSocketEndpoint(nicID tcpip.NICID) (*RawSocketEndpoint, error) {
@@ -55,14 +64,53 @@ func NewRawSocketEndpoint(nicID tcpip.NICID) (*RawSocketEndpoint, error) {
 		return nil, fmt.Errorf("bind failed: %v", err)
 	}
 
+	setRawSocketBuffer(sendFd, syscall.SO_SNDBUFFORCE, syscall.SO_SNDBUF)
+	setRawSocketBuffer(recvFd, syscall.SO_RCVBUFFORCE, syscall.SO_RCVBUF)
+	rcv, _ := syscall.GetsockoptInt(recvFd, syscall.SOL_SOCKET, syscall.SO_RCVBUF)
+	snd, _ := syscall.GetsockoptInt(sendFd, syscall.SOL_SOCKET, syscall.SO_SNDBUF)
+	log.Printf("Raw socket buffers: receive=%d send=%d bytes", rcv, snd)
+
 	ep := &RawSocketEndpoint{
 		sendFd: sendFd,
 		recvFd: recvFd,
 		nicID:  nicID,
+		closed: make(chan struct{}),
 	}
+	ip, ok := detectLocalIPv4()
+	if !ok {
+		ip = fallbackLocalIP
+	}
+	ep.localIP.Store(binary.BigEndian.Uint32(ip[:]))
 
+	go ep.refreshLocalIP()
 	go ep.readLoop()
 	return ep, nil
+}
+
+// setRawSocketBuffer raises a raw socket buffer. Raw sockets get no kernel
+// auto-tuning, and the ~208 KiB default drops bursts from fast servers. The
+// FORCE option (CAP_NET_ADMIN) is not capped by net.core.rmem_max/wmem_max.
+func setRawSocketBuffer(fd, force, option int) {
+	if syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, force, rawSocketBufferBytes) != nil {
+		syscall.SetsockoptInt(fd, syscall.SOL_SOCKET, option, rawSocketBufferBytes)
+	}
+}
+
+// refreshLocalIP keeps the egress address current. It used to be resolved
+// with a UDP dial for every packet in both directions.
+func (e *RawSocketEndpoint) refreshLocalIP() {
+	ticker := time.NewTicker(localIPRefreshPeriod)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-e.closed:
+			return
+		case <-ticker.C:
+			if ip, ok := detectLocalIPv4(); ok {
+				e.localIP.Store(binary.BigEndian.Uint32(ip[:]))
+			}
+		}
+	}
 }
 
 func (e *RawSocketEndpoint) SetTransportSender(sendFunc func([]byte)) {
@@ -88,10 +136,8 @@ func (e *RawSocketEndpoint) readLoop() {
 
 		protocol := buf[9]
 		flags := buf[33]
-		dstIP := net.IP(buf[16:20])
-		localIP := getLocalIP()
 
-		if protocol == 6 && dstIP.String() == localIP {
+		if protocol == 6 && binary.BigEndian.Uint32(buf[16:20]) == e.localIP.Load() {
 			dstPort := uint16(buf[22])<<8 | uint16(buf[23])
 
 			if _, active := e.activePorts.Load(dstPort); !active {
@@ -147,10 +193,7 @@ func (e *RawSocketEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpi
 		pktCopy := make([]byte, len(ipPacket))
 		copy(pktCopy, ipPacket)
 
-		localIP := getLocalIP()
-		var localIPBytes [4]byte
-		fmt.Sscanf(localIP, "%d.%d.%d.%d", &localIPBytes[0], &localIPBytes[1], &localIPBytes[2], &localIPBytes[3])
-		copy(pktCopy[12:16], localIPBytes[:])
+		binary.BigEndian.PutUint32(pktCopy[12:16], e.localIP.Load())
 
 		pktCopy[10] = 0
 		pktCopy[11] = 0
@@ -212,6 +255,7 @@ func (e *RawSocketEndpoint) Wait()                                        {}
 func (e *RawSocketEndpoint) ARPHardwareType() header.ARPHardwareType      { return header.ARPHardwareNone }
 func (e *RawSocketEndpoint) AddHeader(*stack.PacketBuffer)                {}
 func (e *RawSocketEndpoint) Close() {
+	e.closeOnce.Do(func() { close(e.closed) })
 	syscall.Close(e.sendFd)
 	syscall.Close(e.recvFd)
 }

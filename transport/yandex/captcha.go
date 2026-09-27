@@ -100,6 +100,17 @@ func solveCaptcha(docURL string, jar http.CookieJar, userAgent string) (string, 
 	if err != nil {
 		return "", err
 	}
+	// The form posts back to the host that served the captcha: docs.yandex.ru
+	// for .ru documents, docs.yandex.com for .com ones.
+	page, err := url.Parse(captchaURL)
+	if err != nil {
+		return "", fmt.Errorf("captcha: page URL: %w", err)
+	}
+	action, err := page.Parse(formAction)
+	if err != nil {
+		return "", fmt.Errorf("captcha: form action: %w", err)
+	}
+	formAction = action.String()
 	utils.Debugf("[CAPTCHA] uniqueKey=%s timestamp=%d complexity=%d prefix=%s",
 		ssr.UniqueKey, ssr.Timestamp, ssr.Pow.Complexity, shortStr(ssr.Pow.Prefix, 32))
 
@@ -123,7 +134,7 @@ func solveCaptcha(docURL string, jar http.CookieJar, userAgent string) (string, 
 	req2, _ := http.NewRequest("POST", formAction, strings.NewReader(form.Encode()))
 	setBrowserHeaders(req2, userAgent)
 	req2.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req2.Header.Set("Origin", "https://docs.yandex.ru")
+	req2.Header.Set("Origin", page.Scheme+"://"+page.Host)
 	req2.Header.Set("Referer", captchaURL)
 
 	resp2, err := client.Do(req2)
@@ -185,10 +196,6 @@ func parseCaptchaHTML(html string) (*captchaSSRData, string, error) {
 		return nil, "", fmt.Errorf("captcha: form action not found")
 	}
 	formAction := strings.ReplaceAll(m2[1], "&amp;", "&")
-	if strings.HasPrefix(formAction, "/") {
-		formAction = "https://docs.yandex.ru" + formAction
-	}
-
 	return &ssr, formAction, nil
 }
 

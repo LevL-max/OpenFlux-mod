@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"sync"
 	"sync/atomic"
 
 	"gvisor.dev/gvisor/pkg/buffer"
@@ -14,6 +15,7 @@ import (
 )
 
 type TunnelLinkEndpoint struct {
+	mu               sync.RWMutex
 	dispatcher       stack.NetworkDispatcher
 	onOutgoingPacket func([]byte)
 	packetIn         atomic.Uint64
@@ -25,12 +27,24 @@ func NewTunnelLinkEndpoint() *TunnelLinkEndpoint {
 }
 
 func (e *TunnelLinkEndpoint) InjectInbound(data []byte) {
+	e.mu.RLock()
+	dispatcher := e.dispatcher
+	e.mu.RUnlock()
+	if dispatcher == nil {
+		return
+	}
 	e.packetIn.Add(1)
-	utils.Debugf("<- %d bytes - %s\n", len(data), network.ParsePacketInfo(data))
+	// Arguments are evaluated even when the line is not printed.
+	if utils.IsPacketTrace() {
+		utils.Debugf("<- %d bytes - %s\n", len(data), network.ParsePacketInfo(data))
+	}
+	// MakeWithData copies into a pooled chunk; DecRef returns it to the pool
+	// once the stack has taken the references it keeps.
 	pkt := stack.NewPacketBuffer(stack.PacketBufferOptions{
-		Payload: buffer.MakeWithData(append([]byte{}, data...)),
+		Payload: buffer.MakeWithData(data),
 	})
-	e.dispatcher.DeliverNetworkPacket(ipv4.ProtocolNumber, pkt)
+	dispatcher.DeliverNetworkPacket(ipv4.ProtocolNumber, pkt)
+	pkt.DecRef()
 }
 
 func (e *TunnelLinkEndpoint) WritePackets(pkts stack.PacketBufferList) (int, tcpip.Error) {
@@ -51,9 +65,15 @@ func (e *TunnelLinkEndpoint) MaxHeaderLength() uint16                      { ret
 func (e *TunnelLinkEndpoint) LinkAddress() tcpip.LinkAddress               { return "\x02\x00\x00\x00\x00\x01" }
 func (e *TunnelLinkEndpoint) Capabilities() stack.LinkEndpointCapabilities { return stack.CapabilityNone }
 func (e *TunnelLinkEndpoint) Attach(dispatcher stack.NetworkDispatcher) {
+	e.mu.Lock()
 	e.dispatcher = dispatcher
+	e.mu.Unlock()
 }
-func (e *TunnelLinkEndpoint) IsAttached() bool                             { return e.dispatcher != nil }
+func (e *TunnelLinkEndpoint) IsAttached() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.dispatcher != nil
+}
 func (e *TunnelLinkEndpoint) Wait()                                        {}
 func (e *TunnelLinkEndpoint) ARPHardwareType() header.ARPHardwareType      { return header.ARPHardwareNone }
 func (e *TunnelLinkEndpoint) AddHeader(*stack.PacketBuffer)                {}

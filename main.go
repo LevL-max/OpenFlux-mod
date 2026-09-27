@@ -30,6 +30,7 @@ func main() {
 	exitNode := flag.Bool("exit-node", false, "Run as exit node (needs root)")
 	client := flag.Bool("client", false, "Run as client")
 	debug := flag.Bool("debug", false, "Enable verbose debug logging")
+	tracePackets := flag.Bool("trace-packets", false, "With --debug, also log every tunnel packet")
 	statusEvents := flag.Bool("status-events", true, "Emit safe authentication and connection status events")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, google, custom)")
@@ -55,6 +56,9 @@ func main() {
 
 	if *debug {
 		utils.EnableDebug()
+	}
+	if *tracePackets {
+		utils.EnablePacketTrace()
 	}
 
 	log.Printf("=== Universal Bypass Tool ===")
