@@ -186,12 +186,28 @@ func (t *TCPTunnel) printStats() {
 	}
 }
 
-func getLocalIP() string {
+// fallbackLocalIP is used when the egress address cannot be determined.
+var fallbackLocalIP = [4]byte{192, 168, 1, 100}
+
+// detectLocalIPv4 returns the source address the kernel would use for
+// Internet traffic. Dialing UDP sends no packets.
+func detectLocalIPv4() ([4]byte, bool) {
 	conn, err := net.Dial("udp", "8.8.8.8:80")
 	if err != nil {
-		return "192.168.1.100"
+		return [4]byte{}, false
 	}
 	defer conn.Close()
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
+	ip := conn.LocalAddr().(*net.UDPAddr).IP.To4()
+	if ip == nil {
+		return [4]byte{}, false
+	}
+	return [4]byte(ip), true
+}
+
+func getLocalIP() string {
+	ip, ok := detectLocalIPv4()
+	if !ok {
+		ip = fallbackLocalIP
+	}
+	return net.IP(ip[:]).String()
 }

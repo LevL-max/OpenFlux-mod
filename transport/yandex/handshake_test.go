@@ -72,7 +72,7 @@ func TestCoeditingAcknowledgmentRequiresWaitAuth(t *testing.T) {
 	}
 }
 
-func handshakePeer(t *testing.T, serve func(*websocket.Conn)) *DocSession {
+func handshakePeer(t testing.TB, serve func(*websocket.Conn)) *DocSession {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
