@@ -1005,13 +1005,23 @@ func (t *YandexDocsTransport) solveFirstTierCaptcha(docURL, userAgent string) er
 		return err
 	}
 
-	for _, raw := range []string{"https://disk.yandex.ru/", "https://docs.yandex.ru/"} {
-		u, _ := url.Parse(raw)
-		for _, cookie := range jar.Cookies(u) {
+	for _, host := range captchaCookieHosts(doc) {
+		for _, cookie := range jar.Cookies(&url.URL{Scheme: "https", Host: host, Path: "/"}) {
 			values[cookie.Name] = cookie.Value
 		}
 	}
 	return t.updateCookieState(values)
+}
+
+// captchaCookieHosts returns the document host and its editor host, where the
+// solved captcha sets its cookies: disk.yandex.ru and docs.yandex.ru, or the
+// .com pair for a .com document.
+func captchaCookieHosts(doc *url.URL) []string {
+	hosts := []string{doc.Hostname()}
+	if labels := strings.Split(doc.Hostname(), "."); len(labels) >= 3 {
+		hosts = append(hosts, "docs."+strings.Join(labels[1:], "."))
+	}
+	return hosts
 }
 
 func siteCookies(u *url.URL, values map[string]string) []*http.Cookie {
