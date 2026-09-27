@@ -34,8 +34,8 @@ func (e *TunnelLinkEndpoint) InjectInbound(data []byte) {
 		return
 	}
 	e.packetIn.Add(1)
-	// Arguments are evaluated even when debug logging is off.
-	if utils.IsVerbose() {
+	// Arguments are evaluated even when the line is not printed.
+	if utils.IsPacketTrace() {
 		utils.Debugf("<- %d bytes - %s\n", len(data), network.ParsePacketInfo(data))
 	}
 	// MakeWithData copies into a pooled chunk; DecRef returns it to the pool
