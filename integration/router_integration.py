@@ -280,6 +280,8 @@ VOLGA_DATA = '/var/lib/openflux-volga'
 VOLGA_BINARY = '/opt/openflux-volga/openflux-volga'
 VOLGA_UNIT = 'openflux-volga-client.service'
 VOLGA_CONTAINER = 'openflux-volga'
+VOLGA_IMAGE_REPOSITORY = 'ghcr.io/levl-max/openflux-mod-volga'
+CONFIG_BACKUPS = 3
 
 def validate_volga_manifest(value, version, digest):
     import re
@@ -386,7 +388,10 @@ class VolgaRuntime:
     def configure(self,value):
         import os,pwd,time
         validate_volga_config(value,self.node()['role'])
-        if self.config_path.exists():self.save(self.state/('config-backup-'+str(time.time_ns())+'.json'),self.read(self.config_path))
+        if self.config_path.exists():
+            self.save(self.state/('config-backup-'+str(time.time_ns())+'.json'),self.read(self.config_path))
+            # Backups hold the shared key: keep only the newest few.
+            for old in sorted(self.state.glob('config-backup-*.json'))[:-CONFIG_BACKUPS]:old.unlink(missing_ok=True)
         self.save(self.config_path,value)
         self.data.mkdir(parents=True,exist_ok=True,mode=0o700)
         for name,default in [('cookies.json',{}),('browser.json',{'headers':{},'editors':{}})]:
@@ -772,9 +777,15 @@ class VolgaRuntime:
 
     def prune_server_containers(self,keep):
         # One previous container is enough for a rollback; older ones only use disk.
-        names=self.run(['docker','ps','-a','--filter','label=io.openflux.managed=volga','--format','{{.Names}}'],check=False).stdout.split()
-        for name in names:
+        managed=lambda:self.run(['docker','ps','-a','--filter','label=io.openflux.managed=volga','--format','{{.Names}}'],check=False).stdout.split()
+        for name in managed():
             if name.startswith('openflux-volga-backup-') and name!=keep:self.run(['docker','rm','-f',name],check=False)
+        # Every release loads a new image; keep only those the remaining containers
+        # use. Without -f Docker refuses to remove an image that is still in use.
+        used={self.run(['docker','inspect','--format={{.Image}}',name],check=False).stdout.strip() for name in managed()}
+        for line in self.run(['docker','images','--no-trunc','--format','{{.ID}} {{.Repository}}'],check=False).stdout.splitlines():
+            image,_,repository=line.partition(' ')
+            if repository==VOLGA_IMAGE_REPOSITORY and image not in used:self.run(['docker','image','rm',image],check=False)
 
     def select(self,transport):
         if transport not in ('yandex','volga'):raise ValueError('This protocol is not installed or supported')
@@ -946,9 +957,8 @@ $('#volgaCookies').onclick=()=>volgaCookies('import');$('#volgaRecoveryDownload'
 
 VOLGA_HOOK_V1="\n  const vp=of.protocols?.volga||{}, selected=of.active_transport||'yandex';\n  if(document.activeElement!==$('#openfluxProtocol'))$('#openfluxProtocol').value=selected;\n  $('#openfluxCookies').hidden=selected==='volga';$('#openfluxServerRecovery').hidden=selected==='volga';\n  const vd=$('#volgaDocument'), oldDocument=vd.value, docs=vp.documents||[];\n  if(JSON.stringify([...vd.options].map(o=>o.value))!==JSON.stringify(docs)){vd.replaceChildren(...docs.map((u,i)=>{const o=document.createElement('option');o.value=u;o.textContent='Document '+(i+1)+' · '+u;return o;}));if(docs.includes(oldDocument))vd.value=oldDocument;}\n"
 
-# Volga is updated with OpenFlux in Router Updater and its file lives under
-# Configuration; this card keeps protocol selection, cookies and first setup.
-VOLGA_HTML='''
+# rc3 Volga blocks, kept verbatim so those panels can be migrated.
+VOLGA_HTML_V2='''
   <div id="openfluxProtocolControls" class="row" style="margin-top:12px" data-volga-panel="2">
    <label>Protocol <select id="openfluxProtocol"><option value="yandex">Yandex Legacy</option><option value="volga">Volga</option></select></label>
    <button id="openfluxProtocolApply">Apply protocol</button>
@@ -967,7 +977,7 @@ VOLGA_HTML='''
    <p class="small" id="volgaCookieResult" role="status"></p>
   </details>'''
 
-VOLGA_JS='''
+VOLGA_JS_V2='''
 async function volgaPost(path,body){return api('/api/openflux/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Router-Panel':'1'},body:JSON.stringify(body)});}
 function volgaDownload(data,name){const u=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
 $('#openfluxProtocolApply').onclick=async()=>{if($('#openfluxProtocol').value==='volga'&&!confirm('Volga works on one mini-PC at a time. Is OpenFlux/Volga stopped on the other mini-PC?'))return;const b=$('#openfluxProtocolApply'),r=$('#openfluxProtocolResult');b.disabled=true;r.textContent='Checking connection; previous protocol will return if it fails…';try{const d=await volgaPost('protocol',{protocol:$('#openfluxProtocol').value});r.textContent=d.message;refresh();}catch(e){r.textContent=e.message;}finally{b.disabled=false;}};
@@ -977,7 +987,81 @@ async function volgaCookies(operation){const r=$('#volgaCookieResult');r.textCon
 $('#volgaCookies').onclick=()=>volgaCookies('import');$('#volgaRecoveryDownload').onclick=()=>volgaCookies('package');$('#volgaRecoverySend').onclick=()=>volgaCookies('send');
 '''
 
-VOLGA_HOOK=VOLGA_HOOK_V1+"  $('#volgaSetup').hidden=!!vp.configured;\n"
+VOLGA_HOOK_V2=VOLGA_HOOK_V1+"  $('#volgaSetup').hidden=!!vp.configured;\n"
+
+# One "browser cookies" section per protocol: this mini-PC's and the server's
+# state, the document links and every cookie action. Both stay visible because
+# the server needs fresh cookies for either protocol, whichever one is selected.
+VOLGA_HTML='''
+  <div id="openfluxProtocolControls" class="row" style="margin-top:12px" data-volga-panel="3">
+   <label>Protocol <select id="openfluxProtocol"><option value="yandex">Yandex Legacy</option><option value="volga">Volga</option></select></label>
+   <button id="openfluxProtocolApply">Apply protocol</button>
+   <span class="small" id="openfluxProtocolResult" role="status"></span>
+  </div>
+  <p class="small" id="volgaOneDevice" role="note" style="margin:8px 0 0;padding:6px 10px;border-left:4px solid #d97706;background:rgba(217,119,6,.14)"><b>Volga: one mini-PC at a time.</b> Stop OpenFlux/Volga on the other mini-PC before selecting Volga here. A second mini-PC ends the first one&#39;s session.</p>
+  <details id="openfluxCookies" style="margin-top:12px">
+   <summary style="cursor:pointer">Legacy browser cookies<span class="small" id="openfluxCookieBadge"></span></summary>
+   <div id="openfluxDocLinks" style="margin-top:8px"></div>
+   <div class="small" id="openfluxLastFailure" style="margin-top:4px"></div>
+   <div class="small" id="openfluxServerState" style="margin-top:4px">Server authentication: checking…</div>
+   <div class="small" id="openfluxServerFailure"></div>
+   <p class="small">Open the document in Chrome/Edge and complete any verification. Press F12 → Network, reload the document, right-click its request → Copy → Copy as cURL (bash) and paste it below.</p>
+   <textarea id="openfluxCurl" rows="5" autocomplete="off" spellcheck="false" placeholder="Paste Copy as cURL (bash)…" style="width:100%;box-sizing:border-box"></textarea>
+   <div class="row" id="openfluxServerRecovery" style="margin-top:10px"><button id="openfluxCookieBoth">Save here and send to server</button><button id="openfluxCookieImport">Save on this mini-PC only</button><button id="openfluxRecoverySend">Send to server only</button><button id="openfluxRecoveryDownload">Download encrypted server file</button></div>
+   <p class="small" id="openfluxCookieResult" role="status" aria-live="polite">No restart or reinstall required.</p>
+   <p class="small" id="openfluxRecoveryResult" role="status" aria-live="polite"></p>
+   <p class="small">The server copy is encrypted for the paired server and goes through your Yandex Disk folder; the server checks it once a minute. Pairing and the Disk path are configured with openfluxctl recovery.</p>
+  </details>
+  <details id="volgaSettings" style="margin-top:12px">
+   <summary style="cursor:pointer">Volga browser cookies<span class="small" id="volgaCookieBadge"></span></summary>
+   <div id="volgaDocLinks" style="margin-top:8px"></div>
+   <div class="small" id="volgaClientState" style="margin-top:4px"></div>
+   <div class="small" id="volgaServerState" style="margin-top:4px">Volga server: checking…</div>
+   <p class="small">Volga keeps its own cookies, separate from Legacy, for each of its two documents. Choose a document, open it in the browser, complete any verification and paste its Copy as cURL (bash); then repeat for the other document.</p>
+   <div class="row" id="volgaSetup" hidden><button id="volgaConfigDownload">Download Volga config template</button><label>Upload Volga config <input id="volgaConfigUpload" type="file" accept=".json"></label></div>
+   <p class="small" id="volgaUpdateResult" role="status"></p>
+   <label>Document <select id="volgaDocument"></select></label>
+   <textarea id="volgaCurl" rows="4" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box" placeholder="Copy as cURL (bash)"></textarea>
+   <div class="row"><button id="volgaCookieBoth">Save here and send to server</button><button id="volgaCookies">Save on this mini-PC only</button><button id="volgaRecoverySend">Send to server only</button><button id="volgaRecoveryDownload">Download encrypted server file</button></div>
+   <p class="small" id="volgaCookieResult" role="status"></p>
+   <p class="small">Volga is updated with OpenFlux in Router Updater; its configuration file (documents and shared key) is under Configuration.</p>
+  </details>'''
+
+# No backslashes or template literals: the panel embeds this in a Python string.
+VOLGA_JS=VOLGA_JS_V2+'''async function cookiesBoth(button,field,result,save,send){
+ const text=field.value;let saved=null;button.disabled=true;result.textContent='Saving on this mini-PC…';
+ try{saved=await save(text);result.textContent=saved.message+' Sending to the server…';const sent=await send(text);field.value='';result.textContent=saved.message+' '+sent.message;refresh();}
+ catch(e){result.textContent=(saved?'Saved on this mini-PC; sending to the server failed: ':'')+e.message;}finally{button.disabled=false;}
+}
+function cookieLinks(box,urls){
+ const key=JSON.stringify(urls);if(box.dataset.urls===key)return;box.dataset.urls=key;
+ box.replaceChildren(...urls.map((u,i)=>{const row=document.createElement('div');row.className='small';row.append((urls.length>1?'Document '+(i+1):'Document')+': ');
+  if(typeof u==='string'&&u.startsWith('https://')&&!u.includes(' ')){const a=document.createElement('a');a.href=u;a.target='_blank';a.rel='noopener noreferrer';a.textContent=u;row.append(a);}else row.append(String(u));
+  return row;}));
+}
+$('#openfluxCookieBoth').onclick=()=>cookiesBoth($('#openfluxCookieBoth'),$('#openfluxCurl'),$('#openfluxCookieResult'),t=>volgaPost('cookies',{curl:t}),t=>volgaPost('recovery',{curl:t,upload:true}));
+$('#volgaCookieBoth').onclick=()=>cookiesBoth($('#volgaCookieBoth'),$('#volgaCurl'),$('#volgaCookieResult'),t=>volgaPost('volga/cookies',{document:$('#volgaDocument').value,curl:t}),t=>volgaPost('volga/recovery',{document:$('#volgaDocument').value,curl:t,upload:true}));
+'''
+
+VOLGA_HOOK=VOLGA_HOOK_V1.replace("  $('#openfluxCookies').hidden=selected==='volga';$('#openfluxServerRecovery').hidden=selected==='volga';\n",'')+'''  $('#volgaSetup').hidden=!!vp.configured;
+  const legacyAuth=of.protocols?.yandex||of, volgaServer=vp.server_authentication||{};
+  const cookieServer=p=>!p.state||p.stale?'unknown':(({connected:'connected',connecting:'connecting',auth_blocked:'AUTH_BLOCKED',auth_failed:'authentication failed',stopped:'stopped'})[p.state]||p.state);
+  const cookieBadge=(el,active,client,server)=>{const warn=client==='auth_blocked'||(server.state==='auth_blocked'||server.state==='auth_failed')&&!server.stale;el.textContent=(active?' · selected':'')+' · '+(client==='auth_blocked'?'this mini-PC: AUTH_BLOCKED':'server: '+cookieServer(server));el.style.color=warn?'#d97706':'';el.style.fontWeight=warn?'600':'';};
+  cookieBadge($('#openfluxCookieBadge'),selected==='yandex',legacyAuth.state,legacyAuth.server_authentication||{});cookieBadge($('#volgaCookieBadge'),selected==='volga',vp.state,volgaServer);
+  cookieLinks($('#openfluxDocLinks'),legacyAuth.document_url?[legacyAuth.document_url]:[]);cookieLinks($('#volgaDocLinks'),docs);
+  $('#volgaClientState').textContent='This mini-PC: '+(!vp.configured?'Volga is not configured yet':({connected:'Connected',connecting:'Connecting',auth_blocked:'AUTH_BLOCKED — save fresh Volga cookies here',stopped:'Stopped'})[vp.state]||'Unknown');
+  $('#volgaServerState').textContent='Volga server: '+(!volgaServer.state||volgaServer.stale?'Unknown — no fresh verified response':({connected:'Running · client session active',connecting:'Running · waiting for a client',auth_blocked:'AUTH_BLOCKED — send fresh server cookies',stopped:'Stopped'})[volgaServer.state]||'Unknown')+(volgaServer.reported_at?' · Last response: '+new Date(volgaServer.reported_at*1000).toLocaleString():'');
+  $('#openfluxCookieBoth').disabled=$('#volgaCookieBoth').disabled=$('#volgaRecoverySend').disabled=!legacyAuth.recovery_upload_ready;$('#volgaRecoveryDownload').disabled=!legacyAuth.recovery_sender_ready;
+'''
+
+# Older status lines read the selected protocol's status. Both sections are
+# visible now, so the Legacy lines read Legacy's own status.
+LEGACY_STATUS_V3=(
+    ("$('#openfluxLastFailure').textContent=of.last_failure?'Last client authentication issue: '+new Date(of.last_failure.at*1000).toLocaleString()+' — '+of.last_failure.reason:'';",
+     "$('#openfluxLastFailure').textContent=legacyAuth.last_failure?'Last client authentication issue: '+new Date(legacyAuth.last_failure.at*1000).toLocaleString()+' — '+legacyAuth.last_failure.reason:'';"),
+    ("$('#openfluxRecoveryDownload').disabled=!of.recovery_sender_ready;","$('#openfluxRecoveryDownload').disabled=!legacyAuth.recovery_sender_ready;"),
+    ("$('#openfluxRecoverySend').disabled=!of.recovery_upload_ready;","$('#openfluxRecoverySend').disabled=!legacyAuth.recovery_upload_ready;"),
+    ("const peer=of.server_authentication||{}, ps=peer.status||{};","const peer=legacyAuth.server_authentication||{}, ps=peer.status||{};"))
 
 def patch_volga_panel(text):
     if 'const CFG_GROUPS=' in text:
@@ -987,21 +1071,28 @@ def patch_volga_panel(text):
         old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);"
         new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
         if new not in text:text=replace(text,old,new)
-    if 'data-volga-panel="2"' in text:return text
-    if 'id="openfluxProtocolControls"' in text:
-        # An rc1/rc2 panel: swap its Volga blocks; exact matches or no change at all.
-        return replace(replace(replace(text,VOLGA_HTML_V1,VOLGA_HTML),VOLGA_JS_V1,VOLGA_JS),VOLGA_HOOK_V1,VOLGA_HOOK)
-    text=replace(text,'import openflux_auth','import openflux_auth\nfrom router_integration import openflux_runtime_unit')
-    # Preserve card anchors and the existing bridge. Status queries follow the
-    # selected unit, including older panels using names without .service.
-    for literal in ('"openflux-yandex-client.service"',"'openflux-yandex-client.service'",'"openflux-yandex-client"',"'openflux-yandex-client'"):
-        text=text.replace(literal,'openflux_runtime_unit()')
-    marker='<div class="small" id="openfluxHealth" style="margin-top:8px"></div>'
-    text=replace(text,marker,marker+VOLGA_HTML)
-    marker="$('#openfluxState').textContent="
-    start=text.index(marker);end=text.index('\n',start)
-    text=text[:end]+VOLGA_HOOK+text[end:]
-    text=replace(text,'refreshNetwork();setInterval(refreshNetwork,5000);',VOLGA_JS+'\nrefreshNetwork();setInterval(refreshNetwork,5000);')
+    if 'data-volga-panel="3"' in text:return text
+    # The Legacy cookie sections sit right after the Volga block. Exact matches
+    # or no change at all: an unexpected layout makes the install roll back.
+    legacy=COOKIE_HTML+RECOVERY_HTML
+    if 'data-volga-panel="2"' in text:
+        text=replace(replace(replace(text,VOLGA_HTML_V2+legacy,VOLGA_HTML),VOLGA_JS_V2,VOLGA_JS),VOLGA_HOOK_V2,VOLGA_HOOK)
+    elif 'id="openfluxProtocolControls"' in text:
+        # An rc1/rc2 panel.
+        text=replace(replace(replace(text,VOLGA_HTML_V1+legacy,VOLGA_HTML),VOLGA_JS_V1,VOLGA_JS),VOLGA_HOOK_V1,VOLGA_HOOK)
+    else:
+        text=replace(text,'import openflux_auth','import openflux_auth\nfrom router_integration import openflux_runtime_unit')
+        # Preserve card anchors and the existing bridge. Status queries follow the
+        # selected unit, including older panels using names without .service.
+        for literal in ('"openflux-yandex-client.service"',"'openflux-yandex-client.service'",'"openflux-yandex-client"',"'openflux-yandex-client'"):
+            text=text.replace(literal,'openflux_runtime_unit()')
+        marker='<div class="small" id="openfluxHealth" style="margin-top:8px"></div>'
+        text=replace(text,marker+legacy,marker+VOLGA_HTML)
+        marker="$('#openfluxState').textContent="
+        start=text.index(marker);end=text.index('\n',start)
+        text=text[:end]+VOLGA_HOOK+text[end:]
+        text=replace(text,'refreshNetwork();setInterval(refreshNetwork,5000);',VOLGA_JS+'\nrefreshNetwork();setInterval(refreshNetwork,5000);')
+    for old,new in LEGACY_STATUS_V3:text=replace(text,old,new)
     return text
 
 def volga_panel_post(handler):

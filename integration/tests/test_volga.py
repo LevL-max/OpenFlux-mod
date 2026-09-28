@@ -1,4 +1,4 @@
-import hashlib,io,itertools,json,pathlib,tempfile,types,unittest
+import hashlib,io,itertools,json,pathlib,re,tempfile,types,unittest
 from unittest.mock import patch
 from cryptography.hazmat.primitives.asymmetric import rsa,ed25519
 from cryptography.hazmat.primitives import serialization
@@ -9,6 +9,31 @@ import recovery_crypto as crypto
 
 DOC='https://disk.yandex.ru/i/fixtureA'
 EDITOR='https://docs.yandex.ru/edit/d/fixture?from_public=1'
+# The anchors a Router Panel offers before any OpenFlux patch.
+BASE_PANEL='''import panel_updates as updater_ui
+import panel_extra
+class Handler:
+    def do_POST(self):
+        return
+def status():
+    return {"openflux":{"client_active":service_active("openflux-yandex-client.service")}}
+INDEX=r"""
+<div class="small" id="openfluxHealth" style="margin-top:8px"></div>
+<div class="small" style="overflow-wrap:anywhere">${esc(c.path)}</div><input accept=".json,.yaml,.yml,.conf,.env,.txt">
+<script>
+const CFG_GROUPS=[{id:'openflux',kinds:['openflux','url','env','openflux-node','openflux-updater'],modes:['openflux']}];
+const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);
+function render(s){
+  const of=s.openflux||{};
+  const ofReady=!!(of.client_active&&of.bridge_active&&s.interfaces?.oflux0);
+  $('#openfluxState').textContent=ofReady?'Ready':(of.client_active||of.bridge_active||s.interfaces?.oflux0?'Partial':'Stopped');
+  dot('#openfluxDot',s.mode==='openflux'?(s.health?.level||'checking'):(ofReady?'warn':'bad'));
+  $('#openfluxHealth').textContent=s.mode==='openflux'?(s.health?.summary||''):'';
+}
+refreshNetwork();setInterval(refreshNetwork,5000);
+</script>
+"""
+'''
 
 class VolgaTests(unittest.TestCase):
  def setUp(self):
@@ -104,19 +129,46 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(patch_runtime_selector(changed,python=True),changed)
   with self.assertRaises(ValueError):patch_runtime_selector('#!/bin/sh\necho unknown')
 
- def test_grouped_panel_keeps_groups_and_marks_volga_config_private(self):
-  source='''import openflux_auth
-  <div class="small" id="openfluxHealth" style="margin-top:8px"></div>
-  $('#openfluxState').textContent=of.state;
-  const CFG_GROUPS=[{id:'openflux',kinds:['openflux','url','env','openflux-node','openflux-updater'],modes:['openflux']}];
-  const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);
-  refreshNetwork();setInterval(refreshNetwork,5000);
-  '''
-  changed=patch_volga_panel(source)
-  self.assertEqual(patch_volga_panel(changed),changed)
+ def test_fresh_panel_gets_one_cookie_section_per_protocol(self):
+  changed=router_integration.patch_panel(BASE_PANEL);compile(changed,'router-panel','exec')
+  self.assertEqual(router_integration.patch_panel(changed),changed)
   self.assertIn("'openflux-updater','openflux-volga-config'],modes:['openflux']",changed)
   self.assertIn("'openflux-cookies','openflux-volga-config']);",changed)
-  self.assertEqual(changed.count('id="openfluxProtocolControls"'),1);self.assertEqual(changed.count('id="volgaOneDevice"'),1)
+  self.assertIn('data-volga-panel="3"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
+  for summary in ('>Legacy browser cookies<','>Volga browser cookies<'):self.assertEqual(changed.count(summary),1)
+  for retired in ('Update Yandex cookies','Server cookies via Yandex Disk',"hidden=selected==='volga'"):self.assertNotIn(retired,changed)
+  ids=re.findall(r'\bid="([^"]+)"',changed);self.assertEqual(len(ids),len(set(ids)))
+  # The one-mini-PC limitation stays visible next to the selector and is confirmed on Apply.
+  self.assertEqual(changed.count('id="volgaOneDevice"'),1);self.assertIn("confirm('Volga works on one mini-PC at a time.",changed)
+  # Both sections stay visible, so Legacy lines read Legacy's own status even while Volga is selected.
+  self.assertNotRegex(changed,r'\bof\.(last_failure|recovery_sender_ready|recovery_upload_ready|server_authentication)\b')
+  self.assertLess(changed.index('const legacyAuth=of.protocols?.yandex||of'),changed.index('legacyAuth.last_failure'))
+  # Document links are built with DOM calls from https URLs only; the panel embeds the JS in a Python string.
+  for unsafe in ('innerHTML','\\','`'):self.assertNotIn(unsafe,router_integration.VOLGA_JS[len(router_integration.VOLGA_JS_V2):])
+  self.assertIn("u.startsWith('https://')",router_integration.VOLGA_JS)
+
+ def test_rc2_and_rc3_panels_migrate_to_the_fresh_layout(self):
+  r=router_integration;fresh=r.patch_panel(BASE_PANEL)
+  def older(html,js,hook):
+   text=fresh.replace(r.VOLGA_HTML,html+r.COOKIE_HTML+r.RECOVERY_HTML).replace(r.VOLGA_JS,js).replace(r.VOLGA_HOOK,hook)
+   for old,new in r.LEGACY_STATUS_V3:text=text.replace(new,old)
+   return text
+  for name,html,js,hook in [('rc3',r.VOLGA_HTML_V2,r.VOLGA_JS_V2,r.VOLGA_HOOK_V2),('rc2',r.VOLGA_HTML_V1,r.VOLGA_JS_V1,r.VOLGA_HOOK_V1)]:
+   with self.subTest(name):
+    panel=older(html,js,hook);self.assertNotEqual(panel,fresh)
+    self.assertEqual(r.patch_panel(panel),fresh)
+    # An unexpected layout changes nothing: installation then rolls back.
+    with self.assertRaises(ValueError):r.patch_panel(panel.replace(r.COOKIE_HTML,r.COOKIE_HTML.replace('Copy as cURL','Copy')))
+
+ def test_panel_status_carries_the_legacy_document_link(self):
+  import openflux_auth as a
+  node=self.root/'node.json';env=self.root/'yandex.env'
+  with patch.object(a,'NODE_CONFIG',node),patch.object(a,'CLIENT_ENV',env),patch.object(a,'CLIENT',True):
+   self.assertIsNone(a.current_document_url())
+   env.write_text("YANDEX_URL='https://disk.yandex.ru/i/legacy'\n");self.assertEqual(a.current_document_url(),'https://disk.yandex.ru/i/legacy')
+   node.write_text(json.dumps({'document_url':'https://disk.yandex.ru/i/node'}));self.assertEqual(a.current_document_url(),'https://disk.yandex.ru/i/node')
+   node.write_text(json.dumps({'document_url':'javascript:alert(1)'}));self.assertIsNone(a.current_document_url())
+   node.write_text('not json');self.assertEqual(a.current_document_url(),'https://disk.yandex.ru/i/legacy')
 
  def test_optional_runtime_dispatcher_without_fixed_unit_is_preserved(self):
   self.runtime.save(self.runtime.node_path,dict(self.node,router_updater=True))
@@ -141,20 +193,6 @@ class VolgaTests(unittest.TestCase):
   validate_volga_manifest(value,'v4.1.0-rc1','a'*64)
   for bad in [dict(value,protocols=[row,row]),dict(value,protocols=[dict(row,image='image:latest')]),dict(value,default='volga')]:
    with self.assertRaises(ValueError):validate_volga_manifest(bad,'v4.1.0-rc1','a'*64)
-
- def test_rc2_panel_migrates_to_unified_updates(self):
-  from router_integration import VOLGA_HTML_V1,VOLGA_JS_V1,VOLGA_HOOK_V1
-  marker='<div class="small" id="openfluxHealth" style="margin-top:8px"></div>'
-  rc2=('import openflux_auth\nfrom router_integration import openflux_runtime_unit\n'+marker+VOLGA_HTML_V1+'\n'
-       "$('#openfluxState').textContent=of.state;"+VOLGA_HOOK_V1+'\n'+VOLGA_JS_V1+'\nrefreshNetwork();setInterval(refreshNetwork,5000);\n')
-  changed=patch_volga_panel(rc2)
-  self.assertIn('data-volga-panel="2"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
-  self.assertIn("$('#volgaSetup').hidden=!!vp.configured;",changed);self.assertEqual(changed.count('id="openfluxProtocolControls"'),1)
-  # The one-mini-PC limitation stays visible next to the selector and is confirmed on Apply.
-  self.assertIn('id="volgaOneDevice"',changed);self.assertIn("confirm('Volga works on one mini-PC at a time.",changed)
-  self.assertEqual(patch_volga_panel(changed),changed)
-  # An unexpected rc2 layout changes nothing: installation then rolls back.
-  with self.assertRaises(ValueError):patch_volga_panel(rc2.replace(VOLGA_JS_V1,VOLGA_JS_V1.replace('Working…','Busy…')))
 
  def test_volga_updates_and_config_duplicates_are_retired(self):
   for args in [types.SimpleNamespace(action=a) for a in ('check','download','update','rollback')]+[types.SimpleNamespace(action='configure',channel='prerelease',config_file=None)]:
@@ -242,5 +280,27 @@ class VolgaTests(unittest.TestCase):
    self.runtime.health(require_session=False)
   with patch.object(self.runtime,'status',return_value={'carrier_ready':True,'active':True,'state':'auth_blocked','needs_cookies':True}):
    with self.assertRaisesRegex(RuntimeError,'cookies'):self.runtime.health(require_session=False)
+
+ def test_server_prune_keeps_the_rollback_container_and_images_in_use(self):
+  repo=router_integration.VOLGA_IMAGE_REPOSITORY;removed=set();calls=[]
+  images={'openflux-volga':'sha256:new','openflux-volga-backup-2':'sha256:prev','openflux-volga-backup-1':'sha256:old'}
+  def run(argv,**kwargs):
+   calls.append(argv);out=''
+   if argv[:3]==['docker','ps','-a']:out='\n'.join(n for n in images if n not in removed)
+   elif argv[:2]==['docker','rm']:removed.add(argv[-1])
+   elif argv[:2]==['docker','inspect']:out=images[argv[-1]]
+   elif argv[:2]==['docker','images']:out='\n'.join(['sha256:new '+repo,'sha256:prev '+repo,'sha256:old '+repo,'sha256:base openflux-runtime'])
+   return types.SimpleNamespace(returncode=0,stdout=out,stderr='')
+  with patch.object(self.runtime,'run',side_effect=run):self.runtime.prune_server_containers('openflux-volga-backup-2')
+  self.assertEqual(removed,{'openflux-volga-backup-1'})
+  self.assertEqual([a[-1] for a in calls if a[:3]==['docker','image','rm']],['sha256:old'])
+
+ def test_config_backups_keep_only_the_newest(self):
+  self.runtime.save(self.runtime.node_path,dict(self.node,role='server'))
+  server=dict(self.cfg,role='server',egress_policy='public')
+  for key in ('34','56','78','9a','bc'):self.runtime.configure(dict(server,shared_key=key*32))
+  backups=sorted(self.runtime.state.glob('config-backup-*.json'))
+  self.assertEqual(len(backups),router_integration.CONFIG_BACKUPS)
+  self.assertEqual(self.runtime.read(backups[-1])['shared_key'],'9a'*32)
 
 if __name__=='__main__':unittest.main()

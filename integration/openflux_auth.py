@@ -4,9 +4,10 @@ import argparse, datetime, fcntl, hashlib, importlib.machinery, importlib.util, 
 
 NODE_CONFIG = pathlib.Path('/etc/openflux/node.json')
 RECOVERY_DIR = pathlib.Path('/etc/openflux-recovery')
+CLIENT_ENV = pathlib.Path('/etc/openflux-client/yandex.env')
 try: NODE = json.loads(NODE_CONFIG.read_text())
 except FileNotFoundError: NODE = {}
-CLIENT = NODE.get('role') == 'client' if NODE else pathlib.Path('/etc/openflux-client/yandex.env').exists()
+CLIENT = NODE.get('role') == 'client' if NODE else CLIENT_ENV.exists()
 UNIT = NODE.get('service', 'openflux-yandex-client.service')
 CONTAINER = NODE.get('container', 'openflux-yandex-exit')
 NATIVE = NODE.get('backend') == 'systemd' if NODE else CLIENT
@@ -63,9 +64,23 @@ def status():
         fcntl.flock(lock,fcntl.LOCK_EX)
         return _status()
 
+def current_document_url():
+    # Read on every panel refresh: Configuration can change the URL while the panel runs.
+    url=None
+    try:
+        node=json.loads(NODE_CONFIG.read_text())
+        if isinstance(node,dict):url=node.get('document_url')
+    except (OSError,ValueError):pass
+    if not url and CLIENT:
+        try:
+            for line in CLIENT_ENV.read_text().splitlines():
+                if line.startswith('YANDEX_URL='):url=(shlex.split(line.split('=',1)[1]) or [None])[0]
+        except (OSError,ValueError):pass
+    return url if isinstance(url,str) and url.startswith('https://') else None
+
 def snapshot():
     try:
-        legacy=status()
+        legacy=dict(status(),document_url=current_document_url())
         from router_integration import VolgaRuntime
         runtime=VolgaRuntime()
         try:
@@ -141,7 +156,7 @@ def _status():
 def document_url():
     if NODE.get('document_url'): return NODE['document_url']
     if CLIENT:
-        for line in pathlib.Path('/etc/openflux-client/yandex.env').read_text().splitlines():
+        for line in CLIENT_ENV.read_text().splitlines():
             if line.startswith('YANDEX_URL='):
                 value=shlex.split(line.split('=',1)[1])
                 if len(value)==1 and value[0].startswith('https://'):return value[0]
