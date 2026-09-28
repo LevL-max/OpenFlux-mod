@@ -116,7 +116,7 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(patch_volga_panel(changed),changed)
   self.assertIn("'openflux-updater','openflux-volga-config'],modes:['openflux']",changed)
   self.assertIn("'openflux-cookies','openflux-volga-config']);",changed)
-  self.assertEqual(changed.count('id="openfluxProtocolControls"'),1)
+  self.assertEqual(changed.count('id="openfluxProtocolControls"'),1);self.assertEqual(changed.count('id="volgaOneDevice"'),1)
 
  def test_optional_runtime_dispatcher_without_fixed_unit_is_preserved(self):
   self.runtime.save(self.runtime.node_path,dict(self.node,router_updater=True))
@@ -150,6 +150,8 @@ class VolgaTests(unittest.TestCase):
   changed=patch_volga_panel(rc2)
   self.assertIn('data-volga-panel="2"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
   self.assertIn("$('#volgaSetup').hidden=!!vp.configured;",changed);self.assertEqual(changed.count('id="openfluxProtocolControls"'),1)
+  # The one-mini-PC limitation stays visible next to the selector and is confirmed on Apply.
+  self.assertIn('id="volgaOneDevice"',changed);self.assertIn("confirm('Volga works on one mini-PC at a time.",changed)
   self.assertEqual(patch_volga_panel(changed),changed)
   # An unexpected rc2 layout changes nothing: installation then rolls back.
   with self.assertRaises(ValueError):patch_volga_panel(rc2.replace(VOLGA_JS_V1,VOLGA_JS_V1.replace('Working…','Busy…')))

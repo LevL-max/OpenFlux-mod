@@ -287,11 +287,14 @@ installs Volga: `sudo openfluxctl update`, or on a mini-PC Router Updater →
 OpenFlux → Download, then Install. Volga follows the OpenFlux release channel
 (`openfluxctl configure --channel ...`); there is no separate Volga channel.
 
-The current installation uses one Volga server and one document pair, with PC1
-and PC2 connecting **in turn**. They use matching documents/shared key. Stop
-OpenFlux/Volga on one mini-PC before starting it on the other: an idle running
-client still holds a session. Simultaneous mini-PCs on that pair are unsupported.
-The 64-stream limit supports devices behind the single active mini-PC.
+**Known limitation: one mini-PC at a time.** The current installation uses one
+Volga server and one document pair, with PC1 and PC2 connecting **in turn**. They
+use matching documents/shared key. A second mini-PC that starts Volga on the same
+pair — including an idle running client, or Apply protocol for its connection
+check — ends the first one's session; there is no "busy" protection yet. Stop
+OpenFlux/Volga on one mini-PC before starting it on the other. The panel shows
+this next to the protocol selector and asks for confirmation before Apply with
+Volga. The 64-stream limit supports devices behind the single active mini-PC.
 
 The server needs Docker. It loads the release archive only after verifying its
 GitHub digest, SHA256SUMS, protocol manifest and immutable Docker image ID. No

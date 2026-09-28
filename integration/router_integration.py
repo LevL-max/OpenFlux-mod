@@ -954,9 +954,10 @@ VOLGA_HTML='''
    <button id="openfluxProtocolApply">Apply protocol</button>
    <span class="small" id="openfluxProtocolResult" role="status"></span>
   </div>
+  <p class="small" id="volgaOneDevice" role="note" style="margin:8px 0 0;padding:6px 10px;border-left:4px solid #d97706;background:rgba(217,119,6,.14)"><b>Volga: one mini-PC at a time.</b> Stop OpenFlux/Volga on the other mini-PC before selecting Volga here. A second mini-PC ends the first one&#39;s session.</p>
   <details id="volgaSettings" style="margin-top:12px">
    <summary>Volga browser cookies</summary>
-   <p class="small">Volga uses two Yandex documents and a matching shared key on client/server. One mini-PC may use this document pair at a time: stop OpenFlux/Volga on the other mini-PC before connecting. Volga is updated with OpenFlux in Router Updater; its configuration file is under Configuration.</p>
+   <p class="small">Volga uses two Yandex documents and a matching shared key on client/server. Volga is updated with OpenFlux in Router Updater; its configuration file is under Configuration.</p>
    <div class="row" id="volgaSetup" hidden><button id="volgaConfigDownload">Download Volga config template</button><label>Upload Volga config <input id="volgaConfigUpload" type="file" accept=".json"></label></div>
    <p class="small" id="volgaUpdateResult" role="status"></p>
    <label>Document <select id="volgaDocument"></select></label>
@@ -969,7 +970,7 @@ VOLGA_HTML='''
 VOLGA_JS='''
 async function volgaPost(path,body){return api('/api/openflux/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Router-Panel':'1'},body:JSON.stringify(body)});}
 function volgaDownload(data,name){const u=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
-$('#openfluxProtocolApply').onclick=async()=>{const b=$('#openfluxProtocolApply'),r=$('#openfluxProtocolResult');b.disabled=true;r.textContent='Checking connection; previous protocol will return if it fails…';try{const d=await volgaPost('protocol',{protocol:$('#openfluxProtocol').value});r.textContent=d.message;refresh();}catch(e){r.textContent=e.message;}finally{b.disabled=false;}};
+$('#openfluxProtocolApply').onclick=async()=>{if($('#openfluxProtocol').value==='volga'&&!confirm('Volga works on one mini-PC at a time. Is OpenFlux/Volga stopped on the other mini-PC?'))return;const b=$('#openfluxProtocolApply'),r=$('#openfluxProtocolResult');b.disabled=true;r.textContent='Checking connection; previous protocol will return if it fails…';try{const d=await volgaPost('protocol',{protocol:$('#openfluxProtocol').value});r.textContent=d.message;refresh();}catch(e){r.textContent=e.message;}finally{b.disabled=false;}};
 $('#volgaConfigDownload').onclick=async()=>{try{const d=await volgaPost('volga/config',{operation:'download'});volgaDownload(d.config,'openflux-volga-config.json');}catch(e){$('#volgaUpdateResult').textContent=e.message;}};
 $('#volgaConfigUpload').onchange=async(e)=>{const f=e.target.files[0];if(!f)return;try{if(f.size>65536)throw Error('Config must be at most 64 KiB');const d=await volgaPost('volga/config',{operation:'upload',config:JSON.parse(await f.text())});$('#volgaUpdateResult').textContent=d.message;refresh();}catch(error){$('#volgaUpdateResult').textContent=error.message;}finally{e.target.value='';}};
 async function volgaCookies(operation){const r=$('#volgaCookieResult');r.textContent='Saving Volga cookies…';try{const d=await volgaPost(operation==='import'?'volga/cookies':'volga/recovery',{document:$('#volgaDocument').value,curl:$('#volgaCurl').value,upload:operation==='send'});if(d.package)volgaDownload(d.package,d.filename);$('#volgaCurl').value='';r.textContent=d.message;refresh();}catch(e){r.textContent=e.message;}}
