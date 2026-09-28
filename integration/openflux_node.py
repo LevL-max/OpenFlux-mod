@@ -91,7 +91,7 @@ def candidate(c):
     newest['installed'] = installed; newest['update_available'] = not mod.is_current(installed, newest)
     return newest
 
-def verify_download(row, directory, transport='yandex'):
+def verify_download(row, directory, transport='yandex', include_container=False):
     # Bootstrap and updates use the same published digests and release manifest.
     base = 'https://github.com/'+REPO+'/releases/'
     tag = row['tag_name']
@@ -101,6 +101,9 @@ def verify_download(row, directory, transport='yandex'):
     binary_asset = 'openflux-volga-linux-amd64' if transport=='volga' else 'openflux-linux-amd64'
     required = (binary_asset,'openflux-yandex-cookie-import','openflux-integration-linux.tar.gz',SELF_ASSET,'SHA256SUMS')
     if transport=='volga': required += ('protocol-manifest.json',)
+    if include_container:
+        if transport!='volga':raise ValueError('Separate container archive is only supported for Volga')
+        required+=('openflux-volga-container-linux-amd64.tar.gz',)
     assets = {}
     for name in required:
         found = [a for a in row.get('assets', []) if a.get('name')==name]
@@ -108,7 +111,8 @@ def verify_download(row, directory, transport='yandex'):
         a = found[0]
         if a.get('browser_download_url')!=base+'download/'+tag+'/'+name or not re.fullmatch(r'sha256:[0-9a-f]{64}', a.get('digest','')):
             raise ValueError('Unverified asset '+name)
-        fetch(a['browser_download_url'], directory/name, 70*1024*1024 if name==binary_asset else 2*1024*1024)
+        limit=256*1024*1024 if name=='openflux-volga-container-linux-amd64.tar.gz' else 70*1024*1024 if name==binary_asset else 2*1024*1024
+        fetch(a['browser_download_url'], directory/name, limit)
         if sha(directory/name)!=a['digest'][7:]: raise ValueError('Asset digest mismatch: '+name)
         assets[name] = a['digest'][7:]
     sums = {}
@@ -124,7 +128,8 @@ def verify_download(row, directory, transport='yandex'):
     if marker not in (p.stdout or '')+(p.stderr or ''): raise ValueError('Unsupported release binary')
     if transport=='volga':
         from router_integration import validate_volga_manifest
-        validate_volga_manifest(read(directory/'protocol-manifest.json'),tag,assets[binary_asset])
+        manifest=validate_volga_manifest(read(directory/'protocol-manifest.json'),tag,assets[binary_asset])
+        if include_container and manifest.get('container_archive')!={'name':'openflux-volga-container-linux-amd64.tar.gz','sha256':assets['openflux-volga-container-linux-amd64.tar.gz']}:raise ValueError('Volga container archive manifest mismatch')
     return assets
 
 def atomic_file(source, target, mode=0o755):

@@ -48,12 +48,14 @@ jobs:
 
       - name: Build Linux amd64
         env:
+          CGO_ENABLED: '0'
           GOOS: linux
           GOARCH: amd64
         run: |
           mkdir -p dist
-          go build -trimpath -o dist/openflux .
-          (cd volga && go build -tags volga -trimpath -buildvcs=false -o ../dist/openflux-volga ./cmd/openflux-volga-lab)
+          VERSION="$(tr -d '[:space:]' < release/VERSION)"
+          go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o dist/openflux .
+          (cd volga && go build -tags volga -trimpath -buildvcs=false -ldflags="-s -w -buildid= -X main.version=$VERSION" -o ../dist/openflux-volga ./cmd/openflux-volga-lab)
           sha256sum dist/openflux dist/openflux-volga | tee dist/SHA256SUMS
           printf 'git_commit=%s\n' "$GITHUB_SHA" > dist/BUILD-METADATA
           printf 'go_version=%s\n' "$(go version)" >> dist/BUILD-METADATA
@@ -65,7 +67,11 @@ jobs:
           docker build -f Dockerfile.release -t openflux-legacy-ci .
           docker run --rm openflux-legacy-ci --help >/dev/null
           docker build -f Dockerfile.volga -t openflux-volga-ci .
-          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --memory=256m --cpus=0.5 openflux-volga-ci -version
+          docker save openflux-volga-ci | gzip > dist/volga-ci-container.tar.gz
+          IMAGE_ID="$(docker image inspect --format='{{.Id}}' openflux-volga-ci)"
+          docker load --input dist/volga-ci-container.tar.gz
+          test "$(docker image inspect --format='{{.Id}}' openflux-volga-ci)" = "$IMAGE_ID"
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --memory=256m --cpus=0.5 "$IMAGE_ID" -version
 
       - name: Upload Linux amd64 artifact
         uses: actions/upload-artifact@v4

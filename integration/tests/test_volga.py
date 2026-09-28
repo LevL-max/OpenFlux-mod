@@ -118,12 +118,49 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(changed.count('id="openfluxProtocolControls"'),1)
 
  def test_release_manifest_requires_frozen_profile_and_pinned_image(self):
-  row={'id':'volga','binary':{'name':'openflux-volga-linux-amd64','sha256':'a'*64},'image':'ghcr.io/levl-max/openflux-mod-volga@sha256:'+'b'*64,
+  row={'id':'volga','binary':{'name':'openflux-volga-linux-amd64','sha256':'a'*64},'image':'ghcr.io/levl-max/openflux-mod-volga@sha256:'+'b'*64,'image_id':'sha256:'+'c'*64,
        'performance_profile':VOLGA_PROFILE,'config_protocol':'volga-stream-v1','max_streams':64}
   value={'schema':1,'version':'v4.1.0-rc1','default':'yandex','protocols':[row]}
   validate_volga_manifest(value,'v4.1.0-rc1','a'*64)
   for bad in [dict(value,protocols=[row,row]),dict(value,protocols=[dict(row,image='image:latest')]),dict(value,default='volga')]:
    with self.assertRaises(ValueError):validate_volga_manifest(bad,'v4.1.0-rc1','a'*64)
+
+ def test_server_uses_verified_archive_without_registry_credentials(self):
+  import openflux_node as node
+  self.runtime.save(self.runtime.node_path,dict(self.node,role='server'))
+  self.runtime.save(self.runtime.config_path,dict(self.cfg,role='server',egress_policy='public'))
+  files={'openflux-volga-linux-amd64':b'binary','openflux-yandex-cookie-import':b'helper',
+         'openflux-integration-linux.tar.gz':b'bundle','openflux-node.py':b'pass',
+         'openflux-volga-container-linux-amd64.tar.gz':b'container'}
+  digest=lambda b:hashlib.sha256(b).hexdigest()
+  image_id='sha256:'+'c'*64
+  manifest={'schema':1,'version':'v4.1.0-rc1','default':'yandex','protocols':[{'id':'volga',
+   'binary':{'name':'openflux-volga-linux-amd64','sha256':digest(files['openflux-volga-linux-amd64'])},
+   'container_archive':{'name':'openflux-volga-container-linux-amd64.tar.gz','sha256':digest(files['openflux-volga-container-linux-amd64.tar.gz'])},
+   'image':'ghcr.io/levl-max/openflux-mod-volga@sha256:'+'b'*64,'image_id':image_id,
+   'performance_profile':VOLGA_PROFILE,'config_protocol':'volga-stream-v1','max_streams':64}]}
+  files['protocol-manifest.json']=json.dumps(manifest).encode()
+  files['SHA256SUMS']=''.join(digest(v)+'  '+k+'\n' for k,v in files.items()).encode()
+  base='https://github.com/'+node.REPO+'/releases/'
+  row={'tag_name':'v4.1.0-rc1','html_url':base+'tag/v4.1.0-rc1','assets':[{'name':k,'digest':'sha256:'+digest(v),'browser_download_url':base+'download/v4.1.0-rc1/'+k} for k,v in files.items()]}
+  def fetch(url,path,limit):path.write_bytes(files[url.rsplit('/',1)[-1]])
+  with patch.object(self.runtime,'release_candidate',return_value=row),patch.object(node,'fetch',side_effect=fetch),patch.object(node,'run',return_value=types.SimpleNamespace(stdout='openflux-volga v4.1.0-rc1',stderr='')) as version,patch.object(self.runtime,'run',return_value=types.SimpleNamespace(returncode=0,stdout=image_id)) as docker:
+   self.runtime.prepare()
+   commands=[c.args[0] for c in docker.call_args_list]
+   self.assertTrue(any(c[:2]==['docker','load'] for c in commands));self.assertFalse(any(c[:2]==['docker','pull'] for c in commands))
+   self.assertEqual(self.runtime.read(self.runtime.state/'staged.json')['image'],image_id)
+   docker.reset_mock();version.reset_mock();files['openflux-volga-container-linux-amd64.tar.gz']=b'tampered'
+   with self.assertRaisesRegex(ValueError,'digest mismatch'):self.runtime.prepare()
+   docker.assert_not_called();version.assert_not_called()
+
+ def test_release_manifest_generator_matches_runtime_validator(self):
+  import importlib.util
+  script=pathlib.Path(__file__).resolve().parents[2]/'release/protocol_manifest.py'
+  spec=importlib.util.spec_from_file_location('protocol_manifest',script);module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+  for name in ['openflux-linux-amd64','openflux-volga-linux-amd64','openflux-volga-container-linux-amd64.tar.gz']:(self.root/name).write_bytes(name.encode())
+  value=module.generate(self.root,'v4.1.0-rc1','a'*40,'ghcr.io/levl-max/openflux-mod-volga@sha256:'+'b'*64,'sha256:'+'c'*64)
+  digest=hashlib.sha256((self.root/'openflux-volga-linux-amd64').read_bytes()).hexdigest()
+  self.assertEqual(validate_volga_manifest(value,'v4.1.0-rc1',digest)['image_id'],'sha256:'+'c'*64)
 
  def fake_services(self):
   flags={'legacy':True,'volga':False};commands=[]
@@ -155,7 +192,7 @@ class VolgaTests(unittest.TestCase):
   candidate=self.runtime.state/'candidate';candidate.mkdir();(candidate/'openflux-volga-linux-amd64').write_bytes(b'new')
   digest=n.sha(candidate/'openflux-volga-linux-amd64')
   manifest={'schema':1,'version':'v4.1.0-rc2','default':'yandex','protocols':[{'id':'volga','binary':{'name':'openflux-volga-linux-amd64','sha256':digest},
-   'performance_profile':VOLGA_PROFILE,'config_protocol':'volga-stream-v1','max_streams':64,'image':'ghcr.io/levl-max/openflux-mod-volga@sha256:'+'b'*64}]}
+   'performance_profile':VOLGA_PROFILE,'config_protocol':'volga-stream-v1','max_streams':64,'image':'ghcr.io/levl-max/openflux-mod-volga@sha256:'+'b'*64,'image_id':'sha256:'+'c'*64}]}
   self.runtime.save(candidate/'protocol-manifest.json',manifest)
   assets={p.name:n.sha(p) for p in candidate.iterdir()}
   self.runtime.save(self.runtime.state/'staged.json',{'directory':str(candidate),'assets':assets,'base_sha256':n.sha(self.runtime.binary),'version':'v4.1.0-rc2'})

@@ -144,7 +144,8 @@ jobs:
           HELPER_SHA="$(sha256sum dist/openflux-yandex-cookie-import | awk '{print $1}')"
           IMAGE_ARCHIVE_SHA="$(sha256sum dist/openflux-container-linux-amd64.tar.gz | awk '{print $1}')"
           VOLGA_SHA="$(sha256sum dist/openflux-volga-linux-amd64 | awk '{print $1}')"
-          python3 release/protocol_manifest.py dist "$VERSION" "$SOURCE_COMMIT" "$VOLGA_IMAGE@$VOLGA_REGISTRY_DIGEST"
+          VOLGA_IMAGE_ID="$(docker image inspect --format='{{.Id}}' "$VOLGA_IMAGE:$VERSION")"
+          python3 release/protocol_manifest.py dist "$VERSION" "$SOURCE_COMMIT" "$VOLGA_IMAGE@$VOLGA_REGISTRY_DIGEST" "$VOLGA_IMAGE_ID"
           cat > dist/BUILD-METADATA <<EOF
           version=$VERSION
           source_commit=$SOURCE_COMMIT

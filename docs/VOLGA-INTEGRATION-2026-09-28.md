@@ -13,7 +13,8 @@ Volga-tagged Go authentication code changes in the root transport package.
 
 The existing updater receives the same six integration module filenames, so
 v4.0.x archive validation still accepts the new bundle. Volga has separate release
-state and checksums; the container image is pinned by digest. A failed health
+state and checksums; the container image is pinned by digest and local image ID.
+The server loads the verified release archive without registry credentials. A failed health
 check restores the binary, unit/container, node selection, config, recovery timer
 and patched router helpers. A watchdog recovers interrupted operations. An
 unmanaged container with the same name is rejected; a failed container rename
@@ -39,7 +40,7 @@ session in-process. Interactive CAPTCHA verification still requires the browser.
 | Root Go race tests and vet | PASS on Windows; one POSIX-permission assertion excluded |
 | Tagged transport race tests and vet | PASS with the same Windows-only exclusion |
 | Nested Volga race tests and vet | PASS, including startup wait, resume, cancellation and self-cookie-write regression |
-| Linux integration tests | PASS, 36 tests in 8.740 seconds on PC2; mock services and isolated files |
+| Linux integration tests | PASS, 37 tests in 11.819 seconds on PC2; mock services and isolated files |
 | PC1/PC2 actual panel Python syntax and idempotence | PASS |
 | PC1/PC2 actual panel JavaScript syntax | PASS, four/two script blocks respectively |
 | Existing grouped config renderer | Preserved; only Volga config entry and private-file badge added |
@@ -67,6 +68,12 @@ into its fixture: the first unprivileged run correctly denied a write to the
 real panel. Temporary files were removed. No actual panel, service or route was
 modified. Read-only audit confirmed Legacy and bridge units are disabled and
 controller-managed on both routers; bridge dependencies do not start Legacy.
+
+Full Linux CI, race, vet and both container smokes passed for `29e5fcc` in
+[run 36411631509](https://github.com/LevL-max/OpenFlux-mod/actions/runs/36411631509).
+The follow-up adds archive loading with checksum/image-ID verification, a
+manifest-generator test and reproducible CI builds. The definitive check for the
+latest commit is attached to [PR #19](https://github.com/LevL-max/OpenFlux-mod/pull/19).
 
 ## Live evidence and remaining gate
 

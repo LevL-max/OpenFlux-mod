@@ -16,9 +16,11 @@
   "legacy_sha256": "c905b9d0ef5901f4c4dfd574caa3f54c20f91763f6f9044edbabcb8f51b334e5",
   "volga_sha256": "116e9b2b17edc3510b3db3278eec0ed769b70fed852c666a835cc446587dede4",
   "frozen_profile_git_blob": "09daf0229d395ad4b39dea82446a33c9d1fc82b4",
-  "linux_integration_tests": 36,
-  "linux_integration_seconds": 8.74,
+  "linux_integration_tests": 37,
+  "linux_integration_seconds": 11.819,
   "linux_binary_version_smoke": "openflux-volga v4.1.0-rc1",
   "linux_shell_syntax_exit": 0,
-  "remote_temp_cleanup_exit": 0
+  "remote_temp_cleanup_exit": 0,
+  "manifest_generator_test": "PASS locally; included in Linux CI",
+  "ci_initial_run": "https://github.com/LevL-max/OpenFlux-mod/actions/runs/36411631509"
 }

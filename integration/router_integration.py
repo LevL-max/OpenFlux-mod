@@ -290,6 +290,7 @@ def validate_volga_manifest(value, version, digest):
     if row.get('binary')!={'name':'openflux-volga-linux-amd64','sha256':digest}:raise ValueError('Volga manifest checksum mismatch')
     if row.get('performance_profile')!=VOLGA_PROFILE or row.get('config_protocol')!='volga-stream-v1' or row.get('max_streams')!=64:raise ValueError('Unsupported Volga profile')
     if not re.fullmatch(r'ghcr.io/levl-max/openflux-mod-volga@sha256:[0-9a-f]{64}',row.get('image','')):raise ValueError('Unpinned Volga container image')
+    if not re.fullmatch(r'sha256:[0-9a-f]{64}',row.get('image_id','')):raise ValueError('Missing immutable Volga image ID')
     return row
 
 def volga_document(value, editor=False):
@@ -614,7 +615,7 @@ class VolgaRuntime:
 
     def docker_command(self,image,name=VOLGA_CONTAINER):
         import re
-        if not re.fullmatch(r'ghcr.io/levl-max/openflux-mod-volga@sha256:[0-9a-f]{64}',image):raise ValueError('Use the verified immutable image')
+        if not re.fullmatch(r'(?:ghcr.io/levl-max/openflux-mod-volga@)?sha256:[0-9a-f]{64}',image):raise ValueError('Use the verified immutable image')
         limits=self.limits()
         return ['docker','create','--name',name,'--label','io.openflux.managed=volga','--restart=unless-stopped',
             '--cap-drop=ALL','--security-opt=no-new-privileges','--read-only','--network=bridge','--pids-limit=128',
@@ -645,11 +646,14 @@ class VolgaRuntime:
             if openflux_release.version(row['tag_name'])<openflux_release.version(current['version']):raise ValueError('Use rollback for a downgrade')
         self.state.mkdir(parents=True,exist_ok=True,mode=0o700)
         directory=__import__('pathlib').Path(tempfile.mkdtemp(prefix='candidate-',dir=self.state))
-        assets=node.verify_download(row,directory,transport='volga')
+        server=self.node()['role']=='server'
+        assets=node.verify_download(row,directory,transport='volga',include_container=server)
         if current and row['tag_name']==current['version'] and assets['openflux-volga-linux-amd64']!=current['sha256']:raise ValueError('Published Volga version changed its binary')
         manifest=validate_volga_manifest(self.read(directory/'protocol-manifest.json'),row['tag_name'],assets['openflux-volga-linux-amd64'])
-        if self.node()['role']=='server':self.run(['docker','pull',manifest['image']],timeout=180)
-        record={'version':row['tag_name'],'directory':str(directory),'assets':assets,'image':manifest['image'],
+        if server:
+            self.run(['docker','load','--input',str(directory/'openflux-volga-container-linux-amd64.tar.gz')],timeout=180)
+            if self.run(['docker','image','inspect','--format={{.Id}}',manifest['image_id']]).stdout.strip()!=manifest['image_id']:raise ValueError('Loaded Volga image ID mismatch')
+        record={'version':row['tag_name'],'directory':str(directory),'assets':assets,'image':manifest['image_id'],
                 'base_sha256':node.sha(self.binary) if self.binary.exists() else None}
         self.save(self.state/'staged.json',record)
         return {'ok':True,'version':record['version'],'message':'Verified Volga release downloaded. Legacy is unchanged.'}
@@ -774,7 +778,7 @@ class VolgaRuntime:
                     self.save(self.state/'transaction.json',previous)
                     self.run(['docker','rename',VOLGA_CONTAINER,previous['old_container']])
                 previous['created_container']=True;self.save(self.state/'transaction.json',previous)
-                self.run(self.docker_command(manifest['image']))
+                self.run(self.docker_command(manifest['image_id']))
             self.action('start')
             # A first server install cannot require an already-installed client.
             # Session/SOCKS health remains mandatory for client activation.
@@ -782,7 +786,7 @@ class VolgaRuntime:
             if not previous['active']:self.action('stop')
             if previous['legacy_active']:self.run(['systemctl','start',profile.get('service','openflux-yandex-client.service')])
             if previous.get('bridge_active'):self.run(['systemctl','start','sing-box-openflux.service'])
-            self.save(self.state/'installed.json',{'version':staged['version'],'sha256':node.sha(self.binary),'image':manifest['image']})
+            self.save(self.state/'installed.json',{'version':staged['version'],'sha256':node.sha(self.binary),'image':manifest['image_id']})
             self.install_recovery_timer()
             self.save(self.state/'rollback.json',previous)
             self.run(['systemctl','stop',previous['watchdog']+'.timer'])

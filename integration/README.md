@@ -101,7 +101,7 @@ enable new protocols automatically. Native services and new Docker installations
 configured arguments. Adopted installations retain their original service/container arguments;
 change those using their established deployment configuration when switching transport.
 
-## 4. Optional Yandex Disk backup channel â€” any installation
+## 4. Optional Yandex Disk backup channel — any installation
 
 On an existing Router Panel, the integration installer also extends **Configuration
 Files** with individual Download / Upload entries for the node profile, updater
@@ -202,7 +202,7 @@ sudo python3 integration/install.py --role client --expected-exit-ip YOUR_EXIT_I
 This refuses unknown Router Panel/core layouts before writing and preserves host-specific
 hooks. New standalone OpenFlux clients do not require Router Panel.
 
-The existing **Check â†’ Download â†’ Install** buttons continue to update OpenFlux. The card
+The existing **Check → Download → Install** buttons continue to update OpenFlux. The card
 shows client authentication and the last client failure. When Disk pairing is configured, it
 also shows the separately verified server authentication, last server failure and response time.
 The cookie form can save local cookies, download the encrypted server recovery file, or upload
@@ -241,7 +241,6 @@ the generic server check only verifies that the runtime stays running. This is r
 limitation, not proof of end-to-end connectivity for a future protocol.
 
 Run the focused tests with `PYTHONPATH=integration python3 -m unittest discover -s integration/tests -v`.
-
 
 ## Volga (v4.1.0 RC, opt-in)
 
@@ -282,7 +281,9 @@ sudo openfluxctl cookies import --transport volga --document-url 'DOCUMENT_B' --
 sudo openfluxctl setup-volga --config-file /private/volga-config.json --memory-mib 256 --cpu-percent 50
 ```
 
-The server needs Docker and access to the pinned GHCR image. No port is exposed,
+The server needs Docker. It loads the release archive only after verifying its
+GitHub digest, SHA256SUMS, protocol manifest and immutable Docker image ID. No
+GitHub Container Registry login is needed. No port is exposed,
 host networking is unused and all Linux capabilities are dropped. First install
 checks carrier authorization without requiring an already-installed client.
 Start it explicitly with `sudo openfluxctl start --transport volga`; later updates
