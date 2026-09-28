@@ -241,6 +241,21 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual({p.name:p.read_bytes() for p in library.iterdir()},before)
   self.assertFalse((self.runtime.state/'transaction.json').exists())
 
+ def test_panel_update_does_not_kill_its_own_request_during_copy(self):
+  self.runtime.save(self.runtime.node_path,dict(self.node,router_updater=True))
+  candidate=self.runtime.state/'candidate';candidate.mkdir()
+  self.make_support_fixture(candidate);plans=self.runtime.support_plan(candidate)
+  flags,commands,run=self.fake_services()
+  with patch.object(self.runtime,'run',side_effect=run):
+   record=self.runtime.begin_transaction('update')
+   self.runtime.install_support(plans,record)
+   self.assertFalse(any('router-panel.service' in c for c in commands))
+   self.runtime.restore_transaction(record)
+  self.assertFalse((self.runtime.state/'transaction.json').exists())
+  self.assertEqual(commands[-1][0],'systemd-run')
+  self.assertIn('--on-active=2s',commands[-1])
+  self.assertEqual(commands[-1][-2:],['try-restart','router-panel.service'])
+
  def test_server_rollback_preserves_original_when_rename_failed(self):
   node=dict(self.node,role='server');self.runtime.save(self.runtime.node_path,node)
   record={'kind':'update','node':node,'binary_present':False,'old_container':'openflux-volga-backup-test',
