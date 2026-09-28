@@ -37,6 +37,10 @@ type VolgaV6ExperimentalOptions struct {
 	// the default. It exists so a controlled run can rule out send concurrency
 	// as a local bottleneck when interpreting an aggregate-rate result.
 	SendWorkers int
+	// Quiet makes a server wait silently for a client: no repairs and only a
+	// keepalive carrier recycle while no client frame arrives. A client keeps
+	// fast recovery.
+	Quiet bool
 }
 
 func NewVolgaV6Experimental(o VolgaV6ExperimentalOptions) (*YandexVolgaV6Transport, error) {
@@ -93,6 +97,7 @@ func NewVolgaV6Experimental(o VolgaV6ExperimentalOptions) (*YandexVolgaV6Transpo
 		cfg.SendWorkers = o.SendWorkers
 	}
 	cfg.Runtime.CarrierStartTimeout = 30 * time.Second
+	cfg.Runtime.Quiet = o.Quiet
 	cfg.Yandex.HTTPProtocol = "http1"
 	cfg.Yandex.RelayEnvelope = "minimal"
 	cfg.Yandex.RelayPostsPerSecond = rate

@@ -157,7 +157,8 @@ func (e *Endpoint) Run(ctx context.Context) error {
 				e.mu.Unlock()
 				e.event("session_closed")
 			}
-		} else {
+		} else if ctx.Err() == nil {
+			// Shutting down while waiting for a peer is not a failed handshake.
 			e.event("handshake_failed")
 		}
 		c.Close()

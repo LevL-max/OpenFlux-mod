@@ -70,6 +70,77 @@ func TestVolgaV6RuntimePeerFrameEndsRecoveryBackoff(t *testing.T) {
 	}
 }
 
+// newLonelyVolgaV6Runtime has outstanding DATA and no peer: every frame is
+// lost, like a server announcing itself to nobody.
+func newLonelyVolgaV6Runtime(t *testing.T, quiet bool, start time.Time) *volgaV6Runtime {
+	t.Helper()
+	cfg := defaultVolgaV6RuntimeConfig()
+	cfg.Quiet = quiet
+	r := newVolgaV6Runtime(30003, newLinkedVolgaV6Factory().create, cfg, nil)
+	if err := r.startAt(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.sendAt([][]byte{[]byte("hello")}, start); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// tickSeconds ticks once per second from..to and returns the seconds with a
+// carrier handoff and the repair count.
+func tickSeconds(r *volgaV6Runtime, start time.Time, from, to int) (handoffs []int, repairs int) {
+	for s := from; s <= to; s++ {
+		res := r.Tick(context.Background(), start.Add(time.Duration(s)*time.Second))
+		repairs += res.Repairs
+		if res.Handoff {
+			handoffs = append(handoffs, s)
+		}
+	}
+	return handoffs, repairs
+}
+
+func TestVolgaV6QuietServerWaitsForAPeerWithoutRepairsOrRecycles(t *testing.T) {
+	start := time.Unix(5000, 0)
+	// A client keeps fast recovery even while nobody answers.
+	if handoffs, repairs := tickSeconds(newLonelyVolgaV6Runtime(t, false, start), start, 1, 60); len(handoffs) == 0 || repairs == 0 {
+		t.Fatalf("client: handoffs at %v s, repairs=%d; want both", handoffs, repairs)
+	}
+
+	r := newLonelyVolgaV6Runtime(t, true, start)
+	// Nobody to deliver to: no repairs, one keepalive recycle after 20 minutes.
+	if handoffs, repairs := tickSeconds(r, start, 1, 1500); repairs != 0 || !reflect.DeepEqual(handoffs, []int{1201}) {
+		t.Fatalf("quiet server: handoffs at %v s, repairs=%d", handoffs, repairs)
+	}
+	if !r.Snapshot(start.Add(1500 * time.Second)).WaitingForPeer {
+		t.Fatal("snapshot does not report waiting for a peer")
+	}
+
+	// The client's first frame restores normal recovery at once.
+	r.lastInbound.Store(start.Add(1500 * time.Second).UnixNano())
+	r.peerActivity.Store(true)
+	res := r.Tick(context.Background(), start.Add(1501*time.Second))
+	if res.Repairs == 0 || res.Handoff || res.Recovery.Reason != "" {
+		t.Fatalf("after the peer arrived: repairs=%d handoff=%v reason=%q", res.Repairs, res.Handoff, res.Recovery.Reason)
+	}
+	if r.Snapshot(start.Add(1501 * time.Second)).WaitingForPeer {
+		t.Fatal("snapshot still reports waiting with a peer present")
+	}
+}
+
+func TestVolgaV6QuietServerGoesQuietAfterItsPeerLeaves(t *testing.T) {
+	start := time.Unix(6000, 0)
+	r := newLonelyVolgaV6Runtime(t, true, start)
+	r.lastInbound.Store(start.UnixNano()) // the client's last frame; the hello stays unACKed
+	// A session may still be alive at first: normal recovery...
+	if handoffs, repairs := tickSeconds(r, start, 1, 29); !reflect.DeepEqual(handoffs, []int{2, 7, 17}) || repairs == 0 {
+		t.Fatalf("first 30 s: handoffs at %v s, repairs=%d", handoffs, repairs)
+	}
+	// ...then QuietAfter of silence: nothing until the keepalive recycle.
+	if handoffs, repairs := tickSeconds(r, start, 30, 600); len(handoffs) != 0 || repairs != 0 {
+		t.Fatalf("after the peer left: handoffs at %v s, repairs=%d", handoffs, repairs)
+	}
+}
+
 func TestVolgaV6RuntimeStopsRepeatingAckAfterPeerSilence(t *testing.T) {
 	cfg := defaultVolgaV6RuntimeConfig()
 	cfg.AckRepeatInterval = time.Millisecond

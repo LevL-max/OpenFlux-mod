@@ -81,3 +81,24 @@ func TestIdleServerKeepsEpochAndStaysQuiet(t *testing.T) {
 		}
 	}
 }
+
+func TestStoppingAWaitingServerIsNotAFailedHandshake(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	key := sha256.Sum256([]byte("local integration key"))
+	server := NewEndpoint(false, key[:], func(context.Context, []byte) error { return nil })
+	events := make(chan string, 10)
+	server.Event = func(s string) { events <- s }
+	done := make(chan error, 1)
+	go func() { done <- server.Run(ctx) }()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("server did not stop")
+	}
+	close(events)
+	for s := range events {
+		t.Fatalf("stopping a waiting server reported %q", s)
+	}
+}
