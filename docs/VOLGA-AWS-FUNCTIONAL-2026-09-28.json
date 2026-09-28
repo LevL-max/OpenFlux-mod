@@ -1,0 +1,1190 @@
+{
+  "binary_sha256": "116e9b2b17edc3510b3db3278eec0ed769b70fed852c666a835cc446587dede4",
+  "order": [
+    "pc2",
+    "stop_pc2",
+    "pc1"
+  ],
+  "same_aws_process": true,
+  "speed_benchmark": false,
+  "cleanup": {
+    "aws": {
+      "cleaned": true,
+      "original_services_unchanged": true
+    },
+    "pc1": {
+      "cleaned": true,
+      "original_services_unchanged": true
+    },
+    "pc2": {
+      "cleaned": true,
+      "original_services_unchanged": true
+    }
+  },
+  "checks": {
+    "pc2": {
+      "functional_exit": 0,
+      "transfers": [
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 59,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 32,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 24,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 54,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 55,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 44,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 23,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 12,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 22,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 13,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 43,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 42,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 31,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 30,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 11,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 21,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 28,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 8,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 20,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 40,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 6,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 10,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 38,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 26,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 36,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 53,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 34,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 50,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 2,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 48,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 0,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 52,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 62,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 4,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 18,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 46,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 51,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 60,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 14,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 56,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 35,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 58,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 5,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 33,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 25,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 45,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 63,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 3,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 47,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 17,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 1,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 57,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 49,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 61,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 9,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 15,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 27,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 7,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 29,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 16,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 19,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 39,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 41,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 37,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        }
+      ],
+      "events": [
+        {
+          "data": {
+            "simultaneous_connections": 64
+          },
+          "event": "router_connections_open",
+          "time": "2026-09-28T12:30:16.768728Z"
+        },
+        {
+          "data": {
+            "limit": 64
+          },
+          "event": "router_limit_rejection_pass",
+          "time": "2026-09-28T12:30:16.770031768Z"
+        },
+        {
+          "data": {
+            "bytes": 559,
+            "host": "example.com",
+            "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d",
+            "status": 200,
+            "tls_verified": true
+          },
+          "event": "router_public_https_pass",
+          "time": "2026-09-28T12:30:21.215379361Z"
+        },
+        {
+          "data": {
+            "target": "127.0.0.1:22"
+          },
+          "event": "router_private_denied",
+          "time": "2026-09-28T12:30:21.363904554Z"
+        },
+        {
+          "data": {
+            "target": "169.254.169.254:80"
+          },
+          "event": "router_private_denied",
+          "time": "2026-09-28T12:30:21.503630498Z"
+        },
+        {
+          "data": {
+            "target": "10.0.0.1:80"
+          },
+          "event": "router_private_denied",
+          "time": "2026-09-28T12:30:21.655722565Z"
+        },
+        {
+          "data": {
+            "target": "[::ffff:127.0.0.1]:22"
+          },
+          "event": "router_private_denied",
+          "time": "2026-09-28T12:30:21.79483938Z"
+        },
+        {
+          "data": null,
+          "event": "half_close_pass",
+          "time": "2026-09-28T12:30:22.085364953Z"
+        },
+        {
+          "data": null,
+          "event": "new_connection_after_abort_pass",
+          "time": "2026-09-28T12:30:23.190481556Z"
+        },
+        {
+          "data": {
+            "connections": 64,
+            "downloads": 32,
+            "speed_benchmark": false,
+            "uploads": 32,
+            "verified_bytes": 8388608
+          },
+          "event": "router_pass",
+          "time": "2026-09-28T12:30:23.190519359Z"
+        }
+      ],
+      "resources": {
+        "aws": {
+          "resources": [
+            {
+              "memory.peak": "85274624",
+              "memory.max": "268435456",
+              "cpu.stat": "usage_usec 2173383\nuser_usec 1750786\nsystem_usec 422597\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 130\nnr_throttled 25\nthrottled_usec 1432686\nnr_bursts 0\nburst_usec 0",
+              "cpu.max": "50000 100000"
+            }
+          ]
+        },
+        "pc2": {
+          "resources": [
+            {
+              "memory.peak": "99418112",
+              "memory.max": "268435456",
+              "cpu.stat": "usage_usec 2119053\nuser_usec 1798552\nsystem_usec 320501\ncore_sched.force_idle_usec 0\nnr_periods 134\nnr_throttled 18\nthrottled_usec 396561\nnr_bursts 0\nburst_usec 0",
+              "cpu.max": "50000 100000"
+            }
+          ]
+        }
+      },
+      "sampled_status": {
+        "aws": {
+          "status": [
+            {
+              "instance": "pair",
+              "state": "session_ready",
+              "post_failures": 0,
+              "http_statuses": {
+                "204": 412
+              }
+            }
+          ]
+        },
+        "pc2": {
+          "status": [
+            {
+              "instance": "pair",
+              "state": "session_ready",
+              "post_failures": 0,
+              "http_statuses": {
+                "204": 951
+              }
+            }
+          ]
+        }
+      },
+      "https": {
+        "https_rc": 0,
+        "bytes": 559,
+        "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d"
+      }
+    },
+    "pc1": {
+      "functional_exit": 0,
+      "transfers": [
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 58,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 34,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 21,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 20,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 57,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 33,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 18,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 48,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 56,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 55,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 19,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 32,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 47,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 46,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 10,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 54,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 31,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 30,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 44,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 16,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 14,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 49,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 17,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 28,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 24,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 8,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 42,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 26,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 6,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 4,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 40,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 22,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 36,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 52,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 12,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 2,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 62,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 0,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 59,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 53,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 60,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 11,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 38,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "download",
+          "index": 50,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 41,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 35,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 15,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 23,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 43,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 7,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 37,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 27,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 61,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 45,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 1,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 51,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 29,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 25,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 13,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 9,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 3,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 39,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 5,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        },
+        {
+          "bytes": 131072,
+          "direction": "upload",
+          "index": 63,
+          "integrity": true,
+          "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+        }
+      ],
+      "events": [
+        {
+          "data": {
+            "simultaneous_connections": 64
+          },
+          "event": "router_connections_open",
+          "time": "2026-09-28T12:30:31.560595429Z"
+        },
+        {
+          "data": {
+            "limit": 64
+          },
+          "event": "router_limit_rejection_pass",
+          "time": "2026-09-28T12:30:31.561007478Z"
+        },
+        {
+          "data": {
+            "bytes": 559,
+            "host": "example.com",
+            "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d",
+            "status": 200,
+            "tls_verified": true
+          },
+          "event": "router_public_https_pass",
+          "time": "2026-09-28T12:30:36.491048244Z"
+        },
+        {
+          "data": {
+            "target": "127.0.0.1:22"
+          },
+          "event": "router_private_denied",
+          "time": "2026-09-28T12:30:36.642128186Z"
+        },
+        {
+          "data": {
+            "target": "169.254.169.254:80"
+          },
+          "event": "router_private_denied",
+          "time": "2026-09-28T12:30:36.785214083Z"
+        },
+        {
+          "data": {
+            "target": "10.0.0.1:80"
+          },
+          "event": "router_private_denied",
+          "time": "2026-09-28T12:30:36.922159055Z"
+        },
+        {
+          "data": {
+            "target": "[::ffff:127.0.0.1]:22"
+          },
+          "event": "router_private_denied",
+          "time": "2026-09-28T12:30:37.064445823Z"
+        },
+        {
+          "data": null,
+          "event": "half_close_pass",
+          "time": "2026-09-28T12:30:37.372611155Z"
+        },
+        {
+          "data": null,
+          "event": "new_connection_after_abort_pass",
+          "time": "2026-09-28T12:30:38.727896968Z"
+        },
+        {
+          "data": {
+            "connections": 64,
+            "downloads": 32,
+            "speed_benchmark": false,
+            "uploads": 32,
+            "verified_bytes": 8388608
+          },
+          "event": "router_pass",
+          "time": "2026-09-28T12:30:38.727931314Z"
+        }
+      ],
+      "resources": {
+        "aws": {
+          "resources": [
+            {
+              "memory.peak": "100937728",
+              "memory.max": "268435456",
+              "cpu.stat": "usage_usec 4847978\nuser_usec 3948726\nsystem_usec 899251\nnice_usec 0\ncore_sched.force_idle_usec 0\nnr_periods 286\nnr_throttled 67\nthrottled_usec 4034685\nnr_bursts 0\nburst_usec 0",
+              "cpu.max": "50000 100000"
+            }
+          ]
+        },
+        "pc1": {
+          "resources": [
+            {
+              "memory.peak": "67481600",
+              "memory.max": "268435456",
+              "cpu.stat": "usage_usec 2088875\nuser_usec 1739259\nsystem_usec 349616\ncore_sched.force_idle_usec 0\nnr_periods 138\nnr_throttled 14\nthrottled_usec 306518\nnr_bursts 0\nburst_usec 0",
+              "cpu.max": "50000 100000"
+            }
+          ]
+        }
+      },
+      "sampled_status": {
+        "aws": {
+          "status": [
+            {
+              "instance": "pair",
+              "state": "session_ready",
+              "post_failures": 0,
+              "http_statuses": {
+                "204": 119
+              }
+            }
+          ]
+        },
+        "pc1": {
+          "status": [
+            {
+              "instance": "pair",
+              "state": "session_ready",
+              "post_failures": 0,
+              "http_statuses": {
+                "204": 1062
+              }
+            }
+          ]
+        }
+      },
+      "https": {
+        "https_rc": 0,
+        "bytes": 559,
+        "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d"
+      }
+    }
+  }
+}

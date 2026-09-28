@@ -364,6 +364,7 @@ def main():
     p=sub.add_parser('cookies'); p.add_argument('operation',choices=('import','package','send')); p.add_argument('--file',default='-'); p.add_argument('--output');p.add_argument('--transport',choices=('yandex','volga'));p.add_argument('--document-url')
     p=sub.add_parser('recovery'); p.add_argument('--server-public-key'); p.add_argument('--sender-public-key'); p.add_argument('--disk-token-file'); p.add_argument('--disk-path');p.add_argument('--transport',choices=('yandex','volga'))
     p=sub.add_parser('setup-volga');p.add_argument('--config-file',required=True);p.add_argument('--memory-mib',type=int,default=256);p.add_argument('--cpu-percent',type=int,default=50)
+    p.add_argument('--channel',choices=('stable','prerelease'))
     p=sub.add_parser('select-protocol');p.add_argument('protocol',choices=('yandex','volga'))
     for command in ('runtime-unit','recover-volga','poll-volga-recovery'):sub.add_parser(command)
     p=sub.add_parser('recover'); p.add_argument('--checkpoint',required=True)

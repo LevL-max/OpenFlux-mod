@@ -281,6 +281,17 @@ sudo openfluxctl cookies import --transport volga --document-url 'DOCUMENT_B' --
 sudo openfluxctl setup-volga --config-file /private/volga-config.json --memory-mib 256 --cpu-percent 50
 ```
 
+For RC testing, use `setup-volga --channel prerelease ...`, or
+`openfluxctl configure --transport volga --channel prerelease` before downloading.
+This saves `volga_channel` separately and keeps the Legacy release channel intact.
+Use `--channel stable` for Volga after its stable release is available.
+
+The current installation uses one Volga server and one document pair, with PC1
+and PC2 connecting **in turn**. They use matching documents/shared key. Stop
+OpenFlux/Volga on one mini-PC before starting it on the other: an idle running
+client still holds a session. Simultaneous mini-PCs on that pair are unsupported.
+The 64-stream limit supports devices behind the single active mini-PC.
+
 The server needs Docker. It loads the release archive only after verifying its
 GitHub digest, SHA256SUMS, protocol manifest and immutable Docker image ID. No
 GitHub Container Registry login is needed. No port is exposed,

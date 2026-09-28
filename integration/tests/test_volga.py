@@ -225,4 +225,19 @@ class VolgaTests(unittest.TestCase):
   with patch.object(self.runtime,'status',return_value={'carrier_ready':True,'active':True,'state':'auth_blocked','needs_cookies':True}):
    with self.assertRaisesRegex(RuntimeError,'cookies'):self.runtime.health(require_session=False)
 
+ def test_volga_prerelease_channel_does_not_change_legacy_channel(self):
+  import openflux_node as node
+  self.runtime.save(self.runtime.node_path,dict(self.node,channel='stable',volga_channel='prerelease'))
+  before=self.runtime.node_path.read_bytes()
+  row={'tag_name':'v4.1.0-rc1','assets':[{'name':'openflux-volga-linux-amd64'}]}
+  with patch.object(node,'releases',return_value=[row]) as releases:
+   self.assertEqual(self.runtime.release_candidate(),row)
+   self.assertEqual(releases.call_args.args[0]['channel'],'prerelease')
+  self.assertEqual(self.runtime.node_path.read_bytes(),before)
+  self.assertEqual(self.runtime.node()['channel'],'stable')
+  self.runtime.save(self.runtime.node_path,dict(self.node,channel='stable',volga_channel='invalid'))
+  with patch.object(node,'releases') as releases:
+   with self.assertRaisesRegex(ValueError,'Invalid Volga release channel'):self.runtime.release_candidate()
+   releases.assert_not_called()
+
 if __name__=='__main__':unittest.main()

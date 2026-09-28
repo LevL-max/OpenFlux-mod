@@ -628,7 +628,9 @@ class VolgaRuntime:
 
     def release_candidate(self):
         import openflux_node as node
-        rows=node.releases(self.node())
+        profile=self.node();channel=profile.get('volga_channel',profile.get('channel','stable'))
+        if channel not in ('stable','prerelease'):raise ValueError('Invalid Volga release channel')
+        rows=node.releases(dict(profile,channel=channel))
         # Never silently downgrade to an older Volga build when the selected
         # channel's newest release lacks a required protocol artifact.
         row=rows[0]
@@ -887,11 +889,19 @@ def run_volga_cli(args):
             row=runtime.release_candidate()
             return {'version':row['tag_name'],'installed':runtime.read(runtime.state/'installed.json',{}),'transport':'volga'}
         if action=='configure':
-            if not args.config_file:raise ValueError('Volga configure requires --config-file')
-            return runtime.configure(runtime.read(pathlib.Path(args.config_file)))
+            channel=getattr(args,'channel',None)
+            if not args.config_file and not channel:raise ValueError('Volga configure requires --config-file or --channel')
+            if channel and channel not in ('stable','prerelease'):raise ValueError('Invalid Volga release channel')
+            old=runtime.node()
+            try:
+                if channel:runtime.save(runtime.node_path,dict(old,volga_channel=channel))
+                return runtime.configure(runtime.read(pathlib.Path(args.config_file))) if args.config_file else {'ok':True,'channel':channel,'message':'Volga release channel saved; Legacy channel unchanged.'}
+            except BaseException:
+                runtime.save(runtime.node_path,old);raise
         if action=='download':return runtime.prepare()
         if action=='setup-volga':
             profile=runtime.node();profile['volga_resources']={'memory_mib':args.memory_mib,'cpu_percent':args.cpu_percent}
+            if getattr(args,'channel',None):profile['volga_channel']=args.channel
             # Validate limits before changing the node; preserve all Legacy fields.
             old=runtime.node();old_config=runtime.read(runtime.config_path);runtime.save(runtime.node_path,profile)
             try:
@@ -939,7 +949,7 @@ VOLGA_HTML='''
   </div>
   <details id="volgaSettings" style="margin-top:12px">
    <summary>Volga setup, updates and browser cookies</summary>
-   <p class="small">Volga uses two separate Yandex documents and its own shared key. Import matching client/server configurations before switching. Legacy remains available.</p>
+   <p class="small">Volga uses two Yandex documents and a matching shared key on client/server. One mini-PC may use this document pair at a time: stop OpenFlux/Volga on the other mini-PC before connecting. Existing recovery keys are reused.</p>
    <div class="row"><button id="volgaConfigDownload">Download Volga config</button><label>Upload Volga config <input id="volgaConfigUpload" type="file" accept=".json"></label></div>
    <p class="small">Configuration downloads include the shared key. Keep them private. Performance parameters are fixed.</p>
    <div class="row"><button data-volga-update="check">Check Volga release</button><button data-volga-update="download">Download update</button><button data-volga-update="update">Install / update Volga</button><button data-volga-update="rollback">Roll back Volga</button></div>

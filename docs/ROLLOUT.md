@@ -20,9 +20,8 @@ Main changes only through a PR.
 
 ## Remaining gates
 
-9. Resolve simultaneous PC1/PC2 operation before calling the integration release-ready. The current Volga endpoint holds one peer/session, and the adapter manages one Volga instance per server. A second client using the same config can interrupt the first. The 64-stream limit applies within one client session, not to 64 independent mini-PCs.
-10. After the topology fix, review/merge and create a **draft prerelease**. Verify the exact RC assets before enabling a live installation.
-11. Short functional RC check on the existing AWS and PC2: SOCKS/HTTPS and SHA-256, cookie recovery, protocol switch and rollback. Then validate both mini-PCs concurrently using the supported topology. Restore prior router modes and review before stable rollout.
+9. Validate the latest update-channel change in CI, review/merge and create a **draft prerelease**. Verify the exact RC assets before enabling a live installation.
+10. Short functional RC check on the existing AWS with PC2, then PC1 after stopping PC2: SOCKS/HTTPS and SHA-256, cookie recovery, protocol switch and rollback. Restore prior router modes and review before stable rollout.
 
 ## Confirmed deployment target
 
@@ -32,12 +31,21 @@ target. Read-only SSH inventory on 2026-09-28 confirmed the AWS Legacy container
 and recovery timer are active, and both mini-PC settings expect this AWS exit IP.
 No new server or new recovery key set is required.
 
-One possible topology is separate bounded Volga instances for PC1 and PC2 on the
-same AWS, alongside Legacy. This needs instance-aware installation, updates,
-recovery/status isolation and a document/key allocation; it is not implemented
-by the current single-instance adapter. An alternative is multi-client session
-support in the server. Neither option has passed a concurrent two-client check.
-Do not deploy identical single-session Volga configs to both mini-PCs.
+The user explicitly confirmed **one active mini-PC at a time**. Use one Volga
+container on this AWS and one shared document pair/config key on both clients.
+Keep the existing recovery key set. Concurrent PC1/PC2 support is out of scope;
+the temporary uncommitted multi-instance changes were removed. Extra document
+links are not used. A future independent connection can receive another instance
+and document pair when requested.
+
+Stop OpenFlux/Volga on the old mini-PC before starting it on the other; an idle
+but running client still owns a session. The existing 64-stream limit is for
+connections behind the currently active mini-PC. A bounded live probe already
+confirmed PC2 -> stop PC2 -> PC1 against the same AWS Volga process, with verified
+HTTPS on both, 64 concurrent SHA-256-verified transfers per client, rejection of
+the 65th connection, private-egress blocking and successful temporary-resource cleanup.
+See [actual AWS functional evidence](VOLGA-AWS-FUNCTIONAL-2026-09-28.md).
+The current 39-test Python integration suite also passed in isolated Linux testing.
 
 The earlier six-hour throughput soak is superseded by the user's instruction to
 freeze performance and stop speed experiments. No new window/rate/worker tuning.

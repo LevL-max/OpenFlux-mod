@@ -106,7 +106,7 @@ are present. Volga config, updater state and container are absent. The Legacy
 container PID stayed 131725 across both read-only samples. No AWS files,
 containers, units or network settings were changed.
 
-**Release blocker for the requested two-client topology:**
+**Single-active-client limitation:**
 `volga/internal/tunnel/endpoint.go` owns one record connection and one yamux
 session. In `volga/internal/recordconn/conn.go`, an authenticated hello from a
 different peer after readiness causes `ErrPeerRestart`. The managed adapter also
@@ -114,8 +114,18 @@ uses one fixed Volga config/state/container per server. Therefore the green
 single-pair tests do not establish simultaneous support for PC1 and PC2. Sharing
 one current Volga config between both clients can disrupt the first session.
 
-Resolve this through isolated per-client instances on the same AWS or explicit
-multi-client server support, with corresponding update/recovery tests and a
-short concurrent functional check before release. Existing recovery keys can
-still be reused; transport session isolation is a separate concern. No further
-throughput tuning is needed or authorized by this finding.
+The user subsequently clarified that PC1 and PC2 will **never use OpenFlux
+simultaneously**. The accepted scope is one AWS Volga container, one document pair
+and the existing recovery key set, with matching client configurations used in
+turn. The uncommitted multi-instance changes were removed; no wire/record/carrier
+changes are needed. Stop the old client before starting the other, even if it is
+idle. Extra document links are reserved for a future separate connection.
+
+A bounded probe on the actual AWS and mini-PCs confirmed PC2 session/HTTPS,
+stopping PC2, then PC1 session/HTTPS without restarting the AWS Volga process.
+Both HTTPS bodies had SHA-256
+`ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d`.
+Temporary containers, units and directories were removed; original service
+PIDs/states were unchanged. This does not yet prove the installed updater/panel
+path. A separate `volga_channel` setting now permits RC Volga updates while
+Legacy retains `channel: stable`; the Linux integration suite passes 39 tests.
