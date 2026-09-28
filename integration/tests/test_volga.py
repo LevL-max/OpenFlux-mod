@@ -259,6 +259,19 @@ class VolgaTests(unittest.TestCase):
    self.runtime.restore_server_container(record)
   self.assertEqual([c.args[0] for c in run.call_args_list],[['docker','rm','-f','openflux-volga'],['docker','rename','openflux-volga-backup-test','openflux-volga']])
 
+ def test_server_update_stops_the_old_server_before_creating_the_new(self):
+  # Two servers on one document pair end each other's sessions (seen on AWS with v4.1.0).
+  self.runtime.save(self.runtime.node_path,dict(self.node,role='server'))
+  self.runtime.save(self.runtime.config_path,dict(self.cfg,role='server',egress_policy='public'))
+  calls=[];saved=[]
+  def run(argv,**kwargs):
+   calls.append(argv)
+   return types.SimpleNamespace(returncode=0,stdout='[]' if argv[:2]==['ip','-j'] else '',stderr='')
+  with patch.object(self.runtime,'owned_container',return_value=True),patch.object(self.runtime,'run',side_effect=run):
+   self.runtime.replace_server_container('sha256:'+'a'*64,{},lambda record:saved.append(dict(record)))
+  self.assertEqual([c[:2] for c in calls if c[0]=='docker'],[['docker','stop'],['docker','rename'],['docker','create']])
+  self.assertTrue(saved[0]['old_container'].startswith('openflux-volga-backup-'))
+
  def test_server_rollback_preserves_original_when_rename_failed(self):
   node=dict(self.node,role='server');self.runtime.save(self.runtime.node_path,node)
   record={'kind':'update','node':node,'binary_present':False,'old_container':'openflux-volga-backup-test',
