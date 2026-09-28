@@ -32,6 +32,14 @@ jobs:
       - name: Race tests
         run: go test -race ./...
 
+      - name: Volga opt-in tests
+        run: |
+          go test -race -tags volga ./transport/yandex
+          go vet -tags volga ./transport/yandex
+          cd volga
+          go test -race -tags volga ./...
+          go vet -tags volga ./...
+
       - name: Integration tests
         run: |
           python3 -m pip install cryptography
@@ -45,9 +53,19 @@ jobs:
         run: |
           mkdir -p dist
           go build -trimpath -o dist/openflux .
-          sha256sum dist/openflux | tee dist/SHA256SUMS
+          (cd volga && go build -tags volga -trimpath -buildvcs=false -o ../dist/openflux-volga ./cmd/openflux-volga-lab)
+          sha256sum dist/openflux dist/openflux-volga | tee dist/SHA256SUMS
           printf 'git_commit=%s\n' "$GITHUB_SHA" > dist/BUILD-METADATA
           printf 'go_version=%s\n' "$(go version)" >> dist/BUILD-METADATA
+
+      - name: Smoke-test separate containers without publishing
+        run: |
+          cp dist/openflux dist/openflux-linux-amd64
+          cp dist/openflux-volga dist/openflux-volga-linux-amd64
+          docker build -f Dockerfile.release -t openflux-legacy-ci .
+          docker run --rm openflux-legacy-ci --help >/dev/null
+          docker build -f Dockerfile.volga -t openflux-volga-ci .
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --memory=256m --cpus=0.5 openflux-volga-ci -version
 
       - name: Upload Linux amd64 artifact
         uses: actions/upload-artifact@v4
@@ -55,6 +73,7 @@ jobs:
           name: openflux-linux-amd64-${{ github.sha }}
           path: |
             dist/openflux
+            dist/openflux-volga
             dist/SHA256SUMS
             dist/BUILD-METADATA
           if-no-files-found: error

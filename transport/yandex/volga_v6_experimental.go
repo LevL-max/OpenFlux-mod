@@ -119,7 +119,14 @@ func NewVolgaV6Experimental(o VolgaV6ExperimentalOptions) (*YandexVolgaV6Transpo
 		}
 		return pool, nil
 	}
-	return newYandexVolgaV6TransportWithFactory(transport.DefaultConfig(), cfg, factory), nil
+	t := newYandexVolgaV6TransportWithFactory(transport.DefaultConfig(), cfg, factory)
+	t.authBlocked = p.anyBlocked
+	return t, nil
+}
+
+// AuthBlocked exposes only a boolean; document cookies and tokens stay private.
+func (t *YandexVolgaV6Transport) AuthBlocked() bool {
+	return t.authBlocked != nil && t.authBlocked()
 }
 
 // SendContext applies bounded queue backpressure without polling or dropping.

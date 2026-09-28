@@ -11,19 +11,20 @@ import (
 )
 
 type Endpoint struct {
-	Client  bool
-	Key     []byte
-	Send    recordconn.SendFunc
-	Allowed map[string]bool
-	Idle    time.Duration
-	Event   func(string)
-	Opts    recordconn.Options
-	mu      sync.Mutex
-	openMu  sync.Mutex
-	conn    *recordconn.Conn
-	mux     *yamux.Session
-	changed chan struct{}
-	retired map[recordconn.Epoch]bool
+	Client     bool
+	Key        []byte
+	Send       recordconn.SendFunc
+	Policy     *TargetDialer
+	MaxStreams int
+	Idle       time.Duration
+	Event      func(string)
+	Opts       recordconn.Options
+	mu         sync.Mutex
+	openMu     sync.Mutex
+	conn       *recordconn.Conn
+	mux        *yamux.Session
+	changed    chan struct{}
+	retired    map[recordconn.Epoch]bool
 }
 
 func NewEndpoint(client bool, key []byte, send recordconn.SendFunc) *Endpoint {
@@ -63,6 +64,10 @@ func (e *Endpoint) Stats() recordconn.Stats {
 	return c.Stats()
 }
 func (e *Endpoint) Open(ctx context.Context) (*yamux.Stream, error) {
+	limit, err := StreamLimit(e.MaxStreams)
+	if err != nil {
+		return nil, err
+	}
 	e.openMu.Lock()
 	defer e.openMu.Unlock()
 	for {
@@ -73,7 +78,7 @@ func (e *Endpoint) Open(ctx context.Context) (*yamux.Stream, error) {
 		m, ch := e.mux, e.changed
 		e.mu.Unlock()
 		if m != nil && !m.IsClosed() {
-			if m.NumStreams() >= MaxStreams {
+			if m.NumStreams() >= limit {
 				return nil, errors.New("concurrent stream limit reached")
 			}
 			return m.OpenStream()
@@ -90,6 +95,9 @@ func (e *Endpoint) Open(ctx context.Context) (*yamux.Stream, error) {
 // connections belonging to a failed session close; subsequent SOCKS requests
 // use the new session. It never claims to resume an interrupted TCP connection.
 func (e *Endpoint) Run(ctx context.Context) error {
+	if _, err := StreamLimit(e.MaxStreams); err != nil {
+		return err
+	}
 	for ctx.Err() == nil {
 		c, err := recordconn.NewWithOptions(ctx, e.Key, e.Client, e.Send, e.Opts)
 		if err != nil {
@@ -120,7 +128,7 @@ func (e *Endpoint) Run(ctx context.Context) error {
 					case <-m.CloseChan():
 					}
 				} else {
-					ServeRemote(ctx, m, e.Allowed, e.Idle)
+					ServeRemote(ctx, m, e.Policy, e.Idle, e.MaxStreams)
 				}
 				m.Close()
 				e.mu.Lock()

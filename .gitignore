@@ -43,3 +43,6 @@ yandex.json
 
 .gradle/
 *.hprof
+
+__pycache__/
+*.pyc

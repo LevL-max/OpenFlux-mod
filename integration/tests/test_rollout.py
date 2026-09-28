@@ -71,7 +71,7 @@ class ReleaseTests(unittest.TestCase):
     restore_runtime=lambda *args:None)
    def support(*args):runner.write_text('new runner');helper.write_text('new helper')
    meta={'version':'v4.0.0-rc3','asset_sha256':digest(new),'bundle_schema':1}
-   with patch.object(r,'RUNNER',runner),patch.object(r,'HELPER',helper),patch.object(r,'DROPIN',root/'cookie-dropin'),patch.object(r,'LIBDIR',root/'modules'),patch.object(r,'install_support',side_effect=support),patch.object(r,'health',side_effect=RuntimeError('AUTH_BLOCKED')):
+   with patch.object(r,'support_paths',return_value=[('runner',runner),('helper',helper)]),patch.object(r,'install_support',side_effect=support),patch.object(r,'health',side_effect=RuntimeError('AUTH_BLOCKED')):
     with self.assertRaisesRegex(RuntimeError,'Previous installation restored'):r.replace(core,new,meta)
    self.assertEqual(binary.read_text(),'old binary');self.assertEqual(runner.read_text(),'old runner');self.assertEqual(helper.read_text(),'old helper')
    self.assertEqual(mode.read_text(),'awg');self.assertFalse((state/'installed.json').exists())

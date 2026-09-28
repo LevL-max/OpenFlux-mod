@@ -85,7 +85,7 @@ func origin(ctx context.Context) error {
 			}()
 		}
 	}()
-	srv := &http.Server{ReadHeaderTimeout: 5 * time.Second, IdleTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := &http.Server{ReadHeaderTimeout: 30 * time.Second, IdleTimeout: 10 * time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
 			fmt.Fprint(w, "ready")
 			return
@@ -206,6 +206,9 @@ func connect(proxy, target string) (net.Conn, error) {
 	}
 	var reply [10]byte
 	if _, e = io.ReadFull(c, reply[:]); e != nil || reply[1] != 0 {
+		if e == nil && reply[1] == 2 {
+			return nil, errSOCKSPolicyDenied
+		}
 		return nil, errors.New("SOCKS connect failed")
 	}
 	ok = true
@@ -352,7 +355,7 @@ func endurance(ctx context.Context, proxy string) error {
 	return nil
 }
 func main() {
-	mode := flag.String("mode", "bench", "origin, bench, lifecycle, or endurance")
+	mode := flag.String("mode", "bench", "origin, bench, lifecycle, endurance, or router")
 	proxy := flag.String("proxy", "127.0.0.1:1088", "loopback SOCKS endpoint")
 	flag.Parse()
 	if !strings.HasPrefix(*proxy, "127.0.0.1:") {
@@ -368,6 +371,8 @@ func main() {
 		e = origin(ctx)
 	} else if *mode == "bench" || *mode == "lifecycle" {
 		e = bench(ctx, *proxy, *mode == "lifecycle")
+	} else if *mode == "router" {
+		e = routerCheck(ctx, *proxy)
 	} else if *mode == "endurance" {
 		e = endurance(ctx, *proxy)
 	} else {

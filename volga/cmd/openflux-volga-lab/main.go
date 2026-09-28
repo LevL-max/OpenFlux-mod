@@ -20,7 +20,7 @@ import (
 	"universal-bypass-tool/transport/yandex"
 )
 
-const version = "0.1.3-review1-experimental"
+var version = "dev-volga-c630641"
 
 type config struct {
 	Protocol       string   `json:"protocol"`
@@ -31,6 +31,9 @@ type config struct {
 	SharedKey      string   `json:"shared_key"`
 	Listen         string   `json:"listen"`
 	AllowedTargets []string `json:"allowed_targets"`
+	EgressPolicy   string   `json:"egress_policy"`
+	DeniedCIDRs    []string `json:"denied_cidrs"`
+	MaxStreams     int      `json:"max_streams"`
 	IdleSeconds    int      `json:"idle_seconds"`
 	// Optional throughput A/B knobs. Absent keeps the validated shared 360/s.
 	PostsPerSecond float64 `json:"posts_per_second"`
@@ -102,22 +105,26 @@ func load(path string) (config, []byte, error) {
 	if c.SendWorkers != 0 && (c.SendWorkers < 1 || c.SendWorkers > 256) {
 		return c, nil, errors.New("send_workers must be 1-256 when set")
 	}
-	if c.Role == "server" && len(c.AllowedTargets) == 0 {
-		return c, nil, errors.New("experimental server requires allowed_targets")
+	if c.EgressPolicy == "" {
+		c.EgressPolicy = "allowlist"
 	}
-	for _, s := range c.AllowedTargets {
-		if _, _, e = net.SplitHostPort(s); e != nil {
-			return c, nil, errors.New("invalid allowed target")
-		}
+	if c.Role == "server" && c.EgressPolicy == "allowlist" && len(c.AllowedTargets) == 0 {
+		return c, nil, errors.New("allowlist server requires allowed_targets")
+	}
+	if _, e = tunnel.NewTargetDialer(c.EgressPolicy, c.AllowedTargets, c.DeniedCIDRs); e != nil {
+		return c, nil, e
+	}
+	if c.MaxStreams, e = tunnel.StreamLimit(c.MaxStreams); e != nil {
+		return c, nil, e
 	}
 	return c, recordconn.DeriveKey(key), nil
 }
 func run() error {
 	path := flag.String("config", "", "private JSON configuration")
-	showVersion := flag.Bool("version", false, "show experimental build version")
+	showVersion := flag.Bool("version", false, "show build version")
 	flag.Parse()
 	if *showVersion {
-		fmt.Println("openflux-volga-lab", version)
+		fmt.Println("openflux-volga", version)
 		return nil
 	}
 	if *path == "" {
@@ -129,6 +136,14 @@ func run() error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	return supervise(ctx, func() [32]byte { return credentialFingerprint(c.CookieStore, c.BrowserProfile) },
+		func(ctx context.Context) error { return runSession(ctx, c, key) }, time.Second)
+}
+
+func runSession(parent context.Context, c config, key []byte) error {
+	ctx, cancel := context.WithCancel(parent)
+	defer cancel()
+	profile := credentialFingerprint(c.BrowserProfile)
 	tr, e := yandex.NewVolgaV6Experimental(yandex.VolgaV6ExperimentalOptions{Documents: c.Documents, CookieStore: c.CookieStore, BrowserProfile: c.BrowserProfile, PostsPerSecond: c.PostsPerSecond, PerLaneBudget: c.PerLaneBudget, SendWorkers: c.SendWorkers})
 	if e != nil {
 		return e
@@ -143,10 +158,11 @@ func run() error {
 		flush = time.Duration(c.FlushMillis) * time.Millisecond
 	}
 	ep.Opts = recordconn.Options{Chunk: c.RecordChunkBytes, Window: c.RecordWindowBytes, FlushDelay: flush}
-	ep.Allowed = make(map[string]bool)
-	for _, s := range c.AllowedTargets {
-		ep.Allowed[s] = true
+	ep.Policy, e = tunnel.NewTargetDialer(c.EgressPolicy, c.AllowedTargets, c.DeniedCIDRs)
+	if e != nil {
+		return e
 	}
+	ep.MaxStreams = c.MaxStreams
 	ep.Event = func(s string) { event(s, nil) }
 	tr.Receive(ep.Receive)
 	if e = tr.Start(); e != nil {
@@ -180,6 +196,7 @@ func run() error {
 	}
 	event("carrier_started", map[string]any{"role": c.Role, "version": version, "protocol": c.Protocol,
 		"lanes": len(c.Documents), "posts_per_second": postRate, "per_lane_budget": c.PerLaneBudget, "aggregate_posts_per_second": aggregate,
+		"max_streams": c.MaxStreams, "egress_policy": c.EgressPolicy,
 		"record_chunk_bytes": effChunk, "record_window_bytes": effWindow, "flush_millis": effFlushMillis, "send_workers": effWorkers})
 	done := make(chan error, 2)
 	go func() { done <- ep.Run(ctx) }()
@@ -193,7 +210,7 @@ func run() error {
 		}
 		defer ln.Close()
 		workers++
-		go func() { done <- tunnel.ServeSOCKS(ctx, ln, ep.Open, ep.Idle) }()
+		go func() { done <- tunnel.ServeSOCKS(ctx, ln, ep.Open, ep.Idle, c.MaxStreams) }()
 		event("socks_listening", ln.Addr().String())
 	}
 	tick := time.NewTicker(5 * time.Second)
@@ -208,8 +225,12 @@ func run() error {
 			workers--
 			running = false
 		case now := <-tick.C:
+			if profile != credentialFingerprint(c.BrowserProfile) {
+				result, running = errBrowserProfileChanged, false
+				continue
+			}
 			s := tr.Snapshot(now)
-			event("status", map[string]any{"stream": ep.Stats(), "post_failures": s.Carrier.ActiveHealth.PostFailures, "http_statuses": s.Carrier.ActiveHealth.HTTPStatuses, "repairs": s.RepairsSent, "ws_reconnects": s.Carrier.ActiveHealth.WSReconnects, "handoffs": s.Carrier.Handoffs})
+			event("status", map[string]any{"stream": ep.Stats(), "auth_blocked": tr.AuthBlocked(), "post_failures": s.Carrier.ActiveHealth.PostFailures, "http_statuses": s.Carrier.ActiveHealth.HTTPStatuses, "repairs": s.RepairsSent, "ws_reconnects": s.Carrier.ActiveHealth.WSReconnects, "handoffs": s.Carrier.Handoffs})
 		}
 	}
 	cancel()

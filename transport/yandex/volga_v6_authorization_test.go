@@ -98,6 +98,7 @@ func TestVolgaV6AuthorizationBlockedUntilCookiesChange(t *testing.T) {
 	if calls.Load() != 1 {
 		t.Fatalf("CAPTCHA retried %d times", calls.Load())
 	}
+	if !p.anyBlocked() { t.Fatal("blocked state was not exposed") }
 	s, _ := transport.NewCookieStore(path)
 	if e := s.Save(doc, map[string]string{"Session_id": "new"}); e != nil {
 		t.Fatal(e)
@@ -105,6 +106,7 @@ func TestVolgaV6AuthorizationBlockedUntilCookiesChange(t *testing.T) {
 	if _, e := p.bootstrap(context.Background(), doc, false); e != nil {
 		t.Fatal(e)
 	}
+	if p.anyBlocked() { t.Fatal("fresh cookies did not clear blocked state") }
 	reloaded, _ := transport.NewCookieStore(path)
 	if reloaded.Load(doc)["updated"] != "value" {
 		t.Fatal("server cookie not persisted")

@@ -15,8 +15,19 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-const MaxStreams = 16
+// Bounds admitted handlers, not process RSS; each bridge owns two 32 KiB buffers.
+const MaxStreams = 64
 const SetupTimeout = 10 * time.Second
+
+func StreamLimit(n int) (int, error) {
+	if n == 0 {
+		return MaxStreams, nil
+	}
+	if n < 1 || n > MaxStreams {
+		return 0, errors.New("max_streams must be 1-64")
+	}
+	return n, nil
+}
 
 func MuxConfig() *yamux.Config {
 	c := yamux.DefaultConfig()
@@ -24,7 +35,8 @@ func MuxConfig() *yamux.Config {
 	// Yamux replenishes credit after half a stream window is consumed. Keep
 	// that remaining half larger than the 512 KiB ordered-carrier window so
 	// one healthy stream does not stall while its window update travels back.
-	// With at most 16 streams, receive payload storage stays bounded at 32 MiB.
+	// 64 admitted streams have at most 128 MiB of unread payload credit.
+	// Buffer capacity, carrier, Go and socket overhead are additional.
 	c.MaxStreamWindowSize = 2 << 20
 	c.KeepAliveInterval = 5 * time.Second
 	c.ConnectionWriteTimeout = 10 * time.Second
@@ -98,6 +110,9 @@ func Request(ctx context.Context, s *yamux.Stream, target string) error {
 		return e
 	}
 	if status[0] != 0 {
+		if status[0] == 2 {
+			return ErrTargetDenied
+		}
 		return errors.New("remote target denied or unavailable")
 	}
 	return s.SetDeadline(time.Time{})
@@ -177,24 +192,42 @@ func Bridge(ctx context.Context, tcp net.Conn, s *yamux.Stream, idle time.Durati
 	return second
 }
 
-func ServeRemote(ctx context.Context, mux *yamux.Session, allowed map[string]bool, idle time.Duration) error {
+func ServeRemote(ctx context.Context, mux *yamux.Session, policy *TargetDialer, idle time.Duration, maxStreams int) error {
+	limit, err := StreamLimit(maxStreams)
+	if err != nil {
+		return err
+	}
+	if policy == nil {
+		return errors.New("missing egress policy")
+	}
 	ctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	defer func() { cancel(); wg.Wait() }()
 	stop := context.AfterFunc(ctx, func() { mux.Close() })
 	defer stop()
+	slots := make(chan struct{}, limit)
 	for {
 		s, e := mux.AcceptStream()
 		if e != nil {
 			return e
 		}
-		if mux.NumStreams() > MaxStreams {
+		// Bound half-closed rejects from a non-cooperating authenticated peer.
+		if mux.NumStreams() > 2*MaxStreams {
+			mux.Close()
+			return errors.New("peer exceeded tracked stream limit")
+		}
+		select {
+		case slots <- struct{}{}:
+		default:
+			s.SetWriteDeadline(time.Now().Add(SetupTimeout))
+			WriteFull(s, []byte{1})
 			s.Close()
 			continue
 		}
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() { <-slots }()
 			defer s.Close()
 			stop := context.AfterFunc(ctx, func() { s.SetDeadline(time.Now()) })
 			defer stop()
@@ -203,15 +236,13 @@ func ServeRemote(ctx context.Context, mux *yamux.Session, allowed map[string]boo
 			if e != nil {
 				return
 			}
-			// An explicit allow-list is mandatory in this experimental build.
-			if !allowed[target] {
-				WriteFull(s, []byte{2})
-				return
-			}
-			dialer := net.Dialer{Timeout: SetupTimeout}
-			c, e := dialer.DialContext(ctx, "tcp", target)
+			c, e := policy.DialContext(ctx, target)
 			if e != nil {
-				WriteFull(s, []byte{5})
+				status := byte(5)
+				if errors.Is(e, ErrTargetDenied) {
+					status = 2
+				}
+				WriteFull(s, []byte{status})
 				return
 			}
 			defer c.Close()
@@ -302,15 +333,20 @@ func reply(c net.Conn, status byte) error {
 
 type OpenFunc func(context.Context) (*yamux.Stream, error)
 
-func ServeSOCKS(ctx context.Context, ln net.Listener, open OpenFunc, idle time.Duration) error {
+func ServeSOCKS(ctx context.Context, ln net.Listener, open OpenFunc, idle time.Duration, maxStreams int) error {
+	limit, err := StreamLimit(maxStreams)
+	if err != nil {
+		return err
+	}
 	if a, ok := ln.Addr().(*net.TCPAddr); !ok || !a.IP.IsLoopback() {
 		return errors.New("SOCKS lab listener must be loopback")
 	}
 	var wg sync.WaitGroup
+	ctx, cancel := context.WithCancel(ctx)
+	defer func() { cancel(); wg.Wait() }()
 	stop := context.AfterFunc(ctx, func() { ln.Close() })
 	defer stop()
-	defer wg.Wait()
-	slots := make(chan struct{}, MaxStreams)
+	slots := make(chan struct{}, limit)
 	for {
 		c, e := ln.Accept()
 		if e != nil {
@@ -341,8 +377,12 @@ func ServeSOCKS(ctx context.Context, ln net.Listener, open OpenFunc, idle time.D
 				return
 			}
 			defer s.Close()
-			if Request(setup, s, target) != nil {
-				reply(c, 5)
+			if err := Request(setup, s, target); err != nil {
+				status := byte(5)
+				if errors.Is(err, ErrTargetDenied) {
+					status = 2
+				}
+				reply(c, status)
 				return
 			}
 			if reply(c, 0) != nil {

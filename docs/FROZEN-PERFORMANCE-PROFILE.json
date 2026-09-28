@@ -1,0 +1,8 @@
+{
+  "posts_per_second": 480,
+  "record_window_bytes": 1048576,
+  "record_chunk_bytes": 5600,
+  "flush_millis": 1,
+  "send_workers": 64,
+  "per_lane_budget": false
+}

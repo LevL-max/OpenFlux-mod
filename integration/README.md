@@ -101,7 +101,7 @@ enable new protocols automatically. Native services and new Docker installations
 configured arguments. Adopted installations retain their original service/container arguments;
 change those using their established deployment configuration when switching transport.
 
-## 4. Optional Yandex Disk backup channel — any installation
+## 4. Optional Yandex Disk backup channel â€” any installation
 
 On an existing Router Panel, the integration installer also extends **Configuration
 Files** with individual Download / Upload entries for the node profile, updater
@@ -202,7 +202,7 @@ sudo python3 integration/install.py --role client --expected-exit-ip YOUR_EXIT_I
 This refuses unknown Router Panel/core layouts before writing and preserves host-specific
 hooks. New standalone OpenFlux clients do not require Router Panel.
 
-The existing **Check → Download → Install** buttons continue to update OpenFlux. The card
+The existing **Check â†’ Download â†’ Install** buttons continue to update OpenFlux. The card
 shows client authentication and the last client failure. When Disk pairing is configured, it
 also shows the separately verified server authentication, last server failure and response time.
 The cookie form can save local cookies, download the encrypted server recovery file, or upload
@@ -241,3 +241,85 @@ the generic server check only verifies that the runtime stays running. This is r
 limitation, not proof of end-to-end connectivity for a future protocol.
 
 Run the focused tests with `PYTHONPATH=integration python3 -m unittest discover -s integration/tests -v`.
+
+
+## Volga (v4.1.0 RC, opt-in)
+
+Update the existing installation to the reviewed RC integration bundle first.
+An ordinary update retains Legacy. Volga uses a separate binary, configuration,
+cookies, update state and server container. The six existing bundle module names
+are unchanged so v4.0.x updaters can accept the archive.
+
+The mini-PC protocol card provides **Yandex Legacy / Volga**, Volga config import/
+export, separate update controls and cookies for each document. The grouped config
+card remains supported. The first config download is a template: fill in two
+public document links and a random shared key, then import it. Both peers use the
+same links/key and their respective `role`. `openssl rand -hex 32` generates a key.
+Configuration downloads contain that key and must stay private.
+
+| Purpose | Path |
+|---|---|
+| Configuration | `/etc/openflux-volga/config.json` |
+| Browser credentials | `/var/lib/openflux-volga/{cookies,browser}.json` |
+| Binary | `/opt/openflux-volga/openflux-volga` |
+| Update/rollback state | `/var/lib/openflux-volga-updater/` |
+| Client service | `openflux-volga-client.service` |
+| Server container | `openflux-volga` |
+
+Copy the exact performance values from `docs/FROZEN-PERFORMANCE-PROFILE.json`.
+The managed validator requires them. `protocol` is `volga-stream-v1`, documents
+are `[A,B,A,B]`, `listen` is `127.0.0.1:11080`, `max_streams` is 1–64 (default 64),
+`idle_seconds` is 5–60 (default 30), `allowed_targets` is empty and `denied_cidrs`
+is a list. Set `egress_policy: public` on the server and `allowlist` on the client.
+The credential paths must match the table.
+
+For an adopted client/server with the RC integration installed:
+
+```sh
+sudo openfluxctl configure --transport volga --config-file /private/volga-config.json
+sudo openfluxctl cookies import --transport volga --document-url 'DOCUMENT_A' --file /private/doc-a.curl
+sudo openfluxctl cookies import --transport volga --document-url 'DOCUMENT_B' --file /private/doc-b.curl
+sudo openfluxctl setup-volga --config-file /private/volga-config.json --memory-mib 256 --cpu-percent 50
+```
+
+The server needs Docker and access to the pinned GHCR image. No port is exposed,
+host networking is unused and all Linux capabilities are dropped. First install
+checks carrier authorization without requiring an already-installed client.
+Start it explicitly with `sudo openfluxctl start --transport volga`; later updates
+preserve its active state. Legacy keeps running independently.
+
+On the client, `sudo openfluxctl select-protocol volga` checks the session and HTTPS
+through SOCKS, including expected exit IP when configured in the existing router
+settings. Failure restores the old selection/services. Selection preserves the
+saved router mode: changing protocol while using AWG/direct/etc does not move home
+traffic into OpenFlux. Return using `select-protocol yandex`. The existing router
+controller owns routes, policy and bridge. On these adopted routers neither
+client unit is separately enabled at boot; the restore controller starts the
+selected protocol. The bridge must not Require/Want the Legacy unit.
+
+```sh
+sudo openfluxctl status --transport volga
+sudo openfluxctl update --transport volga
+sudo openfluxctl rollback --transport volga
+sudo openfluxctl health --transport volga --seconds 90
+```
+
+Default limits: 256 MiB, zero swap, 50% of one CPU, 128 tasks. Configure limits via
+`setup-volga --memory-mib ... --cpu-percent ...` (192–2048 MiB; 10–200% of one CPU).
+Reinstalling applies them with health checks and rollback. Lower `max_streams`
+through config import if needed. Performance settings remain frozen.
+
+Volga reuses the Disk token and RSA/Ed25519 pairing keys with a separate signed
+protocol identity. `openfluxctl recovery --transport volga` enables its polling
+timer. Each document uses `server-recovery-volga-<document-hash>.json` so two quick
+sends cannot overwrite one another. Common signed status is
+`server-recovery-volga.json.status.json`. `--disk-path` chooses the Volga base,
+which must differ from Legacy. In the panel choose each document and send its
+fresh browser cURL via Disk, or download both encrypted files and upload them
+under their generated filenames in the configured folder. Missing/failed inboxes
+back off independently, up to 15 minutes. Only unexpired, signed, unreplayed
+packets for configured documents are accepted. Status/errors omit cookie values.
+
+Fresh credentials wake blocked startup without restarting the process. Persistent
+interactive verification must still be completed in the browser. Volga server
+status appears separately while Volga is selected.

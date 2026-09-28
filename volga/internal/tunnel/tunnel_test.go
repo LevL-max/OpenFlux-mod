@@ -29,6 +29,9 @@ type fixture struct {
 }
 
 func setup(t *testing.T, allowed []string, idle time.Duration) *fixture {
+	return setupWithLimits(t, allowed, idle, 0, 0)
+}
+func setupWithLimits(t *testing.T, allowed []string, idle time.Duration, clientLimit, serverLimit int) *fixture {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	key := sha256.Sum256([]byte("local integration key"))
@@ -46,9 +49,12 @@ func setup(t *testing.T, allowed []string, idle time.Duration) *fixture {
 	a, b := NewEndpoint(true, key[:], send(qb)), NewEndpoint(false, key[:], send(qa))
 	a.Idle = idle
 	b.Idle = idle
-	b.Allowed = make(map[string]bool)
-	for _, s := range allowed {
-		b.Allowed[s] = true
+	a.MaxStreams, b.MaxStreams = clientLimit, serverLimit
+	var policyErr error
+	b.Policy, policyErr = NewTargetDialer("allowlist", allowed, nil)
+	if policyErr != nil {
+		cancel()
+		t.Fatal(policyErr)
 	}
 	f := &fixture{ctx: ctx, client: a, server: b, clientEvents: make(chan string, 100), serverEvents: make(chan string, 100)}
 	a.Event = func(s string) { f.clientEvents <- s }
@@ -83,7 +89,7 @@ func setup(t *testing.T, allowed []string, idle time.Duration) *fixture {
 		t.Fatal(e)
 	}
 	f.proxy = ln.Addr().String()
-	start(func() { ServeSOCKS(ctx, ln, a.Open, idle) })
+	start(func() { ServeSOCKS(ctx, ln, a.Open, idle, a.MaxStreams) })
 	t.Cleanup(func() {
 		cancel()
 		ln.Close()
@@ -288,6 +294,8 @@ func TestDeniedTargetAndSOCKSMethod(t *testing.T) {
 	if c, e := socksConnect(f.proxy, "127.0.0.1:1", false); e == nil {
 		c.Close()
 		t.Fatal("unlisted target allowed")
+	} else if e.Error() != "SOCKS remote failure 2" {
+		t.Fatal("policy denial lost its SOCKS status", e)
 	}
 	c, e := net.Dial("tcp", f.proxy)
 	if e != nil {

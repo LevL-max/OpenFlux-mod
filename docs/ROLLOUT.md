@@ -1,64 +1,38 @@
-# Volga → OpenFlux-mod: интеграция и раскатка
+# Volga integration and rollout
 
-Рабочий статус. Ветка `claude/volga-integration`. После любого сбоя продолжать
-со следующего незакрытого шага этого файла.
+Branch: `codex/volga-integration`, from local `claude/volga-integration@bb5c293`.
+Production baseline: v4.0.6 / `47e9cb7`. Proposed RC: **v4.1.0-rc1**.
+Main changes only through a PR.
 
-## Решения
+## Implemented
 
-- В релиз идёт **проверенный рантайм лабы** (`volga/`, из
-  `LevL-max/openflux-volga-lab@ab7a7f3`): второй бинарник `openflux-volga`.
-  Порта в `transport.Transport` нет, чтобы не тестировать новый путь кода.
-- Файлы V6 в `transport/yandex` собраны под build-тегом `volga`. Бинарник
-  Legacy собирается без них и побайтно совпадает с v4.0.6 (см. «Проверки»).
-- Профиль скорости заморожен Codex: `docs/FROZEN-PERFORMANCE-PROFILE.json`
-  в `openflux-volga-lab`. Новых экспериментов со скоростью нет.
-- Клиент: отдельный unit Volga на том же SOCKS `127.0.0.1:11080`, взаимоисключающий
-  с Legacy. Мост роутера не меняется. Переключение — через конфиг, кнопка в панели
-  поверх него; проверка exit IP через SOCKS и откат при сбое.
-- Сервер: отдельный контейнер на транспорт со своими лимитами и своей версией
-  бинарника. Контейнер Legacy не трогаем.
-- Cookies Volga: тот же Диск, токен и ключи пары; второй файл `…-volga.json`
-  и отдельное хранилище cookies.
-- Выход в интернет: вместо белого списка лабы — только публичные адреса
-  (частные, loopback, link-local, metadata запрещены), явные исключения — для
-  тестового origin.
+1. V6 behind the `volga` build tag; the Legacy executable remains byte-identical.
+2. Public egress and 64-stream admission from lab `c630641933c19fdf250c9c13ffaef6fee6e80be3`.
+3. Separate release binary/container, SHA256SUMS and protocol manifest with pinned image digest.
+4. Separate runtime/config/update state, bounded resources, health checks and rollback watchdog.
+5. Protocol card selection, config import/export and separate Volga updates. Both real grouped panels patched offline and checked for idempotence, Python and JavaScript syntax.
+6. Independent server container; client unit uses the existing SOCKS listener and router bridge. Router helpers follow `active_transport`.
+7. Same Disk token/pairing keys, separate encrypted document inboxes and signed Volga status. Startup waits for new cookies after CAPTCHA; browser profile changes rebuild the session within the process.
 
-## Шаги
+## Remaining gates
 
-1. [x] Код V6 и рантайм в форке. Legacy побайтно не изменился, тесты зелёные.
-2. [ ] Codex, в `openflux-volga-lab`: политика выхода и лимит одновременных
-       соединений (сейчас 16). Затем влить сюда так же, как шаг 1.
-3. [ ] Релиз: `openflux-volga-linux-amd64` в ассетах, `SHA256SUMS`, манифесте.
-4. [ ] Интеграция: `transport` в `node.json`, конфиг Volga, `openfluxctl` для
-       adopted-установок, проверка здоровья по `session_ready` + exit IP через SOCKS.
-5. [ ] Роутер: unit Volga, выбор транспорта в панели (якоря панели не менять).
-6. [ ] Сервер: контейнер Volga с лимитами, `openfluxctl update --transport`.
-7. [ ] Диск: второй файл для cookies Volga, статус обоих транспортов.
-8. [ ] Офлайн-тесты, PR, RC как prerelease.
-9. [ ] Финальный тест Codex на RC — критерии ниже.
-10. [ ] Раскатка в режиме Ask: сервер → PC2 → stable → PC1.
+8. Commit/PR CI: race tests, vet, integration tests, Linux artifacts and container smoke.
+9. After review/merge, release workflow creates a **draft prerelease**. Verify the exact RC assets before enabling a live installation.
+10. Short functional RC check on server and PC2: SOCKS/HTTPS and SHA-256, cookie recovery, protocol switch and rollback. Restore the prior router mode, review before stable/PC1 rollout.
 
-## Финальный тест на RC (один прогон, Codex)
+The earlier six-hour throughput soak is superseded by the user's instruction to
+freeze performance and stop speed experiments. No new window/rate/worker tuning.
 
-Сборка и параметры заморожены: ровно RC и продакшн-настройки.
+An ordinary update retains Legacy. Volga needs its own config, credentials,
+installation and explicit selection. Server transports run independently;
+client transports share port 11080 and cannot run together. Default Volga limits:
+256 MiB, zero swap, 50% of one CPU, 128 tasks, 64 streams.
 
-1. Длительность: не меньше 6 часов, периодические передачи на несколько ГБ;
-   все SHA-256 совпадают, скорость в конце не хуже, чем в начале.
-2. Восстановление: перезапуск сервера, клиента, короткий обрыв сети — поднимается само.
-3. Авторизация: после смены cookies обычным способом Volga восстанавливается
-   без перезапуска.
-4. Ресурсы сервера: пиковая RAM и CPU процесса, `nr_throttled` — для лимитов контейнера.
-5. Переключение Legacy → Volga → Legacy через конфиг; Legacy после возврата работает как раньше.
+PC1/PC2 have disabled Legacy and bridge units: the router controller owns start/
+stop. The bridge has no Requires/Wants dependency on Legacy. Offline checks have
+not changed services, panels or routes. The lab test is complete; it is not proof
+that the final RC deployment/update path has passed a live test.
 
-Результат — одна таблица: критерий → PASS/FAIL и цифры.
-
-## Проверки
-
-- Legacy без изменений: `openflux` linux/amd64 из `origin/main` (v4.0.6) и из ветки,
-  флаги `-trimpath -buildvcs=false -ldflags='-s -w -buildid='`, `CGO_ENABLED=0`:
-  оба `c905b9d0ef5901f4c4dfd574caa3f54c20f91763f6f9044edbabcb8f51b334e5`.
-- Сборка Volga из ветки: `cd volga && go build -tags volga ./cmd/openflux-volga-lab`.
-  Без тега сборка останавливается с понятной ошибкой.
-- Тесты: корень без тега и с `-tags volga`, модуль `volga` с `-tags volga`,
-  всё под `-race`. `TestLoadBrowserCookiesPersistsAndReloads` на Windows падает
-  и на чистом v4.0.6 (POSIX-права); в Linux CI проходит.
+See [integration instructions](../integration/README.md),
+[lab evidence](VOLGA-LAB-ROUTER-2026-09-28.md) and
+[integration verification](VOLGA-INTEGRATION-2026-09-28.md).

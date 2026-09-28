@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"universal-bypass-tool/transport"
@@ -65,10 +66,11 @@ func (b volgaV6Bootstrap) validate() error {
 }
 
 type volgaV6AuthDocument struct {
-	gate    chan struct{}
-	seed    volgaV6Bootstrap
-	blocked error
-	cookies string
+	gate        chan struct{}
+	seed        volgaV6Bootstrap
+	blocked     error
+	blockedFlag atomic.Bool
+	cookies     string
 }
 
 type volgaV6AuthProvider struct {
@@ -84,6 +86,17 @@ type volgaV6AuthProvider struct {
 
 func newVolgaV6AuthProvider(cookiePath string) *volgaV6AuthProvider {
 	return &volgaV6AuthProvider{docs: make(map[string]*volgaV6AuthDocument), cookiePath: cookiePath, now: time.Now}
+}
+
+func (p *volgaV6AuthProvider) anyBlocked() bool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, d := range p.docs {
+		if d.blockedFlag.Load() {
+			return true
+		}
+	}
+	return false
 }
 
 func (p *volgaV6AuthProvider) document(doc string) *volgaV6AuthDocument {
@@ -218,6 +231,7 @@ func (p *volgaV6AuthProvider) bootstrap(ctx context.Context, doc string, force b
 	fingerprint := cookieMapToHeader(values)
 	if d.cookies != fingerprint {
 		d.blocked = nil
+		d.blockedFlag.Store(false)
 		d.seed.Access = ""
 		d.cookies = fingerprint
 	}
@@ -238,6 +252,7 @@ func (p *volgaV6AuthProvider) bootstrap(ctx context.Context, doc string, force b
 	b, err := p.fetchBootstrap(ctx, client, entry)
 	if errors.Is(err, ErrCaptchaRequired) || errors.Is(err, ErrLoginRequired) {
 		d.blocked = err
+		d.blockedFlag.Store(true)
 	}
 	if err != nil {
 		return volgaV6Bootstrap{}, err

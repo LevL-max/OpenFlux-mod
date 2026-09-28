@@ -64,7 +64,15 @@ def status():
         return _status()
 
 def snapshot():
-    try:return status()
+    try:
+        legacy=status()
+        from router_integration import VolgaRuntime
+        runtime=VolgaRuntime()
+        try:
+            volga=runtime.status();selected=runtime.node().get('active_transport','yandex')
+        except Exception:
+            volga={'state':'unknown','configured':False,'installed':False};selected='yandex'
+        return {**(volga if selected=='volga' else legacy),'active_transport':selected,'protocols':{'yandex':legacy,'volga':volga}}
     except Exception:return {'state':'unknown','reason':'Authentication status unavailable. Check the status helper.'}
 
 def _status():
@@ -171,6 +179,10 @@ def import_cookies(text):
 def configure_recovery(options):
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric import ed25519, rsa
+    # The panel is long lived. Preserve a protocol selected since module import.
+    try:current=json.loads(NODE_CONFIG.read_text())
+    except FileNotFoundError:current=NODE
+    if current is not NODE:NODE.clear();NODE.update(current)
     cfg=RECOVERY_DIR;cfg.mkdir(parents=True,exist_ok=True,mode=0o700);os.chmod(cfg,0o700)
     def key_file(name,data):
         fd,temp=tempfile.mkstemp(dir=cfg)
@@ -250,6 +262,8 @@ def package_cookies(text,upload=False):
     return {'ok':True,'message':'Encrypted file ready. Upload it to the configured Disk folder and replace the previous file.','filename':disk_path.rsplit('/',1)[-1],'package':envelope}
 
 def post(handler):
+    from router_integration import volga_panel_post
+    if volga_panel_post(handler):return True
     if handler.path not in ('/api/openflux/cookies','/api/openflux/recovery'):return False
     if not handler.allowed() or not handler.authorized():handler.j({'ok':False,'error':'Request rejected'},403);return True
     try:

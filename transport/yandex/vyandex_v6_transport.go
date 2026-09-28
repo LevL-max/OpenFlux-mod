@@ -56,9 +56,10 @@ func DefaultVolgaV6TransportConfig(documents []string) VolgaV6TransportConfig {
 type YandexVolgaV6Transport struct {
 	*transport.BaseTransport
 
-	config  VolgaV6TransportConfig
-	factory volgaV6CarrierFactory
-	runtime *volgaV6Runtime
+	config      VolgaV6TransportConfig
+	factory     volgaV6CarrierFactory
+	authBlocked func() bool
+	runtime     *volgaV6Runtime
 
 	ctx    context.Context
 	cancel context.CancelFunc

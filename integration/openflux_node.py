@@ -91,13 +91,16 @@ def candidate(c):
     newest['installed'] = installed; newest['update_available'] = not mod.is_current(installed, newest)
     return newest
 
-def verify_download(row, directory):
+def verify_download(row, directory, transport='yandex'):
     # Bootstrap and updates use the same published digests and release manifest.
     base = 'https://github.com/'+REPO+'/releases/'
     tag = row['tag_name']
     if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-rc\d+)?', tag) or row.get('html_url')!=base+'tag/'+tag:
         raise ValueError('Unexpected release identity')
-    required = ('openflux-linux-amd64','openflux-yandex-cookie-import','openflux-integration-linux.tar.gz',SELF_ASSET,'SHA256SUMS')
+    if transport not in ('yandex','volga'): raise ValueError('Unsupported transport')
+    binary_asset = 'openflux-volga-linux-amd64' if transport=='volga' else 'openflux-linux-amd64'
+    required = (binary_asset,'openflux-yandex-cookie-import','openflux-integration-linux.tar.gz',SELF_ASSET,'SHA256SUMS')
+    if transport=='volga': required += ('protocol-manifest.json',)
     assets = {}
     for name in required:
         found = [a for a in row.get('assets', []) if a.get('name')==name]
@@ -105,7 +108,7 @@ def verify_download(row, directory):
         a = found[0]
         if a.get('browser_download_url')!=base+'download/'+tag+'/'+name or not re.fullmatch(r'sha256:[0-9a-f]{64}', a.get('digest','')):
             raise ValueError('Unverified asset '+name)
-        fetch(a['browser_download_url'], directory/name, 70*1024*1024 if name=='openflux-linux-amd64' else 2*1024*1024)
+        fetch(a['browser_download_url'], directory/name, 70*1024*1024 if name==binary_asset else 2*1024*1024)
         if sha(directory/name)!=a['digest'][7:]: raise ValueError('Asset digest mismatch: '+name)
         assets[name] = a['digest'][7:]
     sums = {}
@@ -115,9 +118,13 @@ def verify_download(row, directory):
         sums[match[2]] = match[1]
     if any(sums.get(n)!=d for n,d in assets.items() if n!='SHA256SUMS'): raise ValueError('Release manifest mismatch')
     compile((directory/SELF_ASSET).read_text(), SELF_ASSET, 'exec')
-    os.chmod(directory/'openflux-linux-amd64', 0o755)
-    p = run([str(directory/'openflux-linux-amd64'),'--help'])
-    if 'yandex-cookie-store' not in p.stdout+p.stderr: raise ValueError('Unsupported release binary')
+    os.chmod(directory/binary_asset, 0o755)
+    p = run([str(directory/binary_asset),'-version' if transport=='volga' else '--help'])
+    marker = 'openflux-volga' if transport=='volga' else 'yandex-cookie-store'
+    if marker not in (p.stdout or '')+(p.stderr or ''): raise ValueError('Unsupported release binary')
+    if transport=='volga':
+        from router_integration import validate_volga_manifest
+        validate_volga_manifest(read(directory/'protocol-manifest.json'),tag,assets[binary_asset])
     return assets
 
 def atomic_file(source, target, mode=0o755):
@@ -346,13 +353,23 @@ def main():
         for field in ('binary','library','service','container','cookie-store','document-url','args-file'): p.add_argument('--'+field)
         p.add_argument('--transport',default='yandex'); p.add_argument('--socks',default='127.0.0.1:1080')
         p.add_argument('--channel',choices=('stable','prerelease'),default='stable'); p.add_argument('--router-updater',action='store_true')
-    for command in ('status','check','download','update','rollback','start','stop','restart','run','menu'): sub.add_parser(command)
-    p=sub.add_parser('configure'); p.add_argument('--channel',choices=('stable','prerelease')); p.add_argument('--args-file'); p.add_argument('--transport'); p.add_argument('--document-url')
-    p=sub.add_parser('cookies'); p.add_argument('operation',choices=('import','package','send')); p.add_argument('--file',default='-'); p.add_argument('--output')
-    p=sub.add_parser('recovery'); p.add_argument('--server-public-key'); p.add_argument('--sender-public-key'); p.add_argument('--disk-token-file'); p.add_argument('--disk-path')
+    for command in ('status','check','download','update','rollback','start','stop','restart','run','menu','health'):
+        p=sub.add_parser(command);p.add_argument('--transport',choices=('yandex','volga'));p.add_argument('--seconds',type=int,default=90)
+    p=sub.add_parser('configure'); p.add_argument('--channel',choices=('stable','prerelease')); p.add_argument('--args-file'); p.add_argument('--transport'); p.add_argument('--document-url');p.add_argument('--config-file')
+    p=sub.add_parser('cookies'); p.add_argument('operation',choices=('import','package','send')); p.add_argument('--file',default='-'); p.add_argument('--output');p.add_argument('--transport',choices=('yandex','volga'));p.add_argument('--document-url')
+    p=sub.add_parser('recovery'); p.add_argument('--server-public-key'); p.add_argument('--sender-public-key'); p.add_argument('--disk-token-file'); p.add_argument('--disk-path');p.add_argument('--transport',choices=('yandex','volga'))
+    p=sub.add_parser('setup-volga');p.add_argument('--config-file',required=True);p.add_argument('--memory-mib',type=int,default=256);p.add_argument('--cpu-percent',type=int,default=50)
+    p=sub.add_parser('select-protocol');p.add_argument('protocol',choices=('yandex','volga'))
+    for command in ('runtime-unit','recover-volga','poll-volga-recovery'):sub.add_parser(command)
     p=sub.add_parser('recover'); p.add_argument('--checkpoint',required=True)
     a=parser.parse_args()
     if os.geteuid()!=0: parser.error('Run with sudo')
+    if a.action=='runtime-unit':
+        from router_integration import openflux_runtime_unit
+        print(openflux_runtime_unit());return
+    if getattr(a,'transport',None)=='volga' or a.action in ('setup-volga','select-protocol','recover-volga','poll-volga-recovery'):
+        from router_integration import run_volga_cli
+        result=run_volga_cli(a);print(json.dumps(result,indent=2));return
     if a.action in ('install','adopt'): result=setup(a)
     elif a.action=='recover': restore(read(a.checkpoint)); result={'restored':True}
     else:
@@ -393,6 +410,7 @@ def main():
         elif a.action=='status':
             import openflux_auth
             result={'installed':identify(c),'role':c['role'],'channel':c['channel'],'authentication':openflux_auth.status()}
+        elif a.action=='health':health(c,max(1,min(a.seconds,150)));result={'ok':True,'health':'passed'}
         elif a.action=='configure':
             if (a.args_file or a.transport or a.document_url) and not c.get('owns_runtime'):
                 raise ValueError('This existing runtime is externally configured. Change its service/container arguments using its existing setup; the updater preserves them.')
