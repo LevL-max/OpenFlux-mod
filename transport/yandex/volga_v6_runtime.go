@@ -20,17 +20,30 @@ type volgaV6RuntimeConfig struct {
 	DrainGrace          time.Duration
 	CarrierStartTimeout time.Duration
 	RepairWorkers       int
+
+	// Quiet (a server) waits silently while no peer frame has arrived for
+	// QuietAfter, or none since start: its outstanding DATA then has no
+	// receiver. It sends no repairs and recycles its carriers, each recycle a
+	// fresh authorization of every lane, only every QuietRecycleInterval to heal
+	// a receive path that died silently. A peer frame restores normal recovery;
+	// a live session's yamux keepalives arrive every 5 s. A client keeps fast
+	// recovery.
+	Quiet                bool
+	QuietAfter           time.Duration
+	QuietRecycleInterval time.Duration
 }
 
 func defaultVolgaV6RuntimeConfig() volgaV6RuntimeConfig {
 	return volgaV6RuntimeConfig{
-		Reliable:            defaultVolgaV6ReliableConfig(),
-		Recovery:            defaultVolgaV6RecoveryConfig(),
-		AckRepeatInterval:   100 * time.Millisecond,
-		AckRepeatWindow:     10 * time.Second,
-		DrainGrace:          2 * time.Second,
-		CarrierStartTimeout: 15 * time.Second,
-		RepairWorkers:       4,
+		Reliable:             defaultVolgaV6ReliableConfig(),
+		Recovery:             defaultVolgaV6RecoveryConfig(),
+		AckRepeatInterval:    100 * time.Millisecond,
+		AckRepeatWindow:      10 * time.Second,
+		DrainGrace:           2 * time.Second,
+		CarrierStartTimeout:  15 * time.Second,
+		RepairWorkers:        4,
+		QuietAfter:           30 * time.Second,
+		QuietRecycleInterval: 20 * time.Minute,
 	}
 }
 
@@ -55,6 +68,7 @@ type volgaV6RuntimeSnapshot struct {
 	AckSendFailures   uint64
 	RepairsSent       uint64
 	LastHandoffReason string
+	WaitingForPeer    bool
 }
 
 // volgaV6Runtime joins the logical sender/receiver, recovery controller and
@@ -81,6 +95,7 @@ type volgaV6Runtime struct {
 	lastAckSent       time.Time
 	lastHandoffReason string
 	retireAt          map[uint64]time.Time
+	quietRecycleAt    time.Time // next keepalive recycle while waiting for a peer
 }
 
 func newVolgaV6Runtime(sessionID uint64, factory volgaV6CarrierFactory, cfg volgaV6RuntimeConfig, onData func([][]byte)) *volgaV6Runtime {
@@ -101,6 +116,12 @@ func newVolgaV6Runtime(sessionID uint64, factory volgaV6CarrierFactory, cfg volg
 		cfg.RepairWorkers = defaults.RepairWorkers
 	}
 	cfg.RepairWorkers = min(cfg.RepairWorkers, 8)
+	if cfg.QuietAfter <= 0 {
+		cfg.QuietAfter = defaults.QuietAfter
+	}
+	if cfg.QuietRecycleInterval <= 0 {
+		cfg.QuietRecycleInterval = defaults.QuietRecycleInterval
+	}
 
 	runtime := &volgaV6Runtime{
 		config:   cfg,
@@ -299,25 +320,19 @@ func (r *volgaV6Runtime) Tick(ctx context.Context, now time.Time) volgaV6Runtime
 	}
 
 	snap := r.session.Snapshot(now)
+	if r.quietAt(now) {
+		return r.waitForPeer(ctx, now, snap, result)
+	}
+	if r.config.Quiet {
+		r.mu.Lock()
+		r.quietRecycleAt = time.Time{}
+		r.mu.Unlock()
+	}
 	result.Recovery = r.recovery.Observe(now, snap)
-	if result.Recovery.Recycle {
-		startCtx, cancel := context.WithTimeout(ctx, r.config.CarrierStartTimeout)
-		oldGen, newGen, err := r.manager.Handoff(startCtx)
-		cancel()
-		if err != nil {
-			result.HandoffErr = err
-		} else {
-			result.Handoff = true
-			result.OldGeneration = oldGen
-			result.NewGeneration = newGen
-			r.scheduleRetire(oldGen, now)
-			r.mu.Lock()
-			r.lastHandoffReason = result.Recovery.Reason
-			r.mu.Unlock()
-			// Permit a bounded immediate repair burst on the newly authorized
-			// carrier. Subsequent repairs are rate-refilled normally.
-			r.recovery.ResetRetryBudget(now)
-		}
+	if result.Recovery.Recycle && r.handoff(ctx, now, &result, result.Recovery.Reason) {
+		// Permit a bounded immediate repair burst on the newly authorized
+		// carrier. Subsequent repairs are rate-refilled normally.
+		r.recovery.ResetRetryBudget(now)
 	}
 
 	due := r.session.DueRepairs(now)
@@ -354,6 +369,57 @@ func (r *volgaV6Runtime) Tick(ctx context.Context, now time.Time) volgaV6Runtime
 	return result
 }
 
+// handoff replaces the physical carrier generation and reports success.
+func (r *volgaV6Runtime) handoff(ctx context.Context, now time.Time, result *volgaV6RuntimeTickResult, reason string) bool {
+	startCtx, cancel := context.WithTimeout(ctx, r.config.CarrierStartTimeout)
+	oldGen, newGen, err := r.manager.Handoff(startCtx)
+	cancel()
+	if err != nil {
+		result.HandoffErr = err
+		return false
+	}
+	result.Handoff = true
+	result.OldGeneration = oldGen
+	result.NewGeneration = newGen
+	r.scheduleRetire(oldGen, now)
+	r.mu.Lock()
+	r.lastHandoffReason = reason
+	r.mu.Unlock()
+	return true
+}
+
+// quietAt reports whether a Quiet runtime has no peer to serve: no peer frame
+// since start, or none for QuietAfter.
+func (r *volgaV6Runtime) quietAt(now time.Time) bool {
+	if !r.config.Quiet {
+		return false
+	}
+	last := r.lastInbound.Load()
+	return last == 0 || now.Sub(time.Unix(0, last)) >= r.config.QuietAfter
+}
+
+// waitForPeer keeps a Quiet runtime silent: no repairs or ACK repeats, and a
+// keepalive recycle every QuietRecycleInterval. The progress clock stays fresh
+// so a returning peer is not met with an instant stall verdict.
+func (r *volgaV6Runtime) waitForPeer(ctx context.Context, now time.Time, snap volgaV6ReliableSnapshot, result volgaV6RuntimeTickResult) volgaV6RuntimeTickResult {
+	r.recovery.deferProgress(now)
+	result.Recovery = volgaV6RecoveryDecision{AdmissionLimit: r.recovery.AdmissionLimit(snap.ReplayDepth), Reason: "waiting-for-peer"}
+	r.mu.Lock()
+	if r.quietRecycleAt.IsZero() {
+		r.quietRecycleAt = now.Add(r.config.QuietRecycleInterval)
+	}
+	due := !now.Before(r.quietRecycleAt)
+	if due {
+		r.quietRecycleAt = now.Add(r.config.QuietRecycleInterval)
+	}
+	r.mu.Unlock()
+	if due {
+		result.Recovery.Reason = "quiet-keepalive"
+		r.handoff(ctx, now, &result, result.Recovery.Reason)
+	}
+	return result
+}
+
 func (r *volgaV6Runtime) Snapshot(now time.Time) volgaV6RuntimeSnapshot {
 	r.mu.Lock()
 	lastReason := r.lastHandoffReason
@@ -366,5 +432,6 @@ func (r *volgaV6Runtime) Snapshot(now time.Time) volgaV6RuntimeSnapshot {
 		AckSendFailures:   r.ackSendFailures.Load(),
 		RepairsSent:       r.repairsSent.Load(),
 		LastHandoffReason: lastReason,
+		WaitingForPeer:    r.quietAt(now),
 	}
 }

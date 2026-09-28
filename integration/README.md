@@ -203,10 +203,13 @@ This refuses unknown Router Panel/core layouts before writing and preserves host
 hooks. New standalone OpenFlux clients do not require Router Panel.
 
 The existing **Check → Download → Install** buttons continue to update OpenFlux. The card
-shows client authentication and the last client failure. When Disk pairing is configured, it
-also shows the separately verified server authentication, last server failure and response time.
-The cookie form can save local cookies, download the encrypted server recovery file, or upload
-it directly through the Disk API. The API upload button needs a configured write-capable token.
+has one section per protocol, **Legacy browser cookies** and **Volga browser cookies**. Both stay
+visible whichever protocol is selected: the server needs fresh cookies for either. Each section
+links its document(s), which open in a new tab, and shows this mini-PC's authentication and last
+failure. When Disk pairing is configured, it also shows the separately verified server state and
+response time; its heading names the selected protocol and highlights AUTH_BLOCKED. One pasted
+Copy as cURL can be saved here and sent to the server in one step, or used for either action alone,
+or downloaded as the encrypted server file. Sending needs a configured write-capable Disk token.
 
 To attach the standalone CLI to an existing installation, use `adopt` with its actual paths:
 
@@ -249,9 +252,10 @@ An ordinary update retains Legacy. Volga uses a separate binary, configuration,
 cookies, update state and server container. The six existing bundle module names
 are unchanged so v4.0.x updaters can accept the archive.
 
-The mini-PC protocol card provides **Yandex Legacy / Volga**, Volga config import/
-export, separate update controls and cookies for each document. The grouped config
-card remains supported. The first config download is a template: fill in two
+The mini-PC protocol card provides **Yandex Legacy / Volga** and the **Volga browser
+cookies** section: links to both documents, this mini-PC's and the server's Volga state,
+and cookies for each document. Volga is updated with OpenFlux; its configuration file
+is under Configuration. The first config download is a template: fill in two
 public document links and a random shared key, then import it. Both peers use the
 same links/key and their respective `role`. `openssl rand -hex 32` generates a key.
 Configuration downloads contain that key and must stay private.
@@ -303,7 +307,13 @@ host networking is unused and all Linux capabilities are dropped. First install
 checks carrier authorization without requiring an already-installed client.
 Stop or start it with `sudo openfluxctl stop|start --transport volga`; updates
 preserve its state. A stopped server is not started to be tested: its executable
-and image are verified offline. Legacy keeps running independently.
+and image are verified offline. Legacy keeps running independently. Updates keep
+the previous container for Rollback and remove older containers and images.
+
+Without a client the server stays quiet. It announces itself for 3 s after start,
+then sends no retries. It renews its Yandex authorization only every 20 minutes;
+each renewal authorizes every lane. The same applies 30 s after the last client
+frame. A client's first frame restores normal recovery.
 
 On the client, `sudo openfluxctl select-protocol volga` checks the session and HTTPS
 through SOCKS, including expected exit IP when configured in the existing router

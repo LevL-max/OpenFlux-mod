@@ -144,7 +144,7 @@ func runSession(parent context.Context, c config, key []byte) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	profile := credentialFingerprint(c.BrowserProfile)
-	tr, e := yandex.NewVolgaV6Experimental(yandex.VolgaV6ExperimentalOptions{Documents: c.Documents, CookieStore: c.CookieStore, BrowserProfile: c.BrowserProfile, PostsPerSecond: c.PostsPerSecond, PerLaneBudget: c.PerLaneBudget, SendWorkers: c.SendWorkers})
+	tr, e := yandex.NewVolgaV6Experimental(yandex.VolgaV6ExperimentalOptions{Documents: c.Documents, CookieStore: c.CookieStore, BrowserProfile: c.BrowserProfile, PostsPerSecond: c.PostsPerSecond, PerLaneBudget: c.PerLaneBudget, SendWorkers: c.SendWorkers, Quiet: c.Role == "server"})
 	if e != nil {
 		return e
 	}
@@ -230,7 +230,7 @@ func runSession(parent context.Context, c config, key []byte) error {
 				continue
 			}
 			s := tr.Snapshot(now)
-			event("status", map[string]any{"stream": ep.Stats(), "auth_blocked": tr.AuthBlocked(), "post_failures": s.Carrier.ActiveHealth.PostFailures, "http_statuses": s.Carrier.ActiveHealth.HTTPStatuses, "repairs": s.RepairsSent, "ws_reconnects": s.Carrier.ActiveHealth.WSReconnects, "handoffs": s.Carrier.Handoffs})
+			event("status", map[string]any{"stream": ep.Stats(), "auth_blocked": tr.AuthBlocked(), "post_failures": s.Carrier.ActiveHealth.PostFailures, "http_statuses": s.Carrier.ActiveHealth.HTTPStatuses, "repairs": s.RepairsSent, "ws_reconnects": s.Carrier.ActiveHealth.WSReconnects, "handoffs": s.Carrier.Handoffs, "waiting_for_peer": s.WaitingForPeer})
 		}
 	}
 	cancel()
