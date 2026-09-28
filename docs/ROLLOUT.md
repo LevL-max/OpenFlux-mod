@@ -14,9 +14,12 @@ Main changes only through a PR.
 6. Independent server container; client unit uses the existing SOCKS listener and router bridge. Router helpers follow `active_transport`.
 7. Same Disk token/pairing keys, separate encrypted document inboxes and signed Volga status. Startup waits for new cookies after CAPTCHA; browser profile changes rebuild the session within the process.
 
+8. PR #19 CI passed: full Linux race/vet, 38 integration tests, reproducible
+   binaries and both container smokes. CI binaries match the local SHA-256 values.
+   [Validated code eab50c6](https://github.com/LevL-max/OpenFlux-mod/actions/runs/36415351502).
+
 ## Remaining gates
 
-8. Commit/PR CI: race tests, vet, integration tests, Linux artifacts and container smoke.
 9. After review/merge, release workflow creates a **draft prerelease**. Verify the exact RC assets before enabling a live installation.
 10. Short functional RC check on server and PC2: SOCKS/HTTPS and SHA-256, cookie recovery, protocol switch and rollback. Restore the prior router mode, review before stable/PC1 rollout.
 

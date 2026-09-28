@@ -22,5 +22,12 @@
   "linux_shell_syntax_exit": 0,
   "remote_temp_cleanup_exit": 0,
   "manifest_generator_test": "PASS locally; included in Linux CI",
-  "ci_initial_run": "https://github.com/LevL-max/OpenFlux-mod/actions/runs/36411631509"
+  "ci_initial_run": "https://github.com/LevL-max/OpenFlux-mod/actions/runs/36411631509",
+  "validated_code_commit": "eab50c694d0c0d843dc3d222a16cedf145afc8e4",
+  "ci_run": "https://github.com/LevL-max/OpenFlux-mod/actions/runs/36415351502",
+  "ci_integration_tests": 38,
+  "ci_integration_seconds": 5.196,
+  "ci_binaries_match_local": true,
+  "ci_linux_permission_test": true,
+  "ci_separate_container_smokes": true
 }

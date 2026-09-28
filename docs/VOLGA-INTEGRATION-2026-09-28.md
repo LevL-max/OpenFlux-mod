@@ -40,7 +40,7 @@ session in-process. Interactive CAPTCHA verification still requires the browser.
 | Root Go race tests and vet | PASS on Windows; one POSIX-permission assertion excluded |
 | Tagged transport race tests and vet | PASS with the same Windows-only exclusion |
 | Nested Volga race tests and vet | PASS, including startup wait, resume, cancellation and self-cookie-write regression |
-| Linux integration tests | PASS, 37 tests in 11.819 seconds on PC2; mock services and isolated files |
+| Linux integration tests | PASS, 38 in GitHub CI; preceding 37-test set also passed on isolated PC2 |
 | PC1/PC2 actual panel Python syntax and idempotence | PASS |
 | PC1/PC2 actual panel JavaScript syntax | PASS, four/two script blocks respectively |
 | Existing grouped config renderer | Preserved; only Volga config entry and private-file badge added |
@@ -69,11 +69,14 @@ real panel. Temporary files were removed. No actual panel, service or route was
 modified. Read-only audit confirmed Legacy and bridge units are disabled and
 controller-managed on both routers; bridge dependencies do not start Legacy.
 
-Full Linux CI, race, vet and both container smokes passed for `29e5fcc` in
-[run 36411631509](https://github.com/LevL-max/OpenFlux-mod/actions/runs/36411631509).
-The follow-up adds archive loading with checksum/image-ID verification, a
-manifest-generator test and reproducible CI builds. The definitive check for the
-latest commit is attached to [PR #19](https://github.com/LevL-max/OpenFlux-mod/pull/19).
+Final code `eab50c6` passed full Linux tests (including the POSIX permission test),
+race, vet and both container smokes in
+[CI run 36415351502](https://github.com/LevL-max/OpenFlux-mod/actions/runs/36415351502).
+All 38 integration tests passed in 5.196 seconds. The CI Volga container was saved,
+loaded from its archive, checked by image ID and started under resource limits.
+Both downloaded CI executables match the local SHA-256 values above exactly.
+[PR #19](https://github.com/LevL-max/OpenFlux-mod/pull/19) tracks review and final
+head checks; subsequent documentation-only commits do not change these binaries.
 
 ## Live evidence and remaining gate
 
