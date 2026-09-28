@@ -193,6 +193,11 @@ def health(core,seconds=100):
     raise RuntimeError('OpenFlux did not pass authentication and AWS exit-IP health checks; inspect authentication status.')
 
 def replace(core,source,metadata):
+    # The legacy updater owns its legacy service and binary. Do not let its
+    # health-check start stop the selected Volga client through unit Conflicts.
+    profile=pathlib.Path('/etc/openflux/node.json')
+    if profile.exists() and json.loads(profile.read_text()).get('active_transport','yandex')=='volga':
+        raise ValueError('Select Yandex Legacy before installing or rolling back the Legacy release. Volga updates have their own control.')
     rollback=source.parent.name.startswith('backup-')
     if not rollback:no_downgrade(core,metadata)
     binary=pathlib.Path(core.COMPONENTS['openflux']['binary']);mode=core.MODE.read_text().strip()

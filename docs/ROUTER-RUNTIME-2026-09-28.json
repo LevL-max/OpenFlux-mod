@@ -1,0 +1,908 @@
+{
+  "date": "2026-09-28",
+  "base_commit": "ab7a7f319cb4e810f6929f55ded979327c161f18",
+  "version": "0.1.3-router1-experimental",
+  "speed_benchmark": false,
+  "checks": [
+    {
+      "data": {
+        "simultaneous_connections": 64
+      },
+      "event": "router_connections_open",
+      "time": "2026-09-28T09:23:57.481871879Z"
+    },
+    {
+      "data": {
+        "limit": 64
+      },
+      "event": "router_limit_rejection_pass",
+      "time": "2026-09-28T09:23:57.482392922Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 40,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:58.991580644Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 39,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.097195155Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 38,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.24999701Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 37,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.287964916Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 36,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.288318029Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 35,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.391412937Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 34,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.391805196Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 32,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.463563599Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 33,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.464039859Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 31,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.478240026Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 30,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.478525705Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 29,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.560186664Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 28,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.560460785Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 27,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.560700337Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 26,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.588695118Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 24,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.810521765Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 22,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.885045294Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 20,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:23:59.907956544Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 25,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.362906331Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 41,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.451656608Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 18,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.598542207Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 16,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.609270215Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 14,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.704108747Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 10,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.78762374Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 12,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.787928443Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 6,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.803828786Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 8,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.808447782Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 4,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.820404856Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 52,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.820629944Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 2,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.827061277Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 54,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.901696571Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 0,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.901963591Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 48,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.902183149Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 50,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.902375182Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 19,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.933867871Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 21,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.934085737Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 23,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.934290943Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 58,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.943301462Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 17,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.983467183Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 62,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.983707897Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 56,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.983937363Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 51,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.996878572Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 49,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.997086452Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 63,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.997324501Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 1,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.997541917Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 5,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.997730454Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 3,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.997912139Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 7,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.998088045Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 13,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.998261967Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 15,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.998432014Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 11,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.998606608Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 9,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.998777335Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 42,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.998960983Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 44,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.999183026Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 60,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.999379927Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 53,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:00.999554201Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 43,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:01.026021044Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "download",
+        "index": 46,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:01.026285078Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 57,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:01.026509346Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 59,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:01.026735676Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 47,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:01.026950498Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 45,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:01.02718426Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 55,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:01.027404391Z"
+    },
+    {
+      "data": {
+        "bytes": 131072,
+        "direction": "upload",
+        "index": 61,
+        "integrity": true,
+        "sha256": "5b9d4c9a7e954d92c843ed117b36911de98107fe152fa707069ac7e09b7d597c"
+      },
+      "event": "router_transfer",
+      "time": "2026-09-28T09:24:01.027650826Z"
+    },
+    {
+      "data": {
+        "bytes": 559,
+        "host": "example.com",
+        "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d",
+        "status": 200,
+        "tls_verified": true
+      },
+      "event": "router_public_https_pass",
+      "time": "2026-09-28T09:24:02.008680463Z"
+    },
+    {
+      "data": {
+        "target": "127.0.0.1:22"
+      },
+      "event": "router_private_denied",
+      "time": "2026-09-28T09:24:02.20463324Z"
+    },
+    {
+      "data": {
+        "target": "169.254.169.254:80"
+      },
+      "event": "router_private_denied",
+      "time": "2026-09-28T09:24:02.40994229Z"
+    },
+    {
+      "data": {
+        "target": "10.0.0.1:80"
+      },
+      "event": "router_private_denied",
+      "time": "2026-09-28T09:24:02.584277854Z"
+    },
+    {
+      "data": {
+        "target": "[::ffff:127.0.0.1]:22"
+      },
+      "event": "router_private_denied",
+      "time": "2026-09-28T09:24:02.783308944Z"
+    },
+    {
+      "data": null,
+      "event": "half_close_pass",
+      "time": "2026-09-28T09:24:03.147932762Z"
+    },
+    {
+      "data": null,
+      "event": "new_connection_after_abort_pass",
+      "time": "2026-09-28T09:24:04.370551887Z"
+    },
+    {
+      "data": {
+        "connections": 64,
+        "downloads": 32,
+        "speed_benchmark": false,
+        "uploads": 32,
+        "verified_bytes": 8388608
+      },
+      "event": "router_pass",
+      "time": "2026-09-28T09:24:04.370588158Z"
+    }
+  ],
+  "resources": {
+    "server": {
+      "samples": 101,
+      "sample_interval_seconds": 0.2,
+      "observed_seconds": 20.099761526100338,
+      "peak_process_rss_mib": 71.328125,
+      "peak_sampled_cgroup_memory_mib": 69.25,
+      "kernel_cgroup_memory_peak": null,
+      "process_cpu_seconds_observed": 1.73,
+      "mean_observed_cpu_percent_one_core": 8.607067291587148,
+      "peak_sampled_cpu_percent_one_core": 54.77117729899895,
+      "nr_throttled_lifetime": 17,
+      "nr_throttled_observed_delta": 16,
+      "throttled_usec_lifetime": 718647,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0",
+      "last_status": {
+        "data": {
+          "handoffs": 0,
+          "http_statuses": {
+            "204": 1771
+          },
+          "post_failures": 0,
+          "repairs": 29,
+          "stream": {
+            "ready": true,
+            "read_bytes": 4210750,
+            "written_bytes": 6314807,
+            "peer_read_bytes": 6314807,
+            "buffered_bytes": 0,
+            "peak_bytes": 254000,
+            "chunk": 5600,
+            "window": 1048576,
+            "data_records": 1180,
+            "partial_records": 67,
+            "timer_flushes": 67
+          },
+          "ws_reconnects": 0
+        },
+        "event": "status",
+        "time": "2026-09-28T09:24:30.669993925Z"
+      },
+      "limits": {
+        "memory_max_mib": 256,
+        "cpu_quota_percent": 50,
+        "gomemlimit_mib": 160,
+        "gomaxprocs": 1
+      }
+    },
+    "client": {
+      "samples": 36,
+      "sample_interval_seconds": 0.2,
+      "observed_seconds": 7.042423245031387,
+      "peak_process_rss_mib": 72.6328125,
+      "peak_sampled_cgroup_memory_mib": 70.89453125,
+      "kernel_cgroup_memory_peak": null,
+      "process_cpu_seconds_observed": 1.54,
+      "mean_observed_cpu_percent_one_core": 21.8674729765285,
+      "peak_sampled_cpu_percent_one_core": 54.76739112160024,
+      "nr_throttled_lifetime": 17,
+      "nr_throttled_observed_delta": 17,
+      "throttled_usec_lifetime": 432460,
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0",
+      "last_status": {
+        "data": {
+          "handoffs": 0,
+          "http_statuses": {
+            "204": 1467
+          },
+          "post_failures": 0,
+          "repairs": 38,
+          "stream": {
+            "ready": true,
+            "read_bytes": 6314807,
+            "written_bytes": 4210750,
+            "peer_read_bytes": 4210750,
+            "buffered_bytes": 0,
+            "peak_bytes": 187507,
+            "chunk": 5600,
+            "window": 1048576,
+            "data_records": 811,
+            "partial_records": 68,
+            "timer_flushes": 68
+          },
+          "ws_reconnects": 0
+        },
+        "event": "status",
+        "time": "2026-09-28T09:24:31.100471504Z"
+      },
+      "limits": {
+        "memory_max_mib": 256,
+        "cpu_quota_percent": 50,
+        "gomemlimit_mib": 160,
+        "gomaxprocs": 1
+      }
+    }
+  },
+  "binary_sha256": {
+    "openflux-volga-lab": "237983a4f4ebbcd192d6af33ee867f91f2caa185c2d1d5bda69645bc298e3810",
+    "volga-lab-check": "3b81154e90b78b14c73a5a3eaf3af1593c520e0c0e86b8a206dc3b9c0e5dc40f"
+  },
+  "cleanup": {
+    "server": {
+      "services": true,
+      "routes": true,
+      "rules": true,
+      "tcp_listeners": true,
+      "containers": true,
+      "static_firewall": true,
+      "test_units_removed": true,
+      "test_directories_removed": true
+    },
+    "client": {
+      "services": true,
+      "routes": true,
+      "rules": true,
+      "tcp_listeners": true,
+      "containers": true,
+      "static_firewall": true,
+      "test_units_removed": true,
+      "test_directories_removed": true
+    }
+  }
+}

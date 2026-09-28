@@ -1,0 +1,14 @@
+FROM debian:bookworm-slim
+
+ARG VERSION=dev
+ARG SOURCE_COMMIT=unknown
+LABEL org.opencontainers.image.title="OpenFlux Volga" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$SOURCE_COMMIT" \
+      org.opencontainers.image.source="https://github.com/LevL-max/OpenFlux-mod"
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY dist/openflux-volga-linux-amd64 /usr/local/bin/openflux-volga
+RUN chmod 0755 /usr/local/bin/openflux-volga
+ENTRYPOINT ["/usr/local/bin/openflux-volga"]

@@ -39,6 +39,7 @@ jobs:
             echo "Invalid release version: $VERSION" >&2
             exit 1
           fi
+          echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
 
@@ -58,7 +59,11 @@ jobs:
           cache: true
 
       - name: Test exact release source
-        run: go test ./...
+        run: |
+          go test -race ./...
+          go vet ./...
+          go test -race -tags volga ./transport/yandex
+          (cd volga && go test -race -tags volga ./... && go vet -tags volga ./...)
 
       - name: Test and package integration
         run: |
@@ -78,6 +83,7 @@ jobs:
           set -euo pipefail
           mkdir -p dist
           go build -trimpath -ldflags='-s -w -buildid=' -o dist/openflux-linux-amd64 .
+          (cd volga && go build -tags volga -buildvcs=false -trimpath -ldflags="-s -w -buildid= -X main.version=$VERSION" -o ../dist/openflux-volga-linux-amd64 ./cmd/openflux-volga-lab)
           install -m 0755 scripts/openflux-yandex-cookie-import dist/openflux-yandex-cookie-import
           python3 dist/openflux-yandex-cookie-import --help >/dev/null
 
@@ -90,12 +96,21 @@ jobs:
           docker build \
             --file Dockerfile.release \
             --build-arg VERSION="$VERSION" \
-            --build-arg SOURCE_COMMIT="$GITHUB_SHA" \
+            --build-arg SOURCE_COMMIT="$SOURCE_COMMIT" \
             --tag "$IMAGE:$VERSION" \
             .
           docker run --rm "$IMAGE:$VERSION" --help >/tmp/openflux-help.txt 2>&1
           test -s /tmp/openflux-help.txt
           docker save "$IMAGE:$VERSION" | gzip -9 > dist/openflux-container-linux-amd64.tar.gz
+
+      - name: Build and smoke-test isolated Volga container
+        run: |
+          set -euo pipefail
+          VOLGA_IMAGE="ghcr.io/${GITHUB_REPOSITORY,,}-volga"
+          echo "VOLGA_IMAGE=$VOLGA_IMAGE" >> "$GITHUB_ENV"
+          docker build --file Dockerfile.volga --build-arg VERSION="$VERSION" --build-arg SOURCE_COMMIT="$SOURCE_COMMIT" --tag "$VOLGA_IMAGE:$VERSION" .
+          docker run --rm --read-only --cap-drop=ALL --security-opt=no-new-privileges --memory=256m --cpus=0.5 "$VOLGA_IMAGE:$VERSION" -version
+          docker save "$VOLGA_IMAGE:$VERSION" | gzip -9 > dist/openflux-volga-container-linux-amd64.tar.gz
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -109,11 +124,17 @@ jobs:
         run: |
           set -euo pipefail
           docker push "$IMAGE:$VERSION"
-          docker tag "$IMAGE:$VERSION" "$IMAGE:sha-$GITHUB_SHA"
-          docker push "$IMAGE:sha-$GITHUB_SHA"
+          docker tag "$IMAGE:$VERSION" "$IMAGE:sha-$SOURCE_COMMIT"
+          docker push "$IMAGE:sha-$SOURCE_COMMIT"
+          docker push "$VOLGA_IMAGE:$VERSION"
+          docker tag "$VOLGA_IMAGE:$VERSION" "$VOLGA_IMAGE:sha-$SOURCE_COMMIT"
+          docker push "$VOLGA_IMAGE:sha-$SOURCE_COMMIT"
           REGISTRY_DIGEST="$(docker buildx imagetools inspect "$IMAGE:$VERSION" | awk '/^Digest:/ {print $2; exit}')"
           test -n "$REGISTRY_DIGEST"
           echo "REGISTRY_DIGEST=$REGISTRY_DIGEST" >> "$GITHUB_ENV"
+          VOLGA_REGISTRY_DIGEST="$(docker buildx imagetools inspect "$VOLGA_IMAGE:$VERSION" | awk '/^Digest:/ {print $2; exit}')"
+          test -n "$VOLGA_REGISTRY_DIGEST"
+          echo "VOLGA_REGISTRY_DIGEST=$VOLGA_REGISTRY_DIGEST" >> "$GITHUB_ENV"
 
       - name: Write immutable release metadata
         shell: bash
@@ -122,9 +143,12 @@ jobs:
           BINARY_SHA="$(sha256sum dist/openflux-linux-amd64 | awk '{print $1}')"
           HELPER_SHA="$(sha256sum dist/openflux-yandex-cookie-import | awk '{print $1}')"
           IMAGE_ARCHIVE_SHA="$(sha256sum dist/openflux-container-linux-amd64.tar.gz | awk '{print $1}')"
+          VOLGA_SHA="$(sha256sum dist/openflux-volga-linux-amd64 | awk '{print $1}')"
+          VOLGA_IMAGE_ID="$(docker image inspect --format='{{.Id}}' "$VOLGA_IMAGE:$VERSION")"
+          python3 release/protocol_manifest.py dist "$VERSION" "$SOURCE_COMMIT" "$VOLGA_IMAGE@$VOLGA_REGISTRY_DIGEST" "$VOLGA_IMAGE_ID"
           cat > dist/BUILD-METADATA <<EOF
           version=$VERSION
-          source_commit=$GITHUB_SHA
+          source_commit=$SOURCE_COMMIT
           canonical_v4_ancestor=$CANONICAL_V4_ANCESTOR
           historical_production_binary_sha256=$PRODUCTION_V4_SHA256
           go_version=$(go version)
@@ -138,6 +162,9 @@ jobs:
           container_registry=$IMAGE:$VERSION
           container_registry_digest=$REGISTRY_DIGEST
           container_base=debian:bookworm-slim
+          volga_binary_sha256=$VOLGA_SHA
+          volga_registry_digest=$VOLGA_REGISTRY_DIGEST
+          volga_lab_base=c630641933c19fdf250c9c13ffaef6fee6e80be3
           production_deployed=false
           EOF
 
@@ -161,7 +188,9 @@ jobs:
           - Second-tier SmartCaptcha enters AUTH_BLOCKED and makes no further Yandex requests until the cookie store changes.
           - A safe openflux-yandex-cookie-import helper is included for browser cURL refresh without printing cookie values.
           - Private 4-packet / 1 ms batching and current reliability hardening are retained.
-          - Volga, CUPS and other experimental upstream transports are not promoted into this release.
+          - Volga is a separate opt-in runtime with a frozen profile, public-only egress and at most 64 concurrent connections.
+          - Legacy remains the default; installing this release does not switch protocols.
+          - Volga uses a separate container/service, cookies and rollback state with explicit CPU and memory limits.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart running installations.
@@ -181,6 +210,9 @@ jobs:
 
           sha256sum \
             dist/openflux-linux-amd64 \
+            dist/openflux-volga-linux-amd64 \
+            dist/openflux-volga-container-linux-amd64.tar.gz \
+            dist/protocol-manifest.json \
             dist/openflux-yandex-cookie-import \
             dist/openflux-integration-linux.tar.gz \
             dist/openflux-node.py \
@@ -198,6 +230,9 @@ jobs:
           if [[ "$VERSION" == *-rc* ]]; then prerelease=(--prerelease); fi
           gh release create "$VERSION" \
             dist/openflux-linux-amd64 \
+            dist/openflux-volga-linux-amd64 \
+            dist/openflux-volga-container-linux-amd64.tar.gz \
+            dist/protocol-manifest.json \
             dist/openflux-yandex-cookie-import \
             dist/openflux-integration-linux.tar.gz \
             dist/openflux-node.py \
@@ -205,7 +240,7 @@ jobs:
             dist/SHA256SUMS \
             dist/BUILD-METADATA \
             --repo "$GITHUB_REPOSITORY" \
-            --target "$GITHUB_SHA" \
+            --target "$SOURCE_COMMIT" \
             --title "OpenFlux-mod $VERSION" \
             --draft \
             "${prerelease[@]}" \
