@@ -1,7 +1,7 @@
 # Volga integration and rollout
 
 Branch: `codex/volga-integration`, from local `claude/volga-integration@bb5c293`.
-Production baseline: v4.0.6 / `47e9cb7`. Proposed RC: **v4.1.0-rc1**.
+Production baseline: v4.0.6 / `47e9cb7`. Current candidate: **v4.1.0-rc2**.
 Main changes only through a PR.
 
 ## Implemented
@@ -45,7 +45,7 @@ confirmed PC2 -> stop PC2 -> PC1 against the same AWS Volga process, with verifi
 HTTPS on both, 64 concurrent SHA-256-verified transfers per client, rejection of
 the 65th connection, private-egress blocking and successful temporary-resource cleanup.
 See [actual AWS functional evidence](VOLGA-AWS-FUNCTIONAL-2026-09-28.md).
-The current 40-test Python integration suite also passed in isolated Linux testing.
+The current 42-test Python integration suite also passed in isolated Linux testing.
 
 The earlier six-hour throughput soak is superseded by the user's instruction to
 freeze performance and stop speed experiments. No new window/rate/worker tuning.
@@ -68,3 +68,10 @@ Volga updates now apply the verified integration bundle and node controller,
 including panel patches, with support-file backups. The watchdog executes the
 previous support code. An injected mid-copy failure and a failed runtime health
 check both restore all previous modules in Linux tests.
+
+RC1 installation/update, encrypted Disk recovery, protocol switching and rollback
+passed on AWS and PC2. PC1 correctly rolled back its first installation because
+an optional runtime dispatcher contains no fixed Legacy unit. RC2 preserves
+that dispatcher and continues patching its actual controllers. See the final
+rollout report for installed-version verification. Published RC1 assets remain
+immutable; RC2 is a separate prerelease.

@@ -117,6 +117,22 @@ class VolgaTests(unittest.TestCase):
   self.assertIn("'openflux-cookies','openflux-volga-config']);",changed)
   self.assertEqual(changed.count('id="openfluxProtocolControls"'),1)
 
+ def test_optional_runtime_dispatcher_without_fixed_unit_is_preserved(self):
+  self.runtime.save(self.runtime.node_path,dict(self.node,router_updater=True))
+  for name in ('openflux-routerctl','openflux-clientctl','router-restore-runtime'):
+   p=self.runtime.path('/usr/local/sbin/'+name);p.parent.mkdir(parents=True,exist_ok=True)
+   p.write_text('#!/usr/bin/env bash\nset -Eeuo pipefail\nUNIT="openflux-yandex-client.service"\nsystemctl status "$UNIT"\n')
+  health=self.runtime.path('/usr/local/lib/router-wan/openflux_health.py');health.parent.mkdir(parents=True)
+  health.write_text("UNIT='openflux-yandex-client.service'\n")
+  dispatcher=self.runtime.path('/usr/local/sbin/router-runtime-ensure')
+  content=b'#!/usr/bin/env bash\nset -Eeuo pipefail\ncase "$MODE" in\n openflux) /usr/local/sbin/openflux-routerctl assert || /usr/local/sbin/router-restore-runtime;;\nesac\n'
+  dispatcher.write_bytes(content);record={}
+  with patch.object(self.runtime,'run'):self.runtime.install_router_hooks(record)
+  self.assertEqual(dispatcher.read_bytes(),content)
+  self.assertEqual(len(record['router_hooks']),4)
+  for item in record['router_hooks']:
+   self.assertIn('openflux-protocol-selector-v1',pathlib.Path(item['path']).read_text())
+
  def test_release_manifest_requires_frozen_profile_and_pinned_image(self):
   row={'id':'volga','binary':{'name':'openflux-volga-linux-amd64','sha256':'a'*64},'image':'ghcr.io/levl-max/openflux-mod-volga@sha256:'+'b'*64,'image_id':'sha256:'+'c'*64,
        'performance_profile':VOLGA_PROFILE,'config_protocol':'volga-stream-v1','max_streams':64}
