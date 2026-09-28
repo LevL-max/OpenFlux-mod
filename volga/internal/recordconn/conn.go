@@ -42,8 +42,13 @@ const (
 	// without coalescing every header became its own record and its own relay
 	// POST. Merging adjacent writes into full records cuts POSTs per byte.
 	FlushDelay = time.Millisecond
-	headerSize = 46
-	maxPending = 8192
+	// ServerAnnounce is how long a new server epoch sends hellos. A client
+	// still bound to the previous epoch learns of the restart at once; after
+	// that an idle server stays silent until a client hello arrives, so it has
+	// nothing for the reliable carrier to replay.
+	ServerAnnounce = 3 * time.Second
+	headerSize     = 46
+	maxPending     = 8192
 )
 
 // Options tune the sending side. Zero values select the package defaults; a
@@ -52,6 +57,7 @@ type Options struct {
 	Chunk      int
 	Window     int
 	FlushDelay time.Duration
+	Announce   time.Duration // server hello period of a new epoch; zero is ServerAnnounce
 }
 
 var ErrPeerRestart = errors.New("record stream: peer session changed")
@@ -87,6 +93,7 @@ type Conn struct {
 	// then read-only. stage is guarded by writeMu.
 	chunk, window  int
 	flushDelay     time.Duration
+	announce       time.Duration
 	stage          []byte
 	kick           chan struct{}
 	dataRecords    atomic.Uint64
@@ -130,6 +137,9 @@ func NewWithOptions(ctx context.Context, key []byte, client bool, send SendFunc,
 	} else if o.FlushDelay < 0 {
 		o.FlushDelay = 0
 	}
+	if o.Announce <= 0 {
+		o.Announce = ServerAnnounce
+	}
 	if o.Chunk < 256 || o.Chunk > MaxChunk || o.Window < 4*o.Chunk || o.Window > MaxWindow {
 		return nil, errors.New("record stream: chunk must be 256-16384 bytes and window 4 chunks to 8 MiB")
 	}
@@ -144,7 +154,7 @@ func NewWithOptions(ctx context.Context, key []byte, client bool, send SendFunc,
 	ctx, cancel := context.WithCancel(ctx)
 	c := &Conn{ctx: ctx, cancel: cancel, send: send, aead: aead, role: 2,
 		changed: make(chan struct{}), control: make(chan struct{}, 1), done: make(chan struct{}), pending: make(map[uint64][]byte),
-		chunk: o.Chunk, window: o.Window, flushDelay: o.FlushDelay, kick: make(chan struct{}, 1)}
+		chunk: o.Chunk, window: o.Window, flushDelay: o.FlushDelay, announce: o.Announce, kick: make(chan struct{}, 1)}
 	if client {
 		c.role = 1
 	}
@@ -327,6 +337,7 @@ func (c *Conn) controls() {
 	var creditAt time.Time
 	var reason error
 	var sentCredit uint64
+	born := time.Now()
 	for {
 		c.mu.Lock()
 		peer, ready, read, err := c.peer, c.ready, c.readOffset, c.err
@@ -335,7 +346,10 @@ func (c *Conn) controls() {
 			return
 		}
 		now := time.Now()
-		if !ready && now.Sub(helloAt) >= 300*time.Millisecond {
+		// A client announces itself until ready; a server only for its announce
+		// period or in answer to a client hello (see ServerAnnounce).
+		announce := c.role == 1 || peer != (Epoch{}) || now.Sub(born) < c.announce
+		if !ready && announce && now.Sub(helloAt) >= 300*time.Millisecond {
 			if err = c.sendRecord(c.ctx, 'H', Epoch{}, 0, nil); err != nil {
 				reason = err
 				break

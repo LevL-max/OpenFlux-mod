@@ -395,6 +395,9 @@ class VolgaRuntime:
             account=pwd.getpwnam(self.node().get('cookie_user','openflux'))
             for path in [self.config_path.parent,self.config_path,self.data,*self.data.glob('*.json')]:
                 os.chown(path,account.pw_uid,account.pw_gid);os.chmod(path,0o700 if path.is_dir() else 0o600)
+        if not self.binary.is_file():
+            how='Router Updater: OpenFlux, Download, then Install.' if self.node().get('router_updater') else 'sudo openfluxctl update'
+            return {'ok':True,'message':'Volga configuration saved. Volga is installed with the next OpenFlux update: '+how}
         return {'ok':True,'message':'Volga configuration saved with backup. Apply it by selecting or restarting Volga.'}
 
     def action(self,action):
@@ -453,22 +456,33 @@ class VolgaRuntime:
         return out
 
     def health(self,seconds=90,require_session=True):
-        import time,ipaddress
-        deadline=time.monotonic()+seconds
+        import time
+        deadline=time.monotonic()+seconds;passed=None
         while time.monotonic()<deadline:
             s=self.status()
             if not require_session and self.node()['role']=='server' and s.get('carrier_ready') and not s.get('needs_cookies'):return
             if not s['active']:raise RuntimeError('Volga stopped during health check')
             if s['state']=='auth_blocked':raise RuntimeError('Volga requires fresh browser cookies')
-            if s['state']=='connected':
-                if self.node()['role']=='server':return
-                expected=self.node().get('expected_exit_ip') or self.read(self.path('/etc/router/updater/settings.json'),{}).get('openflux_expected_exit_ip')
-                p=self.run(['curl','-q','--fail','--silent','--noproxy','','--proxy','socks5h://127.0.0.1:11080','--max-time','12','https://api.ipify.org'],check=False,timeout=15)
-                try:address=str(ipaddress.ip_address(p.stdout.strip()))
-                except ValueError:address=None
-                if p.returncode==0 and address and (not expected or address==expected):return
+            if s['state']!='connected':passed=None
+            elif self.node()['role']=='server':return
+            elif self.exit_ok():
+                passed=passed or time.monotonic()
+                # A new session can still be replaced in its first seconds: pass
+                # only on a second probe of a settled session.
+                if time.monotonic()-passed>=3:return
+            else:passed=None
             time.sleep(1)
         raise RuntimeError('Volga did not pass session and exit-IP checks')
+
+    def exit_ok(self):
+        import ipaddress
+        expected=self.node().get('expected_exit_ip') or self.read(self.path('/etc/router/updater/settings.json'),{}).get('openflux_expected_exit_ip')
+        for url in ('https://api.ipify.org','https://checkip.amazonaws.com'):
+            p=self.run(['curl','-q','--fail','--silent','--noproxy','','--proxy','socks5h://127.0.0.1:11080','--max-time','12',url],check=False,timeout=15)
+            try:address=str(ipaddress.ip_address(p.stdout.strip()))
+            except ValueError:continue
+            if p.returncode==0:return not expected or address==expected
+        return False
 
     def parse_browser(self,document,text):
         import re,shlex
@@ -626,40 +640,6 @@ class VolgaRuntime:
             '--mount','type=bind,src='+VOLGA_DATA+',dst='+VOLGA_DATA,
             '--entrypoint',VOLGA_BINARY,image,'-config',VOLGA_CONFIG]
 
-    def release_candidate(self):
-        import openflux_node as node
-        profile=self.node();channel=profile.get('volga_channel',profile.get('channel','stable'))
-        if channel not in ('stable','prerelease'):raise ValueError('Invalid Volga release channel')
-        rows=node.releases(dict(profile,channel=channel))
-        # Never silently downgrade to an older Volga build when the selected
-        # channel's newest release lacks a required protocol artifact.
-        row=rows[0]
-        if not any(a.get('name')=='openflux-volga-linux-amd64' for a in row.get('assets',[])):raise ValueError('The selected channel has no Volga release; choose its prerelease channel when appropriate')
-        return row
-
-    def prepare(self):
-        import tempfile
-        import openflux_node as node
-        self.configuration();self.limits()
-        row=self.release_candidate();current=self.read(self.state/'installed.json',{})
-        if current:
-            import openflux_release
-            if not self.binary.is_file() or node.sha(self.binary)!=current['sha256']:raise ValueError('Installed Volga binary changed outside the updater')
-            if openflux_release.version(row['tag_name'])<openflux_release.version(current['version']):raise ValueError('Use rollback for a downgrade')
-        self.state.mkdir(parents=True,exist_ok=True,mode=0o700)
-        directory=__import__('pathlib').Path(tempfile.mkdtemp(prefix='candidate-',dir=self.state))
-        server=self.node()['role']=='server'
-        assets=node.verify_download(row,directory,transport='volga',include_container=server)
-        if current and row['tag_name']==current['version'] and assets['openflux-volga-linux-amd64']!=current['sha256']:raise ValueError('Published Volga version changed its binary')
-        manifest=validate_volga_manifest(self.read(directory/'protocol-manifest.json'),row['tag_name'],assets['openflux-volga-linux-amd64'])
-        if server:
-            self.run(['docker','load','--input',str(directory/'openflux-volga-container-linux-amd64.tar.gz')],timeout=180)
-            if self.run(['docker','image','inspect','--format={{.Id}}',manifest['image_id']]).stdout.strip()!=manifest['image_id']:raise ValueError('Loaded Volga image ID mismatch')
-        record={'version':row['tag_name'],'directory':str(directory),'assets':assets,'image':manifest['image_id'],
-                'base_sha256':node.sha(self.binary) if self.binary.exists() else None}
-        self.save(self.state/'staged.json',record)
-        return {'ok':True,'version':record['version'],'message':'Verified Volga release downloaded. Legacy is unchanged.'}
-
     def install_recovery_timer(self):
         library=self.node()['library']
         if any(c in library for c in '\r\n\0'):raise ValueError('Invalid integration path')
@@ -670,35 +650,6 @@ class VolgaRuntime:
 
     def legacy_active(self):
         return self.run(['systemctl','is-active','--quiet',self.node().get('service','openflux-yandex-client.service')],check=False).returncode==0
-
-    def support_plan(self,directory):
-        import importlib.util
-        import openflux_release
-        extracted=directory/'integration'
-        openflux_release.extract_bundle(directory/'openflux-integration-linux.tar.gz',extracted)
-        library=self.path(self.node()['library'])
-        plans=[(extracted/name,library/name,0o644) for name in openflux_release.MODULES]
-        plans.append((directory/'openflux-node.py',library/'openflux_node.py',0o755))
-        for source,target,mode in plans:compile(source.read_text(),str(source),'exec')
-        panel=self.path('/usr/local/lib/router-panel/router-panel.py')
-        if self.node().get('router_updater') and panel.is_file():
-            spec=importlib.util.spec_from_file_location('volga_candidate_integration',extracted/'router_integration.py')
-            module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-            text=module.patch_panel(panel.read_text());compile(text,str(panel),'exec')
-            source=directory/'panel-new.py';source.write_text(text);plans.append((source,panel,0o644))
-        return plans
-
-    def install_support(self,plans,record):
-        import pathlib,shutil
-        import openflux_node as node
-        backup=pathlib.Path(record['backup']);items=[]
-        for index,(source,target,mode) in enumerate(plans):
-            saved=backup/('support-'+str(index));item={'path':str(target),'present':target.is_file(),'copy':str(saved)}
-            if item['present']:
-                shutil.copy2(target,saved);item.update(sha256=node.sha(saved),mode=target.stat().st_mode&0o777)
-            items.append(item)
-        record['support_files']=items;self.save(self.state/'transaction.json',record)
-        for source,target,mode in plans:node.atomic_file(source,target,mode)
 
     def refresh_panel(self):
         if not self.node().get('router_updater'):return
@@ -796,61 +747,34 @@ class VolgaRuntime:
         if record.get('support_files'):self.refresh_panel()
         return {'ok':True,'message':'Previous Volga version and protocol selection restored.'}
 
-    def install_staged(self):
-        import pathlib,json,ipaddress,time
-        import openflux_node as node
-        self.configuration();self.limits()
-        staged=self.read(self.state/'staged.json')
-        if not staged:raise ValueError('Download a verified Volga release first')
-        directory=pathlib.Path(staged['directory'])
-        if (node.sha(self.binary) if self.binary.exists() else None)!=staged['base_sha256']:raise ValueError('Volga binary changed since download')
-        for name,digest in staged['assets'].items():
-            if node.sha(directory/name)!=digest:raise ValueError('Staged Volga artifact changed')
-        manifest=validate_volga_manifest(self.read(directory/'protocol-manifest.json'),staged['version'],staged['assets']['openflux-volga-linux-amd64'])
-        plans=self.support_plan(directory)
-        profile=self.node();previous=self.begin_transaction('update')
-        try:
-            self.install_support(plans,previous)
-            if profile['role']=='client':
-                self.run(['systemctl','stop',profile.get('service','openflux-yandex-client.service')])
-            if self.active():self.action('stop')
-            node.atomic_file(directory/'openflux-volga-linux-amd64',self.binary)
-            if profile['role']=='client':
-                unit=self.path('/etc/systemd/system')/VOLGA_UNIT;unit.write_text(self.unit_text());unit.chmod(0o644)
-                self.install_router_hooks(previous)
-                self.run(['systemctl','daemon-reload'])
-            else:
-                cfg=self.configuration()
-                # Host addresses are not visible from a bridge container. Pin
-                # its current connected subnets as additional explicit denies.
-                addresses=json.loads(self.run(['ip','-j','address','show']).stdout)
-                prefixes={str(ipaddress.ip_network(str(a['local'])+'/'+str(a['prefixlen']),strict=False)) for i in addresses for a in i.get('addr_info',[]) if a.get('family') in ('inet','inet6')}
-                cfg['denied_cidrs']=sorted(set(cfg['denied_cidrs'])|prefixes);validate_volga_config(cfg,'server');self.save(self.config_path,cfg)
-                old=self.run(['docker','inspect',VOLGA_CONTAINER],check=False)
-                if old.returncode==0:
-                    info=json.loads(old.stdout)[0]
-                    if info.get('Config',{}).get('Labels',{}).get('io.openflux.managed')!='volga':raise ValueError('Existing container is not managed by this Volga adapter')
-                    previous['old_container']='openflux-volga-backup-'+str(time.time_ns())
-                    self.save(self.state/'transaction.json',previous)
-                    self.run(['docker','rename',VOLGA_CONTAINER,previous['old_container']])
-                previous['created_container']=True;self.save(self.state/'transaction.json',previous)
-                self.run(self.docker_command(manifest['image_id']))
-            self.action('start')
-            # A first server install cannot require an already-installed client.
-            # Session/SOCKS health remains mandatory for client activation.
-            self.health(require_session=profile['role']=='client')
-            if not previous['active']:self.action('stop')
-            if previous['legacy_active']:self.run(['systemctl','start',profile.get('service','openflux-yandex-client.service')])
-            if previous.get('bridge_active'):self.run(['systemctl','start','sing-box-openflux.service'])
-            self.save(self.state/'installed.json',{'version':staged['version'],'sha256':node.sha(self.binary),'image':manifest['image_id']})
-            self.install_recovery_timer()
-            self.save(self.state/'rollback.json',previous)
-            self.run(['systemctl','stop',previous['watchdog']+'.timer'])
-            (self.state/'transaction.json').unlink();(self.state/'staged.json').unlink()
-            self.refresh_panel()
-            return {'ok':True,'version':staged['version'],'message':'Volga installed and verified. Previous active protocol preserved.'}
-        except BaseException:
-            self.restore_transaction(previous);raise
+    def replace_server_container(self,image,record,save):
+        # The OpenFlux server updater owns the transaction; save() persists the
+        # record before the rename, so a crash never loses the original container.
+        import json,ipaddress,time
+        cfg=self.configuration()
+        # Host addresses are not visible from a bridge container. Pin its current
+        # connected subnets as additional explicit denies.
+        addresses=json.loads(self.run(['ip','-j','address','show']).stdout)
+        prefixes={str(ipaddress.ip_network(str(a['local'])+'/'+str(a['prefixlen']),strict=False)) for i in addresses for a in i.get('addr_info',[]) if a.get('family') in ('inet','inet6')}
+        cfg['denied_cidrs']=sorted(set(cfg['denied_cidrs'])|prefixes);validate_volga_config(cfg,'server');self.save(self.config_path,cfg)
+        if self.owned_container(VOLGA_CONTAINER):
+            record['old_container']='openflux-volga-backup-'+str(time.time_ns());save(record)
+            self.run(['docker','rename',VOLGA_CONTAINER,record['old_container']])
+        record['created_container']=True;save(record)
+        self.run(self.docker_command(image))
+
+    def restore_server_container(self,record):
+        # A failed rename must never cause deletion of the still-original container.
+        if record.get('old_container') and self.owned_container(record['old_container']):
+            if self.owned_container(VOLGA_CONTAINER):self.run(['docker','rm','-f',VOLGA_CONTAINER])
+            self.run(['docker','rename',record['old_container'],VOLGA_CONTAINER])
+        elif record.get('created_container') and self.owned_container(VOLGA_CONTAINER):self.run(['docker','rm','-f',VOLGA_CONTAINER])
+
+    def prune_server_containers(self,keep):
+        # One previous container is enough for a rollback; older ones only use disk.
+        names=self.run(['docker','ps','-a','--filter','label=io.openflux.managed=volga','--format','{{.Names}}'],check=False).stdout.split()
+        for name in names:
+            if name.startswith('openflux-volga-backup-') and name!=keep:self.run(['docker','rm','-f',name],check=False)
 
     def select(self,transport):
         if transport not in ('yandex','volga'):raise ValueError('This protocol is not installed or supported')
@@ -881,10 +805,13 @@ class VolgaRuntime:
         except BaseException:
             self.restore_transaction(previous);raise
 
-    def install_router_hooks(self,transaction):
-        import hashlib,os
+    def install_router_hooks(self):
+        # Router helpers follow the selected protocol's unit. The OpenFlux updater
+        # checkpoints these files, so one rollback restores them with the release.
+        import os
         import openflux_node as node
-        if not self.node().get('router_updater'):return
+        if not self.node().get('router_updater'):return []
+        self.state.mkdir(parents=True,exist_ok=True,mode=0o700)
         files=['/usr/local/sbin/openflux-routerctl','/usr/local/sbin/openflux-clientctl','/usr/local/sbin/router-restore-runtime']
         optional=['/usr/local/sbin/router-runtime-ensure','/usr/local/lib/router-wan/openflux_health.py','/usr/local/lib/router-xray/openflux_health.py']
         for raw in optional:
@@ -906,12 +833,11 @@ class VolgaRuntime:
                     __import__('pathlib').Path(tmp).write_text(new);self.run(['bash','-n',tmp])
                 finally:os.unlink(tmp)
             plans.append((path,old,new,path.stat().st_mode&0o777))
-        transaction['router_hooks']=[{'path':str(p),'content':old,'mode':mode} for p,old,new,mode in plans]
-        self.save(self.state/'transaction.json',transaction)
         for path,old,new,mode in plans:
             if path.read_text()!=old:raise ValueError('Router helper changed during preparation')
             source=self.state/'router-hook.tmp';source.write_text(new)
             node.atomic_file(source,path,mode);source.unlink()
+        return [str(path) for path,old,new,mode in plans]
 
 def patch_runtime_selector(text,python=False):
     import re
@@ -933,10 +859,13 @@ def patch_runtime_selector(text,python=False):
 def run_volga_cli(args):
     import contextlib,fcntl,json,pathlib,sys
     runtime=VolgaRuntime();action=args.action
+    # One release, one updater and one channel: refuse before touching state.
+    if action in ('check','download','update','rollback'):raise ValueError('Volga is updated together with OpenFlux: run this without --transport')
+    if action in ('configure','setup-volga') and getattr(args,'channel',None):raise ValueError('Volga follows the OpenFlux release channel; set it without --transport')
     runtime.state.mkdir(parents=True,exist_ok=True,mode=0o700)
     with contextlib.ExitStack() as stack:
         locks=['/run/openflux-volga.lock']
-        if action in ('setup-volga','select-protocol','update','rollback','recover-volga'):
+        if action in ('setup-volga','select-protocol','recover-volga'):
             locks=['/run/router-updater.lock','/run/lock/router-mode.lock','/run/openflux-update.lock']+locks
         for name in locks:
             pathlib.Path(name).parent.mkdir(parents=True,exist_ok=True)
@@ -944,37 +873,20 @@ def run_volga_cli(args):
             try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
             except BlockingIOError:raise ValueError('Another router/Volga operation is running; retry shortly') from None
         if action=='status':return runtime.status()
-        if action=='check':
-            row=runtime.release_candidate()
-            return {'version':row['tag_name'],'installed':runtime.read(runtime.state/'installed.json',{}),'transport':'volga'}
         if action=='configure':
-            channel=getattr(args,'channel',None)
-            if not args.config_file and not channel:raise ValueError('Volga configure requires --config-file or --channel')
-            if channel and channel not in ('stable','prerelease'):raise ValueError('Invalid Volga release channel')
-            old=runtime.node()
-            try:
-                if channel:runtime.save(runtime.node_path,dict(old,volga_channel=channel))
-                return runtime.configure(runtime.read(pathlib.Path(args.config_file))) if args.config_file else {'ok':True,'channel':channel,'message':'Volga release channel saved; Legacy channel unchanged.'}
-            except BaseException:
-                runtime.save(runtime.node_path,old);raise
-        if action=='download':return runtime.prepare()
+            if not args.config_file:raise ValueError('Volga configure requires --config-file')
+            return runtime.configure(runtime.read(pathlib.Path(args.config_file)))
         if action=='setup-volga':
             profile=runtime.node();profile['volga_resources']={'memory_mib':args.memory_mib,'cpu_percent':args.cpu_percent}
-            if getattr(args,'channel',None):profile['volga_channel']=args.channel
             # Validate limits before changing the node; preserve all Legacy fields.
             old=runtime.node();old_config=runtime.read(runtime.config_path);runtime.save(runtime.node_path,profile)
             try:
-                runtime.limits();runtime.configure(runtime.read(pathlib.Path(args.config_file)))
-                runtime.prepare();return runtime.install_staged()
+                runtime.limits();return runtime.configure(runtime.read(pathlib.Path(args.config_file)))
             except BaseException:
                 runtime.save(runtime.node_path,old)
                 if old_config is None:runtime.config_path.unlink(missing_ok=True)
                 else:runtime.save(runtime.config_path,old_config)
                 raise
-        if action=='update':runtime.prepare();return runtime.install_staged()
-        if action=='rollback':
-            result=runtime.restore_transaction(runtime.read(runtime.state/'rollback.json'))
-            (runtime.state/'rollback.json').unlink(missing_ok=True);return result
         if action=='recover-volga':
             record=runtime.read(runtime.state/'transaction.json')
             return runtime.restore_transaction(record) if record else {'ok':True,'message':'No interrupted Volga operation.'}
@@ -1000,7 +912,8 @@ def run_volga_cli(args):
             runtime.install_recovery_timer();result['disk_path']=runtime.disk_path();return result
         raise ValueError('Unsupported Volga action')
 
-VOLGA_HTML='''
+# rc1/rc2 Volga blocks, kept verbatim so those panels can be migrated.
+VOLGA_HTML_V1='''
   <div id="openfluxProtocolControls" class="row" style="margin-top:12px">
    <label>Protocol <select id="openfluxProtocol"><option value="yandex">Yandex Legacy</option><option value="volga">Volga</option></select></label>
    <button id="openfluxProtocolApply">Apply protocol</button>
@@ -1020,7 +933,7 @@ VOLGA_HTML='''
    <p class="small" id="volgaCookieResult" role="status"></p>
   </details>'''
 
-VOLGA_JS='''
+VOLGA_JS_V1='''
 async function volgaPost(path,body){return api('/api/openflux/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Router-Panel':'1'},body:JSON.stringify(body)});}
 function volgaDownload(data,name){const u=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
 $('#openfluxProtocolApply').onclick=async()=>{const b=$('#openfluxProtocolApply'),r=$('#openfluxProtocolResult');b.disabled=true;r.textContent='Checking connection; previous protocol will return if it fails…';try{const d=await volgaPost('protocol',{protocol:$('#openfluxProtocol').value});r.textContent=d.message;refresh();}catch(e){r.textContent=e.message;}finally{b.disabled=false;}};
@@ -1031,6 +944,41 @@ async function volgaCookies(operation){const r=$('#volgaCookieResult');r.textCon
 $('#volgaCookies').onclick=()=>volgaCookies('import');$('#volgaRecoveryDownload').onclick=()=>volgaCookies('package');$('#volgaRecoverySend').onclick=()=>volgaCookies('send');
 '''
 
+VOLGA_HOOK_V1="\n  const vp=of.protocols?.volga||{}, selected=of.active_transport||'yandex';\n  if(document.activeElement!==$('#openfluxProtocol'))$('#openfluxProtocol').value=selected;\n  $('#openfluxCookies').hidden=selected==='volga';$('#openfluxServerRecovery').hidden=selected==='volga';\n  const vd=$('#volgaDocument'), oldDocument=vd.value, docs=vp.documents||[];\n  if(JSON.stringify([...vd.options].map(o=>o.value))!==JSON.stringify(docs)){vd.replaceChildren(...docs.map((u,i)=>{const o=document.createElement('option');o.value=u;o.textContent='Document '+(i+1)+' · '+u;return o;}));if(docs.includes(oldDocument))vd.value=oldDocument;}\n"
+
+# Volga is updated with OpenFlux in Router Updater and its file lives under
+# Configuration; this card keeps protocol selection, cookies and first setup.
+VOLGA_HTML='''
+  <div id="openfluxProtocolControls" class="row" style="margin-top:12px" data-volga-panel="2">
+   <label>Protocol <select id="openfluxProtocol"><option value="yandex">Yandex Legacy</option><option value="volga">Volga</option></select></label>
+   <button id="openfluxProtocolApply">Apply protocol</button>
+   <span class="small" id="openfluxProtocolResult" role="status"></span>
+  </div>
+  <p class="small" id="volgaOneDevice" role="note" style="margin:8px 0 0;padding:6px 10px;border-left:4px solid #d97706;background:rgba(217,119,6,.14)"><b>Volga: one mini-PC at a time.</b> Stop OpenFlux/Volga on the other mini-PC before selecting Volga here. A second mini-PC ends the first one&#39;s session.</p>
+  <details id="volgaSettings" style="margin-top:12px">
+   <summary>Volga browser cookies</summary>
+   <p class="small">Volga uses two Yandex documents and a matching shared key on client/server. Volga is updated with OpenFlux in Router Updater; its configuration file is under Configuration.</p>
+   <div class="row" id="volgaSetup" hidden><button id="volgaConfigDownload">Download Volga config template</button><label>Upload Volga config <input id="volgaConfigUpload" type="file" accept=".json"></label></div>
+   <p class="small" id="volgaUpdateResult" role="status"></p>
+   <label>Document <select id="volgaDocument"></select></label>
+   <p class="small">Open this document in the browser, complete any verification, then paste its Copy as cURL (bash) request. Repeat for the second document.</p>
+   <textarea id="volgaCurl" rows="4" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box" placeholder="Copy as cURL (bash)"></textarea>
+   <div class="row"><button id="volgaCookies">Save client cookies</button><button id="volgaRecoveryDownload">Download encrypted server cookies</button><button id="volgaRecoverySend">Send server cookies via Disk</button></div>
+   <p class="small" id="volgaCookieResult" role="status"></p>
+  </details>'''
+
+VOLGA_JS='''
+async function volgaPost(path,body){return api('/api/openflux/'+path,{method:'POST',headers:{'Content-Type':'application/json','X-Router-Panel':'1'},body:JSON.stringify(body)});}
+function volgaDownload(data,name){const u=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:'application/json'})),a=document.createElement('a');a.href=u;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}
+$('#openfluxProtocolApply').onclick=async()=>{if($('#openfluxProtocol').value==='volga'&&!confirm('Volga works on one mini-PC at a time. Is OpenFlux/Volga stopped on the other mini-PC?'))return;const b=$('#openfluxProtocolApply'),r=$('#openfluxProtocolResult');b.disabled=true;r.textContent='Checking connection; previous protocol will return if it fails…';try{const d=await volgaPost('protocol',{protocol:$('#openfluxProtocol').value});r.textContent=d.message;refresh();}catch(e){r.textContent=e.message;}finally{b.disabled=false;}};
+$('#volgaConfigDownload').onclick=async()=>{try{const d=await volgaPost('volga/config',{operation:'download'});volgaDownload(d.config,'openflux-volga-config.json');}catch(e){$('#volgaUpdateResult').textContent=e.message;}};
+$('#volgaConfigUpload').onchange=async(e)=>{const f=e.target.files[0];if(!f)return;try{if(f.size>65536)throw Error('Config must be at most 64 KiB');const d=await volgaPost('volga/config',{operation:'upload',config:JSON.parse(await f.text())});$('#volgaUpdateResult').textContent=d.message;refresh();}catch(error){$('#volgaUpdateResult').textContent=error.message;}finally{e.target.value='';}};
+async function volgaCookies(operation){const r=$('#volgaCookieResult');r.textContent='Saving Volga cookies…';try{const d=await volgaPost(operation==='import'?'volga/cookies':'volga/recovery',{document:$('#volgaDocument').value,curl:$('#volgaCurl').value,upload:operation==='send'});if(d.package)volgaDownload(d.package,d.filename);$('#volgaCurl').value='';r.textContent=d.message;refresh();}catch(e){r.textContent=e.message;}}
+$('#volgaCookies').onclick=()=>volgaCookies('import');$('#volgaRecoveryDownload').onclick=()=>volgaCookies('package');$('#volgaRecoverySend').onclick=()=>volgaCookies('send');
+'''
+
+VOLGA_HOOK=VOLGA_HOOK_V1+"  $('#volgaSetup').hidden=!!vp.configured;\n"
+
 def patch_volga_panel(text):
     if 'const CFG_GROUPS=' in text:
         old="'openflux-updater'],modes:['openflux']"
@@ -1039,7 +987,10 @@ def patch_volga_panel(text):
         old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);"
         new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
         if new not in text:text=replace(text,old,new)
-    if 'id="openfluxProtocolControls"' in text:return text
+    if 'data-volga-panel="2"' in text:return text
+    if 'id="openfluxProtocolControls"' in text:
+        # An rc1/rc2 panel: swap its Volga blocks; exact matches or no change at all.
+        return replace(replace(replace(text,VOLGA_HTML_V1,VOLGA_HTML),VOLGA_JS_V1,VOLGA_JS),VOLGA_HOOK_V1,VOLGA_HOOK)
     text=replace(text,'import openflux_auth','import openflux_auth\nfrom router_integration import openflux_runtime_unit')
     # Preserve card anchors and the existing bridge. Status queries follow the
     # selected unit, including older panels using names without .service.
@@ -1049,8 +1000,7 @@ def patch_volga_panel(text):
     text=replace(text,marker,marker+VOLGA_HTML)
     marker="$('#openfluxState').textContent="
     start=text.index(marker);end=text.index('\n',start)
-    hook="\n  const vp=of.protocols?.volga||{}, selected=of.active_transport||'yandex';\n  if(document.activeElement!==$('#openfluxProtocol'))$('#openfluxProtocol').value=selected;\n  $('#openfluxCookies').hidden=selected==='volga';$('#openfluxServerRecovery').hidden=selected==='volga';\n  const vd=$('#volgaDocument'), oldDocument=vd.value, docs=vp.documents||[];\n  if(JSON.stringify([...vd.options].map(o=>o.value))!==JSON.stringify(docs)){vd.replaceChildren(...docs.map((u,i)=>{const o=document.createElement('option');o.value=u;o.textContent='Document '+(i+1)+' · '+u;return o;}));if(docs.includes(oldDocument))vd.value=oldDocument;}\n"
-    text=text[:end]+hook+text[end:]
+    text=text[:end]+VOLGA_HOOK+text[end:]
     text=replace(text,'refreshNetwork();setInterval(refreshNetwork,5000);',VOLGA_JS+'\nrefreshNetwork();setInterval(refreshNetwork,5000);')
     return text
 
@@ -1059,22 +1009,24 @@ def volga_panel_post(handler):
     paths=('/api/openflux/protocol','/api/openflux/volga/config','/api/openflux/volga/cookies','/api/openflux/volga/recovery','/api/openflux/volga/update')
     if handler.path not in paths:return False
     if not handler.allowed() or not handler.authorized():handler.j({'ok':False,'error':'Request rejected'},403);return True
+    if handler.path.endswith('/update'):
+        # A page opened before the update still shows the old buttons.
+        handler.j({'ok':False,'error':'Volga is updated together with OpenFlux in Router Updater.'},400);return True
     try:
         length=int(handler.headers.get('Content-Length','0'))
         if not 1<=length<=140000 or 'application/json' not in handler.headers.get('Content-Type',''):raise ValueError('Invalid request')
         body=json.loads(handler.rfile.read(length));runtime=VolgaRuntime()
         if not isinstance(body,dict):raise ValueError('JSON object required')
+        if handler.path.endswith('/config') and body.get('operation')=='upload' and runtime.config_path.is_file():
+            handler.j({'ok':False,'error':'Volga is configured. Replace its file under Configuration.'},400);return True
         if handler.path.endswith('/protocol'):
             result=run_volga_cli(types.SimpleNamespace(action='select-protocol',protocol=body.get('protocol')))
-        elif handler.path.endswith('/update'):
-            action=body.get('action')
-            if action not in ('check','download','update','rollback'):raise ValueError('Invalid update operation')
-            result=run_volga_cli(types.SimpleNamespace(action=action))
         else:
             with open('/run/openflux-volga.lock','a') as lock:
                 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
                 if handler.path.endswith('/config'):
-                    if body.get('operation')=='download':result={'ok':True,'config':runtime.read(runtime.config_path) or runtime.template()}
+                    # First setup only: a template to fill, then one upload.
+                    if body.get('operation')=='download':result={'ok':True,'config':runtime.template()}
                     elif body.get('operation')=='upload':result=runtime.configure(body.get('config'))
                     else:raise ValueError('Invalid config operation')
                 elif handler.path.endswith('/cookies'):result=runtime.import_cookies(body.get('document'),body.get('curl'))

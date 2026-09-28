@@ -190,7 +190,8 @@ jobs:
           - Private 4-packet / 1 ms batching and current reliability hardening are retained.
           - Volga is a separate opt-in runtime with a frozen profile, public-only egress and at most 64 concurrent connections.
           - Legacy remains the default; installing this release does not switch protocols.
-          - Volga uses a separate container/service, cookies and rollback state with explicit CPU and memory limits.
+          - One updater installs Legacy and Volga together, with one checkpoint and one rollback. Volga keeps its own container/service and cookies with explicit CPU and memory limits.
+          - Known limitation: Volga serves one mini-PC at a time per document pair. Stop it on one mini-PC before starting it on the other.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart running installations.
