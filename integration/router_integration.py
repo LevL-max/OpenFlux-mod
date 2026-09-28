@@ -892,7 +892,11 @@ class VolgaRuntime:
         if not any(x.endswith('openflux_health.py') for x in files):raise ValueError('Unknown router health layout')
         plans=[]
         for raw in files:
-            path=self.path(raw);old=path.read_text();new=patch_runtime_selector(old,python=path.suffix=='.py')
+            path=self.path(raw);old=path.read_text()
+            # Some routers use this optional helper only to dispatch to the
+            # controllers above. With no fixed client unit there is no patch.
+            if raw=='/usr/local/sbin/router-runtime-ensure' and 'openflux-yandex-client' not in old:continue
+            new=patch_runtime_selector(old,python=path.suffix=='.py')
             if new==old:continue
             if path.suffix=='.py':compile(new,str(path),'exec')
             else:
