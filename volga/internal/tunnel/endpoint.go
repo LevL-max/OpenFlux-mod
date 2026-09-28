@@ -25,6 +25,9 @@ type Endpoint struct {
 	mux        *yamux.Session
 	changed    chan struct{}
 	retired    map[recordconn.Epoch]bool
+
+	// HandshakeTimeout bounds a handshake once a peer has answered; zero is 30 s.
+	HandshakeTimeout time.Duration
 }
 
 func NewEndpoint(client bool, key []byte, send recordconn.SendFunc) *Endpoint {
@@ -91,6 +94,24 @@ func (e *Endpoint) Open(ctx context.Context) (*yamux.Stream, error) {
 	}
 }
 
+// handshake gives up after HandshakeTimeout once a peer has answered. A server
+// that has heard no client keeps waiting silently on the same epoch instead of
+// replacing it every timeout while idle.
+func (e *Endpoint) handshake(ctx context.Context, c *recordconn.Conn) error {
+	timeout := e.HandshakeTimeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	for {
+		attempt, cancel := context.WithTimeout(ctx, timeout)
+		err := c.Handshake(attempt)
+		cancel()
+		if err == nil || e.Client || ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) || c.Peer() != (recordconn.Epoch{}) {
+			return err
+		}
+	}
+}
+
 // Run creates fresh authenticated record epochs after a lost peer/session. TCP
 // connections belonging to a failed session close; subsequent SOCKS requests
 // use the new session. It never claims to resume an interrupted TCP connection.
@@ -106,9 +127,7 @@ func (e *Endpoint) Run(ctx context.Context) error {
 		e.mu.Lock()
 		e.conn = c
 		e.mu.Unlock()
-		handshake, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err = c.Handshake(handshake)
-		cancel()
+		err = e.handshake(ctx, c)
 		if err == nil {
 			var m *yamux.Session
 			if e.Client {

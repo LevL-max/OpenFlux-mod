@@ -11,6 +11,9 @@ import (
 type volgaV6RecoveryConfig struct {
 	ProgressStall   time.Duration
 	RecycleCooldown time.Duration
+	// MaxRecycleCooldown caps the growing pause after recycles that brought no
+	// ACK progress, e.g. while the peer is absent.
+	MaxRecycleCooldown time.Duration
 
 	MaxWindow         int
 	HighWatermark     int
@@ -25,6 +28,7 @@ func defaultVolgaV6RecoveryConfig() volgaV6RecoveryConfig {
 	return volgaV6RecoveryConfig{
 		ProgressStall:      2 * time.Second,
 		RecycleCooldown:    5 * time.Second,
+		MaxRecycleCooldown: 5 * time.Minute,
 		MaxWindow:          512,
 		HighWatermark:      256,
 		CriticalWatermark:  384,
@@ -53,6 +57,8 @@ type volgaV6RecoveryController struct {
 	lastAckBase  uint64
 	lastProgress time.Time
 	lastRecycle  time.Time
+	// unproductive counts recycles since the last ACK progress or peer frame.
+	unproductive int
 
 	retryTokens float64
 	retryRefill time.Time
@@ -65,6 +71,9 @@ func newVolgaV6RecoveryController(cfg volgaV6RecoveryConfig) *volgaV6RecoveryCon
 	}
 	if cfg.RecycleCooldown <= 0 {
 		cfg.RecycleCooldown = defaults.RecycleCooldown
+	}
+	if cfg.MaxRecycleCooldown < cfg.RecycleCooldown {
+		cfg.MaxRecycleCooldown = max(defaults.MaxRecycleCooldown, cfg.RecycleCooldown)
 	}
 	if cfg.MaxWindow <= 0 {
 		cfg.MaxWindow = defaults.MaxWindow
@@ -141,6 +150,7 @@ func (c *volgaV6RecoveryController) Observe(now time.Time, snap volgaV6ReliableS
 	if snap.AckBase > c.lastAckBase {
 		c.lastAckBase = snap.AckBase
 		c.lastProgress = now
+		c.unproductive = 0
 	}
 	if snap.ReplayDepth == 0 {
 		// With no outstanding DATA there is no delivery-progress evidence that
@@ -163,14 +173,31 @@ func (c *volgaV6RecoveryController) Observe(now time.Time, snap volgaV6ReliableS
 	if !stalled {
 		return decision
 	}
-	if !c.lastRecycle.IsZero() && now.Sub(c.lastRecycle) < c.config.RecycleCooldown {
+	cooldown := min(c.config.RecycleCooldown<<c.backoffShiftLocked(), c.config.MaxRecycleCooldown)
+	if !c.lastRecycle.IsZero() && now.Sub(c.lastRecycle) < cooldown {
 		return decision
 	}
 
 	c.lastRecycle = now
+	c.unproductive++
 	decision.Recycle = true
 	decision.Reason = "delivery-progress-stall"
 	return decision
+}
+
+// backoffShiftLocked grows by one for every recycle after the first that brought
+// no ACK progress. A peer that is gone must not cause a carrier
+// re-authorization every few seconds or a constant stream of useless repairs.
+func (c *volgaV6RecoveryController) backoffShiftLocked() uint {
+	return uint(min(max(c.unproductive-1, 0), 6))
+}
+
+// PeerActive ends the backoff as soon as the peer sends anything, so a
+// returning peer gets normal recycling and the full repair rate at once.
+func (c *volgaV6RecoveryController) PeerActive() {
+	c.mu.Lock()
+	c.unproductive = 0
+	c.mu.Unlock()
 }
 
 func (c *volgaV6RecoveryController) refillRetryLocked(now time.Time) {
@@ -182,7 +209,7 @@ func (c *volgaV6RecoveryController) refillRetryLocked(now time.Time) {
 		return
 	}
 	elapsed := now.Sub(c.retryRefill).Seconds()
-	c.retryTokens += elapsed * c.config.RetryRatePerSecond
+	c.retryTokens += elapsed * c.config.RetryRatePerSecond / float64(uint(1)<<c.backoffShiftLocked())
 	if max := float64(c.config.RetryBurst); c.retryTokens > max {
 		c.retryTokens = max
 	}

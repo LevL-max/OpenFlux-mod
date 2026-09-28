@@ -16,6 +16,7 @@ type volgaV6RuntimeConfig struct {
 	Reliable            volgaV6ReliableConfig
 	Recovery            volgaV6RecoveryConfig
 	AckRepeatInterval   time.Duration
+	AckRepeatWindow     time.Duration // repeat an unchanged ACK only this long after the last peer frame
 	DrainGrace          time.Duration
 	CarrierStartTimeout time.Duration
 	RepairWorkers       int
@@ -26,6 +27,7 @@ func defaultVolgaV6RuntimeConfig() volgaV6RuntimeConfig {
 		Reliable:            defaultVolgaV6ReliableConfig(),
 		Recovery:            defaultVolgaV6RecoveryConfig(),
 		AckRepeatInterval:   100 * time.Millisecond,
+		AckRepeatWindow:     10 * time.Second,
 		DrainGrace:          2 * time.Second,
 		CarrierStartTimeout: 15 * time.Second,
 		RepairWorkers:       4,
@@ -72,6 +74,8 @@ type volgaV6Runtime struct {
 	repairsSent     atomic.Uint64
 	ackDirty        atomic.Bool
 	ackMu           sync.Mutex
+	peerActivity    atomic.Bool  // a peer frame arrived since the last Tick
+	lastInbound     atomic.Int64 // UnixNano of the last peer frame
 
 	mu                sync.Mutex
 	lastAckSent       time.Time
@@ -83,6 +87,9 @@ func newVolgaV6Runtime(sessionID uint64, factory volgaV6CarrierFactory, cfg volg
 	defaults := defaultVolgaV6RuntimeConfig()
 	if cfg.AckRepeatInterval <= 0 {
 		cfg.AckRepeatInterval = defaults.AckRepeatInterval
+	}
+	if cfg.AckRepeatWindow <= 0 {
+		cfg.AckRepeatWindow = defaults.AckRepeatWindow
 	}
 	if cfg.DrainGrace <= 0 {
 		cfg.DrainGrace = defaults.DrainGrace
@@ -151,6 +158,11 @@ func (r *volgaV6Runtime) handleIncoming(frame volgaV6WireFrame) {
 	if (frame.Kind == volgaV6FrameData || frame.Kind == volgaV6FrameFragment) && frame.Session == r.session.sessionID {
 		return
 	}
+	// Peer DATA, or an ACK of our own session, proves the peer is present.
+	if frame.Kind == volgaV6FrameData || frame.Kind == volgaV6FrameFragment || (frame.Kind == volgaV6FrameAck && frame.Ack.Session == r.session.sessionID) {
+		r.lastInbound.Store(time.Now().UnixNano())
+		r.peerActivity.Store(true)
+	}
 	if frame.Kind == volgaV6FrameFragment {
 		// Completed/old sequences need no reassembly storage. Repeating the
 		// cumulative ACK lets a peer recover when the last ACK was lost.
@@ -209,6 +221,12 @@ func (r *volgaV6Runtime) repeatAckIfDue(now time.Time) error {
 	}
 	defer r.ackMu.Unlock()
 	dirty := r.ackDirty.Swap(false)
+	// A repeated ACK only helps a peer that may still be waiting for it. After
+	// AckRepeatWindow of silence the peer is gone or idle; its repairs would
+	// mark the ACK dirty again.
+	if !dirty && now.Sub(time.Unix(0, r.lastInbound.Load())) > r.config.AckRepeatWindow {
+		return nil
+	}
 
 	r.mu.Lock()
 	last := r.lastAckSent
@@ -269,6 +287,9 @@ func (r *volgaV6Runtime) scheduleRetire(generation uint64, now time.Time) {
 // physical generation without changing logical sequence numbers.
 func (r *volgaV6Runtime) Tick(ctx context.Context, now time.Time) volgaV6RuntimeTickResult {
 	result := volgaV6RuntimeTickResult{}
+	if r.peerActivity.Swap(false) {
+		r.recovery.PeerActive()
+	}
 	result.Retired = r.retireDue(now)
 	if now.Before(r.manager.snapshotAt(now).ActiveHealth.RelayRetryAt) {
 		// An explicit provider cooldown is not evidence of a dead carrier.
