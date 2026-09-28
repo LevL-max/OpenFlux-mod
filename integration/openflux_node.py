@@ -11,6 +11,10 @@ HELPER = pathlib.Path('/usr/local/sbin/openflux-yandex-cookie-import')
 COMMAND_DIR = pathlib.Path('/usr/local/sbin')
 UNIT_DIR = pathlib.Path('/etc/systemd/system')
 RUNTIME_DIR = pathlib.Path('/var/lib/openflux/runtime')
+VOLGA_ARCHIVE = 'openflux-volga-container-linux-amd64.tar.gz'
+VOLGA_BINARY = pathlib.Path('/opt/openflux-volga/openflux-volga')
+VOLGA_CONFIG = pathlib.Path('/etc/openflux-volga/config.json')
+VOLGA_INSTALLED = pathlib.Path('/var/lib/openflux-volga-updater/installed.json')
 
 def read(path, default=None):
     try: return json.loads(pathlib.Path(path).read_text())
@@ -91,19 +95,15 @@ def candidate(c):
     newest['installed'] = installed; newest['update_available'] = not mod.is_current(installed, newest)
     return newest
 
-def verify_download(row, directory, transport='yandex', include_container=False):
+def verify_download(row, directory, volga=False):
     # Bootstrap and updates use the same published digests and release manifest.
     base = 'https://github.com/'+REPO+'/releases/'
     tag = row['tag_name']
     if not re.fullmatch(r'v\d+\.\d+\.\d+(?:-rc\d+)?', tag) or row.get('html_url')!=base+'tag/'+tag:
         raise ValueError('Unexpected release identity')
-    if transport not in ('yandex','volga'): raise ValueError('Unsupported transport')
-    binary_asset = 'openflux-volga-linux-amd64' if transport=='volga' else 'openflux-linux-amd64'
-    required = (binary_asset,'openflux-yandex-cookie-import','openflux-integration-linux.tar.gz',SELF_ASSET,'SHA256SUMS')
-    if transport=='volga': required += ('protocol-manifest.json',)
-    if include_container:
-        if transport!='volga':raise ValueError('Separate container archive is only supported for Volga')
-        required+=('openflux-volga-container-linux-amd64.tar.gz',)
+    required = ('openflux-linux-amd64','openflux-yandex-cookie-import','openflux-integration-linux.tar.gz',SELF_ASSET,'SHA256SUMS')
+    # One release carries both protocols; a server set up for Volga takes both.
+    if volga: required += ('openflux-volga-linux-amd64','protocol-manifest.json',VOLGA_ARCHIVE)
     assets = {}
     for name in required:
         found = [a for a in row.get('assets', []) if a.get('name')==name]
@@ -111,7 +111,7 @@ def verify_download(row, directory, transport='yandex', include_container=False)
         a = found[0]
         if a.get('browser_download_url')!=base+'download/'+tag+'/'+name or not re.fullmatch(r'sha256:[0-9a-f]{64}', a.get('digest','')):
             raise ValueError('Unverified asset '+name)
-        limit=256*1024*1024 if name=='openflux-volga-container-linux-amd64.tar.gz' else 70*1024*1024 if name==binary_asset else 2*1024*1024
+        limit=256*1024*1024 if name==VOLGA_ARCHIVE else 70*1024*1024 if name in ('openflux-linux-amd64','openflux-volga-linux-amd64') else 2*1024*1024
         fetch(a['browser_download_url'], directory/name, limit)
         if sha(directory/name)!=a['digest'][7:]: raise ValueError('Asset digest mismatch: '+name)
         assets[name] = a['digest'][7:]
@@ -122,14 +122,10 @@ def verify_download(row, directory, transport='yandex', include_container=False)
         sums[match[2]] = match[1]
     if any(sums.get(n)!=d for n,d in assets.items() if n!='SHA256SUMS'): raise ValueError('Release manifest mismatch')
     compile((directory/SELF_ASSET).read_text(), SELF_ASSET, 'exec')
-    os.chmod(directory/binary_asset, 0o755)
-    p = run([str(directory/binary_asset),'-version' if transport=='volga' else '--help'])
-    marker = 'openflux-volga' if transport=='volga' else 'yandex-cookie-store'
-    if marker not in (p.stdout or '')+(p.stderr or ''): raise ValueError('Unsupported release binary')
-    if transport=='volga':
-        from router_integration import validate_volga_manifest
-        manifest=validate_volga_manifest(read(directory/'protocol-manifest.json'),tag,assets[binary_asset])
-        if include_container and manifest.get('container_archive')!={'name':'openflux-volga-container-linux-amd64.tar.gz','sha256':assets['openflux-volga-container-linux-amd64.tar.gz']}:raise ValueError('Volga container archive manifest mismatch')
+    checks = [('openflux-linux-amd64','--help','yandex-cookie-store')]+([('openflux-volga-linux-amd64','-version','openflux-volga')] if volga else [])
+    for name,flag,marker in checks:
+        os.chmod(directory/name, 0o755); p = run([str(directory/name),flag])
+        if marker not in (p.stdout or '')+(p.stderr or ''): raise ValueError('Unsupported release binary')
     return assets
 
 def atomic_file(source, target, mode=0o755):
@@ -172,20 +168,29 @@ def stage(c):
     current = identify(c, rows)
     if current['version']=='unknown': raise ValueError('Current binary is not a recognized release; identify it before updating')
     if mod.version(row['tag_name'])<mod.version(current['version']): raise ValueError('Downgrade requires rollback')
-    if row['tag_name']==current['version']:
-        expected = next(a['digest'][7:] for a in row['assets'] if a['name']=='openflux-linux-amd64')
-        if expected!=current['sha256']: raise ValueError('Same-version binary replacement is refused')
-        return {'version':current['version'],'current':True}
+    newest = mod.metadata(row)
+    if row['tag_name']==current['version'] and newest['asset_sha256']!=current['sha256']: raise ValueError('Same-version binary replacement is refused')
+    if mod.is_current(current, newest): return {'version':current['version'],'current':True}
+    volga = bool(newest.get('volga_sha256')) and mod.volga_enabled()
     directory = pathlib.Path(tempfile.mkdtemp(prefix='candidate-',dir=STATE))
-    assets = verify_download(row, directory)
+    assets = verify_download(row, directory, volga=volga)
     mod.extract_bundle(directory/'openflux-integration-linux.tar.gz',directory/'integration')
-    data = {'version':row['tag_name'],'directory':str(directory),'assets':assets,'base_sha256':current['sha256']}
+    data = {'version':row['tag_name'],'directory':str(directory),'assets':assets,'base_sha256':current['sha256'],'volga':volga}
+    if volga:
+        # The candidate's own validator: a later release may change the Volga profile.
+        manifest = mod.bundle_integration(directory).validate_volga_manifest(read(directory/'protocol-manifest.json'),row['tag_name'],assets['openflux-volga-linux-amd64'])
+        if manifest.get('container_archive')!={'name':VOLGA_ARCHIVE,'sha256':assets[VOLGA_ARCHIVE]}: raise ValueError('Volga container archive manifest mismatch')
+        run(['docker','load','--input',str(directory/VOLGA_ARCHIVE)],timeout=180)
+        if run(['docker','image','inspect','--format={{.Id}}',manifest['image_id']]).stdout.strip()!=manifest['image_id']: raise ValueError('Loaded Volga image ID mismatch')
+        data['image'] = manifest['image_id']
     save(STATE/'staged.json', data); return data
 
-def checkpoint(c):
+def checkpoint(c, volga=False):
     directory = pathlib.Path(tempfile.mkdtemp(prefix='backup-',dir=STATE)); paths = [pathlib.Path(c['binary'])]
     paths += [pathlib.Path(c['library'])/name for name in support(c).MODULES]
     paths += [pathlib.Path(c['library'])/'openflux_node.py',HELPER]
+    # Volga shares the checkpoint: one rollback restores one release.
+    if volga: paths += [VOLGA_BINARY,VOLGA_INSTALLED,VOLGA_CONFIG]
     records = []
     for i,p in enumerate(paths):
         item = {'path':str(p),'present':p.exists(),'copy':str(i)}
@@ -196,7 +201,8 @@ def checkpoint(c):
     save(directory/'checkpoint.json',data); return data
 
 def restore(data):
-    c = data['config']; runtime_action(c,'stop')
+    c = data['config']; legacy = data.get('legacy_changed',True); volga = data.get('volga')
+    if legacy: runtime_action(c,'stop')
     for item in data['files']:
         p = pathlib.Path(item['path'])
         if item['present']:
@@ -204,9 +210,18 @@ def restore(data):
             if sha(source)!=item['sha256']: raise ValueError('Rollback checksum mismatch')
             atomic_file(source,p,item['mode'])
         else: p.unlink(missing_ok=True)
-    if data['active']: runtime_action(c,'start')
+    if volga:
+        support(c); from router_integration import VolgaRuntime
+        runtime = VolgaRuntime(); runtime.restore_server_container(volga)
+        if volga.get('active'): runtime.action('start')
+    if legacy and data['active']: runtime_action(c,'start')
     save(STATE/'installed.json',data['installed']); (STATE/'transaction.json').unlink(missing_ok=True)
     if data.get('watchdog'): run(['systemctl','stop',data['watchdog']+'.timer'],check=False)
+
+def prune_checkpoints(keep=2):
+    # Bounded storage like the router updater: the rollback checkpoint and one older one.
+    backups = sorted((p for p in STATE.glob('backup-*') if p.is_dir() and not p.is_symlink()), key=lambda p:p.stat().st_mtime_ns, reverse=True)
+    for path in backups[keep:]+[p for p in STATE.glob('candidate-*') if p.is_dir() and not p.is_symlink()]: shutil.rmtree(path)
 
 def install_staged(c):
     if (STATE/'transaction.json').exists(): raise ValueError('Interrupted update exists; run openfluxctl rollback first')
@@ -216,32 +231,53 @@ def install_staged(c):
     directory = pathlib.Path(data['directory'])
     for name,digest in data['assets'].items():
         if sha(directory/name)!=digest: raise ValueError('Staged release changed')
-    support(c).extract_bundle(directory/'openflux-integration-linux.tar.gz',directory/'integration')
-    prior = checkpoint(c)
+    mod = support(c); mod.extract_bundle(directory/'openflux-integration-linux.tar.gz',directory/'integration')
+    integration = mod.bundle_integration(directory) if data.get('volga') else None
+    volga = integration and integration.VolgaRuntime()
+    # The Legacy exit restarts only when its binary changes; its clients keep their sessions otherwise.
+    legacy = sha(directory/'openflux-linux-amd64')!=sha(c['binary'])
+    prior = checkpoint(c, volga=bool(volga))
     watchdog = 'openflux-update-return-'+str(int(time.time()))
-    prior['watchdog']=watchdog; save(pathlib.Path(prior['directory'])/'checkpoint.json',prior);save(STATE/'transaction.json',prior)
+    prior.update(watchdog=watchdog, legacy_changed=legacy)
+    if volga: prior['volga'] = {'active':volga.active(),'existed':volga.owned_container(integration.VOLGA_CONTAINER)}
+    def keep(_record=None): save(pathlib.Path(prior['directory'])/'checkpoint.json',prior); save(STATE/'transaction.json',prior)
+    keep()
     guard=next(x for x in prior['files'] if x['path']==str(pathlib.Path(c['library'])/'openflux_node.py'))
     # Independent recovery survives a lost SSH session or a killed updater process.
-    run(['systemd-run','--quiet','--unit='+watchdog,'--on-active=180s','/usr/bin/python3',str(pathlib.Path(prior['directory'])/guard['copy']),'recover','--checkpoint',str(pathlib.Path(prior['directory'])/'checkpoint.json')])
+    # Two health gates (Legacy, Volga) can take 90 s each; recovery waits for both.
+    run(['systemd-run','--quiet','--unit='+watchdog,'--on-active=360s','/usr/bin/python3',str(pathlib.Path(prior['directory'])/guard['copy']),'recover','--checkpoint',str(pathlib.Path(prior['directory'])/'checkpoint.json')])
     try:
-        runtime_action(c,'stop')
-        atomic_file(directory/'openflux-linux-amd64',c['binary'])
-        for name in support(c).MODULES:
+        if legacy:
+            runtime_action(c,'stop')
+            atomic_file(directory/'openflux-linux-amd64',c['binary'])
+        for name in mod.MODULES:
             source = directory/'integration'/name; compile(source.read_text(),name,'exec')
             atomic_file(source,pathlib.Path(c['library'])/name,0o644)
         atomic_file(directory/SELF_ASSET,pathlib.Path(c['library'])/'openflux_node.py')
         atomic_file(directory/'openflux-yandex-cookie-import',HELPER)
-        runtime_action(c,'start')
-        if c['backend']=='docker':
-            actual=run(['docker','exec',c['container'],'sha256sum','/usr/local/bin/openflux']).stdout.split()[0]
-            if actual!=sha(c['binary']):raise RuntimeError('Container did not load the new release binary')
-        health(c)
-        if not prior['active']: runtime_action(c,'stop')
+        if legacy:
+            runtime_action(c,'start')
+            if c['backend']=='docker':
+                actual=run(['docker','exec',c['container'],'sha256sum','/usr/local/bin/openflux']).stdout.split()[0]
+                if actual!=sha(c['binary']):raise RuntimeError('Container did not load the new release binary')
+            health(c)
+            if not prior['active']: runtime_action(c,'stop')
+        if volga:
+            atomic_file(directory/'openflux-volga-linux-amd64',VOLGA_BINARY)
+            volga.replace_server_container(data['image'],prior['volga'],keep)
+            # A stopped server stays stopped and is not started to be tested: its
+            # executable and image were verified offline. Running or new ones are.
+            if prior['volga']['active'] or not prior['volga']['existed']:
+                volga.action('start'); volga.health(require_session=False)
+            volga.save(VOLGA_INSTALLED,{'version':data['version'],'sha256':sha(VOLGA_BINARY),'image':data['image']})
+            volga.install_recovery_timer()
         run(['systemctl','stop',watchdog+'.timer'])
         save(STATE/'rollback.json',prior)
         save(STATE/'installed.json',{'version':data['version'],'sha256':sha(c['binary'])})
         (STATE/'transaction.json').unlink(); (STATE/'staged.json').unlink()
-        return {'installed':data['version'],'health':'passed','previous_active_state_restored':True}
+        if volga: volga.prune_server_containers(prior['volga'].get('old_container')); mod.retire_volga_updater()
+        prune_checkpoints()
+        return {'installed':data['version'],'health':'passed','previous_active_state_restored':True,'legacy_restarted':legacy,'volga':bool(volga)}
     except BaseException:
         restore(prior); run(['systemctl','stop',watchdog+'.timer'],check=False); raise
 
@@ -364,7 +400,6 @@ def main():
     p=sub.add_parser('cookies'); p.add_argument('operation',choices=('import','package','send')); p.add_argument('--file',default='-'); p.add_argument('--output');p.add_argument('--transport',choices=('yandex','volga'));p.add_argument('--document-url')
     p=sub.add_parser('recovery'); p.add_argument('--server-public-key'); p.add_argument('--sender-public-key'); p.add_argument('--disk-token-file'); p.add_argument('--disk-path');p.add_argument('--transport',choices=('yandex','volga'))
     p=sub.add_parser('setup-volga');p.add_argument('--config-file',required=True);p.add_argument('--memory-mib',type=int,default=256);p.add_argument('--cpu-percent',type=int,default=50)
-    p.add_argument('--channel',choices=('stable','prerelease'))
     p=sub.add_parser('select-protocol');p.add_argument('protocol',choices=('yandex','volga'))
     for command in ('runtime-unit','recover-volga','poll-volga-recovery'):sub.add_parser(command)
     p=sub.add_parser('recover'); p.add_argument('--checkpoint',required=True)
@@ -373,6 +408,8 @@ def main():
     if a.action=='runtime-unit':
         from router_integration import openflux_runtime_unit
         print(openflux_runtime_unit());return
+    # One release, one updater: Volga follows every OpenFlux check/update/rollback.
+    if getattr(a,'transport',None)=='volga' and a.action in ('check','download','update','rollback'): a.transport=None
     if getattr(a,'transport',None)=='volga' or a.action in ('setup-volga','select-protocol','recover-volga','poll-volga-recovery'):
         from router_integration import run_volga_cli
         result=run_volga_cli(a);print(json.dumps(result,indent=2));return

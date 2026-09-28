@@ -261,7 +261,7 @@ Configuration downloads contain that key and must stay private.
 | Configuration | `/etc/openflux-volga/config.json` |
 | Browser credentials | `/var/lib/openflux-volga/{cookies,browser}.json` |
 | Binary | `/opt/openflux-volga/openflux-volga` |
-| Update/rollback state | `/var/lib/openflux-volga-updater/` |
+| Installed version and recovery state | `/var/lib/openflux-volga-updater/` |
 | Client service | `openflux-volga-client.service` |
 | Server container | `openflux-volga` |
 
@@ -279,12 +279,13 @@ sudo openfluxctl configure --transport volga --config-file /private/volga-config
 sudo openfluxctl cookies import --transport volga --document-url 'DOCUMENT_A' --file /private/doc-a.curl
 sudo openfluxctl cookies import --transport volga --document-url 'DOCUMENT_B' --file /private/doc-b.curl
 sudo openfluxctl setup-volga --config-file /private/volga-config.json --memory-mib 256 --cpu-percent 50
+sudo openfluxctl update
 ```
 
-For RC testing, use `setup-volga --channel prerelease ...`, or
-`openfluxctl configure --transport volga --channel prerelease` before downloading.
-This saves `volga_channel` separately and keeps the Legacy release channel intact.
-Use `--channel stable` for Volga after its stable release is available.
+`setup-volga` only saves the configuration and limits. The next OpenFlux update
+installs Volga: `sudo openfluxctl update`, or on a mini-PC Router Updater →
+OpenFlux → Download, then Install. Volga follows the OpenFlux release channel
+(`openfluxctl configure --channel ...`); there is no separate Volga channel.
 
 The current installation uses one Volga server and one document pair, with PC1
 and PC2 connecting **in turn**. They use matching documents/shared key. Stop
@@ -297,8 +298,9 @@ GitHub digest, SHA256SUMS, protocol manifest and immutable Docker image ID. No
 GitHub Container Registry login is needed. No port is exposed,
 host networking is unused and all Linux capabilities are dropped. First install
 checks carrier authorization without requiring an already-installed client.
-Start it explicitly with `sudo openfluxctl start --transport volga`; later updates
-preserve its active state. Legacy keeps running independently.
+Stop or start it with `sudo openfluxctl stop|start --transport volga`; updates
+preserve its state. A stopped server is not started to be tested: its executable
+and image are verified offline. Legacy keeps running independently.
 
 On the client, `sudo openfluxctl select-protocol volga` checks the session and HTTPS
 through SOCKS, including expected exit IP when configured in the existing router
@@ -311,15 +313,15 @@ selected protocol. The bridge must not Require/Want the Legacy unit.
 
 ```sh
 sudo openfluxctl status --transport volga
-sudo openfluxctl update --transport volga
-sudo openfluxctl rollback --transport volga
 sudo openfluxctl health --transport volga --seconds 90
+sudo openfluxctl update      # Legacy and Volga together
+sudo openfluxctl rollback    # both, to the previous release
 ```
 
 Default limits: 256 MiB, zero swap, 50% of one CPU, 128 tasks. Configure limits via
 `setup-volga --memory-mib ... --cpu-percent ...` (192–2048 MiB; 10–200% of one CPU).
-Reinstalling applies them with health checks and rollback. Lower `max_streams`
-through config import if needed. Performance settings remain frozen.
+The next OpenFlux update applies them with health checks and rollback. Lower
+`max_streams` through config import if needed. Performance settings remain frozen.
 
 Volga reuses the Disk token and RSA/Ed25519 pairing keys with a separate signed
 protocol identity. `openfluxctl recovery --transport volga` enables its polling
@@ -336,7 +338,18 @@ Fresh credentials wake blocked startup without restarting the process. Persisten
 interactive verification must still be completed in the browser. Volga server
 status appears separately while Volga is selected.
 
-Volga updates install the verified support modules and panel changes in the same
-transaction as the Volga executable. The recovery watchdog uses a complete copy
-of the previous support code; an interrupted module replacement restores the
-previous files and runtime. Legacy binary, cookies and release channel are preserved.
+One release carries both protocols, and one updater installs it: Router Updater
+on the mini-PCs, `openfluxctl update` elsewhere. A single transaction replaces
+Legacy, Volga (executable, unit or container), support modules, panel and router
+hooks, with one checkpoint. A failed health gate — including a router panel that
+does not come back — restores all of them, and Rollback returns one consistent
+release. The selected protocol is tested; Volga is started only where it already
+runs, because starting it takes the shared document pair. On the server the Legacy
+exit restarts only when its binary changes. The Volga manifest is validated by the
+new release's own code, so a later release may change the frozen profile.
+
+Updating from v4.1.0-rc1/rc2: the first update still runs their updater, which
+installs Legacy and the new support code only. The Router Updater then shows
+OpenFlux as not current; Download and Install once more to bring Volga to the same
+release (`sudo openfluxctl update` twice on the server). The separate rc Volga
+updater's checkpoints are removed by that update.
