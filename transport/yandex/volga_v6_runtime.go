@@ -23,11 +23,13 @@ type volgaV6RuntimeConfig struct {
 
 	// Quiet (a server) waits silently while no peer frame has arrived for
 	// QuietAfter, or none since start: its outstanding DATA then has no
-	// receiver. It sends no repairs and recycles its carriers, each recycle a
-	// fresh authorization of every lane, only every QuietRecycleInterval to heal
-	// a receive path that died silently. A peer frame restores normal recovery;
-	// a live session's yamux keepalives arrive every 5 s. A client keeps fast
-	// recovery.
+	// receiver. It sends no repairs and renews its carriers, each renewal a
+	// fresh authorization of every lane, every QuietRecycleInterval. Yandex
+	// delivers to an idle carrier only for about two minutes after its
+	// authorization (on AWS a client was heard 18 s-1m41s after one, not at
+	// 3m53s or later), so the interval stays below that. A peer frame restores
+	// normal recovery; a live session's yamux keepalives arrive every 5 s. A
+	// client keeps fast recovery.
 	Quiet                bool
 	QuietAfter           time.Duration
 	QuietRecycleInterval time.Duration
@@ -46,7 +48,7 @@ func defaultVolgaV6RuntimeConfig() volgaV6RuntimeConfig {
 		CarrierStartTimeout:  15 * time.Second,
 		RepairWorkers:        4,
 		QuietAfter:           30 * time.Second,
-		QuietRecycleInterval: 20 * time.Minute,
+		QuietRecycleInterval: 90 * time.Second,
 		ResubscribeSpacing:   time.Minute,
 	}
 }
@@ -450,16 +452,16 @@ func (r *volgaV6Runtime) resubscribeDue(now time.Time, health volgaV6PhysicalHea
 // waitForPeer keeps a Quiet runtime silent: no repairs or ACK repeats. It
 // renews its carriers only to keep hearing a client: after a push socket
 // reconnect, and once QuietRecycleInterval has passed since the last renewal.
-// The progress clock stays fresh so a returning peer is not met with an instant
-// stall verdict.
+// Both pauses double after each failed renewal. The progress clock stays fresh
+// so a returning peer is not met with an instant stall verdict.
 func (r *volgaV6Runtime) waitForPeer(ctx context.Context, now time.Time, snap volgaV6ReliableSnapshot, health volgaV6PhysicalHealth, result volgaV6RuntimeTickResult) volgaV6RuntimeTickResult {
 	r.recovery.deferProgress(now)
 	result.Recovery = volgaV6RecoveryDecision{AdmissionLimit: r.recovery.AdmissionLimit(snap.ReplayDepth), Reason: "waiting-for-peer"}
-	age, _ := r.renewalAge(now)
+	age, failures := r.renewalAge(now)
 	switch {
 	case r.resubscribeDue(now, health):
 		result.Recovery.Reason = "websocket-resubscribe"
-	case age >= r.config.QuietRecycleInterval:
+	case age >= r.config.QuietRecycleInterval<<min(failures, 5):
 		result.Recovery.Reason = "quiet-keepalive"
 	default:
 		return result

@@ -108,22 +108,22 @@ func TestVolgaV6QuietServerWaitsForAPeerWithoutRepairsOrRecycles(t *testing.T) {
 	}
 
 	r := newLonelyVolgaV6Runtime(t, true, start)
-	// Nobody to deliver to: no repairs, one keepalive recycle 20 minutes after authorization.
-	if handoffs, repairs := tickSeconds(r, start, 1, 1500); repairs != 0 || !reflect.DeepEqual(handoffs, []int{1200}) {
+	// Nobody to deliver to: no repairs, only a renewal every 90 s so a client stays audible.
+	if handoffs, repairs := tickSeconds(r, start, 1, 400); repairs != 0 || !reflect.DeepEqual(handoffs, []int{90, 180, 270, 360}) {
 		t.Fatalf("quiet server: handoffs at %v s, repairs=%d", handoffs, repairs)
 	}
-	if !r.Snapshot(start.Add(1500 * time.Second)).WaitingForPeer {
+	if !r.Snapshot(start.Add(400 * time.Second)).WaitingForPeer {
 		t.Fatal("snapshot does not report waiting for a peer")
 	}
 
 	// The client's first frame restores normal recovery at once.
-	r.lastInbound.Store(start.Add(1500 * time.Second).UnixNano())
+	r.lastInbound.Store(start.Add(400 * time.Second).UnixNano())
 	r.peerActivity.Store(true)
-	res := r.Tick(context.Background(), start.Add(1501*time.Second))
+	res := r.Tick(context.Background(), start.Add(401*time.Second))
 	if res.Repairs == 0 || res.Handoff || res.Recovery.Reason != "" {
 		t.Fatalf("after the peer arrived: repairs=%d handoff=%v reason=%q", res.Repairs, res.Handoff, res.Recovery.Reason)
 	}
-	if r.Snapshot(start.Add(1501 * time.Second)).WaitingForPeer {
+	if r.Snapshot(start.Add(401 * time.Second)).WaitingForPeer {
 		t.Fatal("snapshot still reports waiting with a peer present")
 	}
 }
@@ -136,8 +136,8 @@ func TestVolgaV6QuietServerGoesQuietAfterItsPeerLeaves(t *testing.T) {
 	if handoffs, repairs := tickSeconds(r, start, 1, 29); !reflect.DeepEqual(handoffs, []int{2, 7, 17}) || repairs == 0 {
 		t.Fatalf("first 30 s: handoffs at %v s, repairs=%d", handoffs, repairs)
 	}
-	// ...then QuietAfter of silence: nothing until the keepalive recycle.
-	if handoffs, repairs := tickSeconds(r, start, 30, 600); len(handoffs) != 0 || repairs != 0 {
+	// ...then QuietAfter of silence: no repairs, a renewal 90 s after the last one.
+	if handoffs, repairs := tickSeconds(r, start, 30, 600); !reflect.DeepEqual(handoffs, []int{107, 197, 287, 377, 467, 557}) || repairs != 0 {
 		t.Fatalf("after the peer left: handoffs at %v s, repairs=%d", handoffs, repairs)
 	}
 }
@@ -181,13 +181,13 @@ func TestVolgaV6PushSocketReconnectRenewsTheAuthorization(t *testing.T) {
 		if !res.Handoff || res.Recovery.Reason != "websocket-resubscribe" {
 			t.Fatalf("quiet=%v: handoff=%v reason=%q", quiet, res.Handoff, res.Recovery.Reason)
 		}
-		// The fresh carrier's socket has not reconnected: nothing more.
-		if res := r.Tick(context.Background(), start.Add(200*time.Second)); res.Handoff {
+		// The fresh carrier's socket has not reconnected: nothing more for now.
+		if res := r.Tick(context.Background(), start.Add(120*time.Second)); res.Handoff {
 			t.Fatalf("quiet=%v: extra handoff %q", quiet, res.Recovery.Reason)
 		}
 
 		// A refused renewal (a CAPTCHA, for example) is not retried every tick:
-		// the next attempt waits twice the spacing.
+		// the next attempt waits twice the spacing, and so does the quiet renewal.
 		carriers[len(carriers)-1].reconnects, fail = 1, true
 		before := attempts
 		for s := 201; s <= 320; s++ {

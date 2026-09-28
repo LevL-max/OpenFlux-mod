@@ -1030,6 +1030,8 @@ VOLGA_HTML='''
    <p class="small" id="volgaCookieResult" role="status"></p>
    <p class="small">Volga is updated with OpenFlux in Router Updater; its configuration file (documents and shared key) is under Configuration.</p>
   </details>'''
+VOLGA_HTML_V3=VOLGA_HTML
+VOLGA_HTML=VOLGA_HTML_V3.replace('data-volga-panel="3"','data-volga-panel="4"')
 
 # No backslashes or template literals: the panel embeds this in a Python string.
 VOLGA_JS=VOLGA_JS_V2+'''async function cookiesBoth(button,field,result,save,send){
@@ -1047,7 +1049,7 @@ $('#openfluxCookieBoth').onclick=()=>cookiesBoth($('#openfluxCookieBoth'),$('#op
 $('#volgaCookieBoth').onclick=()=>cookiesBoth($('#volgaCookieBoth'),$('#volgaCurl'),$('#volgaCookieResult'),t=>volgaPost('volga/cookies',{document:$('#volgaDocument').value,curl:t}),t=>volgaPost('volga/recovery',{document:$('#volgaDocument').value,curl:t,upload:true}));
 '''
 
-VOLGA_HOOK=VOLGA_HOOK_V1.replace("  $('#openfluxCookies').hidden=selected==='volga';$('#openfluxServerRecovery').hidden=selected==='volga';\n",'')+'''  $('#volgaSetup').hidden=!!vp.configured;
+VOLGA_HOOK_V3=VOLGA_HOOK_V1.replace("  $('#openfluxCookies').hidden=selected==='volga';$('#openfluxServerRecovery').hidden=selected==='volga';\n",'')+'''  $('#volgaSetup').hidden=!!vp.configured;
   const legacyAuth=of.protocols?.yandex||of, volgaServer=vp.server_authentication||{};
   const cookieServer=p=>!p.state||p.stale?'unknown':(({connected:'connected',connecting:'connecting',auth_blocked:'AUTH_BLOCKED',auth_failed:'authentication failed',stopped:'stopped'})[p.state]||p.state);
   const cookieBadge=(el,active,client,server)=>{const warn=client==='auth_blocked'||(server.state==='auth_blocked'||server.state==='auth_failed')&&!server.stale;el.textContent=(active?' · selected':'')+' · '+(client==='auth_blocked'?'this mini-PC: AUTH_BLOCKED':'server: '+cookieServer(server));el.style.color=warn?'#d97706':'';el.style.fontWeight=warn?'600':'';};
@@ -1057,6 +1059,17 @@ VOLGA_HOOK=VOLGA_HOOK_V1.replace("  $('#openfluxCookies').hidden=selected==='vol
   $('#volgaServerState').textContent='Volga server: '+(!volgaServer.state||volgaServer.stale?'Unknown — no fresh verified response':({connected:'Running · client session active',connecting:'Running · waiting for a client',auth_blocked:'AUTH_BLOCKED — send fresh server cookies',stopped:'Stopped'})[volgaServer.state]||'Unknown')+(volgaServer.reported_at?' · Last response: '+new Date(volgaServer.reported_at*1000).toLocaleString():'');
   $('#openfluxCookieBoth').disabled=$('#volgaCookieBoth').disabled=$('#volgaRecoverySend').disabled=!legacyAuth.recovery_upload_ready;$('#volgaRecoveryDownload').disabled=!legacyAuth.recovery_sender_ready;
 '''
+
+# v4: an idle Volga server reports "connecting" all the time; its heading says
+# "waiting for a client" and warns only when it is blocked or stopped.
+VOLGA_HOOK=VOLGA_HOOK_V3.replace('''  const cookieServer=p=>!p.state||p.stale?'unknown':(({connected:'connected',connecting:'connecting',auth_blocked:'AUTH_BLOCKED',auth_failed:'authentication failed',stopped:'stopped'})[p.state]||p.state);
+  const cookieBadge=(el,active,client,server)=>{const warn=client==='auth_blocked'||(server.state==='auth_blocked'||server.state==='auth_failed')&&!server.stale;el.textContent=(active?' · selected':'')+' · '+(client==='auth_blocked'?'this mini-PC: AUTH_BLOCKED':'server: '+cookieServer(server));el.style.color=warn?'#d97706':'';el.style.fontWeight=warn?'600':'';};
+  cookieBadge($('#openfluxCookieBadge'),selected==='yandex',legacyAuth.state,legacyAuth.server_authentication||{});cookieBadge($('#volgaCookieBadge'),selected==='volga',vp.state,volgaServer);
+''','''  const cookieServer=(p,names)=>!p.state||p.stale?'unknown':(names[p.state]||p.state);
+  const cookieBadge=(el,active,client,server,names,alarms)=>{const warn=client==='auth_blocked'||alarms.includes(server.state)&&!server.stale;el.textContent=(active?' · selected':'')+' · '+(client==='auth_blocked'?'this mini-PC: AUTH_BLOCKED':'server: '+cookieServer(server,names));el.style.color=warn?'#d97706':'';el.style.fontWeight=warn?'600':'';};
+  cookieBadge($('#openfluxCookieBadge'),selected==='yandex',legacyAuth.state,legacyAuth.server_authentication||{},{connected:'connected',connecting:'connecting',auth_blocked:'AUTH_BLOCKED',auth_failed:'authentication failed',stopped:'stopped'},['auth_blocked','auth_failed']);
+  cookieBadge($('#volgaCookieBadge'),selected==='volga',vp.state,volgaServer,{connected:'client connected',connecting:'waiting for a client',auth_blocked:'AUTH_BLOCKED',stopped:'stopped'},['auth_blocked','stopped']);
+''')
 
 # Older status lines read the selected protocol's status. Both sections are
 # visible now, so the Legacy lines read Legacy's own status.
@@ -1075,7 +1088,10 @@ def patch_volga_panel(text):
         old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);"
         new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
         if new not in text:text=replace(text,old,new)
-    if 'data-volga-panel="3"' in text:return text
+    if 'data-volga-panel="4"' in text:return text
+    if 'data-volga-panel="3"' in text:
+        # A v4.1.0/v4.1.1 panel: only the section headings change.
+        return replace(replace(text,VOLGA_HTML_V3,VOLGA_HTML),VOLGA_HOOK_V3,VOLGA_HOOK)
     # The Legacy cookie sections sit right after the Volga block. Exact matches
     # or no change at all: an unexpected layout makes the install roll back.
     legacy=COOKIE_HTML+RECOVERY_HTML

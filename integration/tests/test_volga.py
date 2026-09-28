@@ -134,7 +134,9 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(router_integration.patch_panel(changed),changed)
   self.assertIn("'openflux-updater','openflux-volga-config'],modes:['openflux']",changed)
   self.assertIn("'openflux-cookies','openflux-volga-config']);",changed)
-  self.assertIn('data-volga-panel="3"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
+  self.assertIn('data-volga-panel="4"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
+  # An idle Volga server is "connecting"; its heading says what that means.
+  self.assertIn("connecting:'waiting for a client'",changed);self.assertIn("['auth_blocked','stopped']",changed)
   for summary in ('>Legacy browser cookies<','>Volga browser cookies<'):self.assertEqual(changed.count(summary),1)
   for retired in ('Update Yandex cookies','Server cookies via Yandex Disk',"hidden=selected==='volga'"):self.assertNotIn(retired,changed)
   ids=re.findall(r'\bid="([^"]+)"',changed);self.assertEqual(len(ids),len(set(ids)))
@@ -159,6 +161,11 @@ class VolgaTests(unittest.TestCase):
     self.assertEqual(r.patch_panel(panel),fresh)
     # An unexpected layout changes nothing: installation then rolls back.
     with self.assertRaises(ValueError):r.patch_panel(panel.replace(r.COOKIE_HTML,r.COOKIE_HTML.replace('Copy as cURL','Copy')))
+  # A v4.1.0/v4.1.1 panel changes only its section headings.
+  v3=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V3).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V3)
+  self.assertNotEqual(r.VOLGA_HOOK,r.VOLGA_HOOK_V3);self.assertIn('data-volga-panel="3"',v3)
+  self.assertEqual(r.patch_panel(v3),fresh)
+  with self.assertRaises(ValueError):r.patch_panel(v3.replace(r.VOLGA_HOOK_V3,r.VOLGA_HOOK_V3.replace('waiting','idle')))
 
  def test_panel_status_carries_the_legacy_document_link(self):
   import openflux_auth as a

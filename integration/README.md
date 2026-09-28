@@ -311,11 +311,12 @@ and image are verified offline. Legacy keeps running independently. Updates keep
 the previous container for Rollback and remove older containers and images.
 
 Without a client the server stays quiet. It announces itself for 3 s after start,
-then sends no retries. It renews its Yandex authorization, which covers every lane,
-every 20 minutes and after its push socket reconnects: Yandex drops that socket a
-few minutes after each authorization, and a reconnect with the old signature would
-leave the server unable to hear a client. The same applies 30 s after the last
-client frame. A client's first frame restores normal recovery.
+then sends no retries. Yandex delivers a client's frames to an idle server only for
+about two minutes after the server's authorization, so the server renews it, for
+every lane, every 90 s and after its push socket reconnects. The same applies 30 s
+after the last client frame. A client's first frame restores normal recovery. A
+refused renewal (a CAPTCHA) is retried with a doubling pause of up to 32 times,
+never in a loop. The panel's heading shows this idle server as "waiting for a client".
 
 On the client, `sudo openfluxctl select-protocol volga` checks the session and HTTPS
 through SOCKS, including expected exit IP when configured in the existing router
