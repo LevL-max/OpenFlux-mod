@@ -765,6 +765,9 @@ class VolgaRuntime:
         cfg['denied_cidrs']=sorted(set(cfg['denied_cidrs'])|prefixes);validate_volga_config(cfg,'server');self.save(self.config_path,cfg)
         if self.owned_container(VOLGA_CONTAINER):
             record['old_container']='openflux-volga-backup-'+str(time.time_ns());save(record)
+            # One server per document pair: a running old server stops before the
+            # new one exists. Rollback starts it again if it was running.
+            self.run(['docker','stop',VOLGA_CONTAINER])
             self.run(['docker','rename',VOLGA_CONTAINER,record['old_container']])
         record['created_container']=True;save(record)
         self.run(self.docker_command(image))
