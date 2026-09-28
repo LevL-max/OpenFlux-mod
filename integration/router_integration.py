@@ -699,7 +699,13 @@ class VolgaRuntime:
             items.append(item)
         record['support_files']=items;self.save(self.state/'transaction.json',record)
         for source,target,mode in plans:node.atomic_file(source,target,mode)
-        if self.node().get('router_updater'):self.run(['systemctl','try-restart','router-panel.service'])
+
+    def refresh_panel(self):
+        if not self.node().get('router_updater'):return
+        # A panel request can be the updater itself. Restart only after its
+        # transaction and HTTP response have completed, never during file copy.
+        self.run(['systemd-run','--quiet','--collect','--unit=openflux-volga-panel-reload-'+str(__import__('time').time_ns()),
+            '--on-active=2s','/usr/bin/systemctl','try-restart','router-panel.service'])
 
     def begin_transaction(self,kind):
         import time,shutil
@@ -752,7 +758,6 @@ class VolgaRuntime:
             for item in record.get('support_files',[]):
                 if item['present']:node.atomic_file(item['copy'],item['path'],item['mode'])
                 else:pathlib.Path(item['path']).unlink(missing_ok=True)
-            if record.get('support_files') and record['node'].get('router_updater'):self.run(['systemctl','try-restart','router-panel.service'])
             if record['binary_present']:
                 source=pathlib.Path(record['backup'])/'binary'
                 if node.sha(source)!=record['binary_sha256']:raise ValueError('Volga rollback checksum mismatch')
@@ -788,6 +793,7 @@ class VolgaRuntime:
         if record.get('bridge_active'):self.run(['systemctl','start','sing-box-openflux.service'])
         self.run(['systemctl','stop',record['watchdog']+'.timer'],check=False)
         (self.state/'transaction.json').unlink(missing_ok=True)
+        if record.get('support_files'):self.refresh_panel()
         return {'ok':True,'message':'Previous Volga version and protocol selection restored.'}
 
     def install_staged(self):
@@ -841,6 +847,7 @@ class VolgaRuntime:
             self.save(self.state/'rollback.json',previous)
             self.run(['systemctl','stop',previous['watchdog']+'.timer'])
             (self.state/'transaction.json').unlink();(self.state/'staged.json').unlink()
+            self.refresh_panel()
             return {'ok':True,'version':staged['version'],'message':'Volga installed and verified. Previous active protocol preserved.'}
         except BaseException:
             self.restore_transaction(previous);raise
