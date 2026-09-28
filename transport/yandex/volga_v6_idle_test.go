@@ -4,6 +4,7 @@ package yandex
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"testing"
 	"time"
@@ -107,8 +108,8 @@ func TestVolgaV6QuietServerWaitsForAPeerWithoutRepairsOrRecycles(t *testing.T) {
 	}
 
 	r := newLonelyVolgaV6Runtime(t, true, start)
-	// Nobody to deliver to: no repairs, one keepalive recycle after 20 minutes.
-	if handoffs, repairs := tickSeconds(r, start, 1, 1500); repairs != 0 || !reflect.DeepEqual(handoffs, []int{1201}) {
+	// Nobody to deliver to: no repairs, one keepalive recycle 20 minutes after authorization.
+	if handoffs, repairs := tickSeconds(r, start, 1, 1500); repairs != 0 || !reflect.DeepEqual(handoffs, []int{1200}) {
 		t.Fatalf("quiet server: handoffs at %v s, repairs=%d", handoffs, repairs)
 	}
 	if !r.Snapshot(start.Add(1500 * time.Second)).WaitingForPeer {
@@ -138,6 +139,67 @@ func TestVolgaV6QuietServerGoesQuietAfterItsPeerLeaves(t *testing.T) {
 	// ...then QuietAfter of silence: nothing until the keepalive recycle.
 	if handoffs, repairs := tickSeconds(r, start, 30, 600); len(handoffs) != 0 || repairs != 0 {
 		t.Fatalf("after the peer left: handoffs at %v s, repairs=%d", handoffs, repairs)
+	}
+}
+
+// reconnectingVolgaV6Carrier reports push socket reconnects like the Yandex carrier.
+type reconnectingVolgaV6Carrier struct {
+	*linkedVolgaV6Carrier
+	reconnects uint64
+}
+
+func (c *reconnectingVolgaV6Carrier) VolgaV6PhysicalHealth(time.Time) volgaV6PhysicalHealth {
+	return volgaV6PhysicalHealth{Known: true, WSReconnects: c.reconnects}
+}
+
+func TestVolgaV6PushSocketReconnectRenewsTheAuthorization(t *testing.T) {
+	for _, quiet := range []bool{true, false} {
+		cfg := defaultVolgaV6RuntimeConfig()
+		cfg.Quiet = quiet
+		var carriers []*reconnectingVolgaV6Carrier
+		attempts, fail := 0, false
+		r := newVolgaV6Runtime(50005, func(generation uint64, _ func(volgaV6WireFrame)) (volgaV6PhysicalCarrier, error) {
+			attempts++
+			if fail {
+				return nil, errors.New("authorization refused")
+			}
+			c := &reconnectingVolgaV6Carrier{linkedVolgaV6Carrier: &linkedVolgaV6Carrier{generation: generation, factory: newLinkedVolgaV6Factory()}}
+			carriers = append(carriers, c)
+			return c, nil
+		}, cfg, nil)
+		start := time.Unix(7000, 0)
+		if err := r.startAt(context.Background(), start); err != nil {
+			t.Fatal(err)
+		}
+		// The push socket reconnects 30 s after authorization...
+		carriers[len(carriers)-1].reconnects = 1
+		if res := r.Tick(context.Background(), start.Add(30*time.Second)); res.Handoff {
+			t.Fatalf("quiet=%v: renewed within ResubscribeSpacing", quiet)
+		}
+		// ...so the carrier is authorized afresh once ResubscribeSpacing has passed.
+		res := r.Tick(context.Background(), start.Add(61*time.Second))
+		if !res.Handoff || res.Recovery.Reason != "websocket-resubscribe" {
+			t.Fatalf("quiet=%v: handoff=%v reason=%q", quiet, res.Handoff, res.Recovery.Reason)
+		}
+		// The fresh carrier's socket has not reconnected: nothing more.
+		if res := r.Tick(context.Background(), start.Add(200*time.Second)); res.Handoff {
+			t.Fatalf("quiet=%v: extra handoff %q", quiet, res.Recovery.Reason)
+		}
+
+		// A refused renewal (a CAPTCHA, for example) is not retried every tick:
+		// the next attempt waits twice the spacing.
+		carriers[len(carriers)-1].reconnects, fail = 1, true
+		before := attempts
+		for s := 201; s <= 320; s++ {
+			r.Tick(context.Background(), start.Add(time.Duration(s)*time.Second))
+		}
+		if attempts-before != 1 {
+			t.Fatalf("quiet=%v: %d renewal attempts in the 120 s after a refusal, want 1", quiet, attempts-before)
+		}
+		fail = false
+		if res := r.Tick(context.Background(), start.Add(321*time.Second)); !res.Handoff {
+			t.Fatalf("quiet=%v: no renewal after the doubled spacing", quiet)
+		}
 	}
 }
 

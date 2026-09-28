@@ -311,9 +311,11 @@ and image are verified offline. Legacy keeps running independently. Updates keep
 the previous container for Rollback and remove older containers and images.
 
 Without a client the server stays quiet. It announces itself for 3 s after start,
-then sends no retries. It renews its Yandex authorization only every 20 minutes;
-each renewal authorizes every lane. The same applies 30 s after the last client
-frame. A client's first frame restores normal recovery.
+then sends no retries. It renews its Yandex authorization, which covers every lane,
+every 20 minutes and after its push socket reconnects: Yandex drops that socket a
+few minutes after each authorization, and a reconnect with the old signature would
+leave the server unable to hear a client. The same applies 30 s after the last
+client frame. A client's first frame restores normal recovery.
 
 On the client, `sudo openfluxctl select-protocol volga` checks the session and HTTPS
 through SOCKS, including expected exit IP when configured in the existing router

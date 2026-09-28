@@ -31,6 +31,9 @@ type volgaV6RuntimeConfig struct {
 	Quiet                bool
 	QuietAfter           time.Duration
 	QuietRecycleInterval time.Duration
+	// ResubscribeSpacing is the least time between recycles caused by a
+	// reconnected push socket; see Tick.
+	ResubscribeSpacing time.Duration
 }
 
 func defaultVolgaV6RuntimeConfig() volgaV6RuntimeConfig {
@@ -44,6 +47,7 @@ func defaultVolgaV6RuntimeConfig() volgaV6RuntimeConfig {
 		RepairWorkers:        4,
 		QuietAfter:           30 * time.Second,
 		QuietRecycleInterval: 20 * time.Minute,
+		ResubscribeSpacing:   time.Minute,
 	}
 }
 
@@ -95,7 +99,8 @@ type volgaV6Runtime struct {
 	lastAckSent       time.Time
 	lastHandoffReason string
 	retireAt          map[uint64]time.Time
-	quietRecycleAt    time.Time // next keepalive recycle while waiting for a peer
+	lastRenewal       time.Time // start, the last handoff or the last renewal attempt
+	renewFailures     int       // failed renewal attempts in a row; each doubles the spacing
 }
 
 func newVolgaV6Runtime(sessionID uint64, factory volgaV6CarrierFactory, cfg volgaV6RuntimeConfig, onData func([][]byte)) *volgaV6Runtime {
@@ -121,6 +126,9 @@ func newVolgaV6Runtime(sessionID uint64, factory volgaV6CarrierFactory, cfg volg
 	}
 	if cfg.QuietRecycleInterval <= 0 {
 		cfg.QuietRecycleInterval = defaults.QuietRecycleInterval
+	}
+	if cfg.ResubscribeSpacing <= 0 {
+		cfg.ResubscribeSpacing = defaults.ResubscribeSpacing
 	}
 
 	runtime := &volgaV6Runtime{
@@ -150,6 +158,7 @@ func (r *volgaV6Runtime) startAt(ctx context.Context, now time.Time) error {
 	r.recovery.Observe(now, r.session.Snapshot(now))
 	r.mu.Lock()
 	r.lastAckSent = now
+	r.lastRenewal = now
 	r.mu.Unlock()
 	return nil
 }
@@ -312,24 +321,27 @@ func (r *volgaV6Runtime) Tick(ctx context.Context, now time.Time) volgaV6Runtime
 		r.recovery.PeerActive()
 	}
 	result.Retired = r.retireDue(now)
-	if now.Before(r.manager.snapshotAt(now).ActiveHealth.RelayRetryAt) {
+	health := r.manager.snapshotAt(now).ActiveHealth
+	if now.Before(health.RelayRetryAt) {
 		// An explicit provider cooldown is not evidence of a dead carrier.
 		r.recovery.deferProgress(now)
 		result.Recovery.Reason = "provider-rate-limit"
 		return result
 	}
-
 	snap := r.session.Snapshot(now)
 	if r.quietAt(now) {
-		return r.waitForPeer(ctx, now, snap, result)
-	}
-	if r.config.Quiet {
-		r.mu.Lock()
-		r.quietRecycleAt = time.Time{}
-		r.mu.Unlock()
+		return r.waitForPeer(ctx, now, snap, health, result)
 	}
 	result.Recovery = r.recovery.Observe(now, snap)
-	if result.Recovery.Recycle && r.handoff(ctx, now, &result, result.Recovery.Reason) {
+	renewed := false
+	switch {
+	case result.Recovery.Recycle:
+		renewed = r.handoff(ctx, now, &result, result.Recovery.Reason)
+	case r.resubscribeDue(now, health):
+		result.Recovery.Reason, result.Recovery.Recycle = "websocket-resubscribe", true
+		renewed = r.renew(ctx, now, &result, result.Recovery.Reason)
+	}
+	if renewed {
 		// Permit a bounded immediate repair burst on the newly authorized
 		// carrier. Subsequent repairs are rate-refilled normally.
 		r.recovery.ResetRetryBudget(now)
@@ -384,8 +396,34 @@ func (r *volgaV6Runtime) handoff(ctx context.Context, now time.Time, result *vol
 	r.scheduleRetire(oldGen, now)
 	r.mu.Lock()
 	r.lastHandoffReason = reason
+	r.lastRenewal = now
+	r.renewFailures = 0
 	r.mu.Unlock()
 	return true
+}
+
+// renew is a handoff that is not caused by a delivery stall. Its spacing counts
+// from the attempt, so a failing authorization (a CAPTCHA, for example) is
+// not retried every tick.
+func (r *volgaV6Runtime) renew(ctx context.Context, now time.Time, result *volgaV6RuntimeTickResult, reason string) bool {
+	r.mu.Lock()
+	r.lastRenewal = now
+	r.mu.Unlock()
+	if r.handoff(ctx, now, result, reason) {
+		return true
+	}
+	r.mu.Lock()
+	r.renewFailures++
+	r.mu.Unlock()
+	return false
+}
+
+// renewalAge is the time since start, the last handoff or the last renewal
+// attempt, and the number of failed renewals in a row.
+func (r *volgaV6Runtime) renewalAge(now time.Time) (time.Duration, int) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return now.Sub(r.lastRenewal), r.renewFailures
 }
 
 // quietAt reports whether a Quiet runtime has no peer to serve: no peer frame
@@ -398,25 +436,36 @@ func (r *volgaV6Runtime) quietAt(now time.Time) bool {
 	return last == 0 || now.Sub(time.Unix(0, last)) >= r.config.QuietAfter
 }
 
-// waitForPeer keeps a Quiet runtime silent: no repairs or ACK repeats, and a
-// keepalive recycle every QuietRecycleInterval. The progress clock stays fresh
-// so a returning peer is not met with an instant stall verdict.
-func (r *volgaV6Runtime) waitForPeer(ctx context.Context, now time.Time, snap volgaV6ReliableSnapshot, result volgaV6RuntimeTickResult) volgaV6RuntimeTickResult {
+// resubscribeDue reports that the active carrier's push socket has reconnected
+// since the last authorization. The socket then reuses the subscription signed
+// at that authorization; once that is stale it connects but stays silent. On
+// AWS it went silent 5-12 min after each authorization, and a server waiting
+// for a client missed it. Only a fresh authorization restores delivery.
+// Spacing doubles after each failed renewal, up to 32 times.
+func (r *volgaV6Runtime) resubscribeDue(now time.Time, health volgaV6PhysicalHealth) bool {
+	age, failures := r.renewalAge(now)
+	return health.WSReconnects > 0 && age >= r.config.ResubscribeSpacing<<min(failures, 5)
+}
+
+// waitForPeer keeps a Quiet runtime silent: no repairs or ACK repeats. It
+// renews its carriers only to keep hearing a client: after a push socket
+// reconnect, and once QuietRecycleInterval has passed since the last renewal.
+// The progress clock stays fresh so a returning peer is not met with an instant
+// stall verdict.
+func (r *volgaV6Runtime) waitForPeer(ctx context.Context, now time.Time, snap volgaV6ReliableSnapshot, health volgaV6PhysicalHealth, result volgaV6RuntimeTickResult) volgaV6RuntimeTickResult {
 	r.recovery.deferProgress(now)
 	result.Recovery = volgaV6RecoveryDecision{AdmissionLimit: r.recovery.AdmissionLimit(snap.ReplayDepth), Reason: "waiting-for-peer"}
-	r.mu.Lock()
-	if r.quietRecycleAt.IsZero() {
-		r.quietRecycleAt = now.Add(r.config.QuietRecycleInterval)
-	}
-	due := !now.Before(r.quietRecycleAt)
-	if due {
-		r.quietRecycleAt = now.Add(r.config.QuietRecycleInterval)
-	}
-	r.mu.Unlock()
-	if due {
+	age, _ := r.renewalAge(now)
+	switch {
+	case r.resubscribeDue(now, health):
+		result.Recovery.Reason = "websocket-resubscribe"
+	case age >= r.config.QuietRecycleInterval:
 		result.Recovery.Reason = "quiet-keepalive"
-		r.handoff(ctx, now, &result, result.Recovery.Reason)
+	default:
+		return result
 	}
+	result.Recovery.Recycle = true
+	r.renew(ctx, now, &result, result.Recovery.Reason)
 	return result
 }
 
