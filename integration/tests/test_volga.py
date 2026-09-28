@@ -194,6 +194,8 @@ class VolgaTests(unittest.TestCase):
   manifest={'schema':1,'version':'v4.1.0-rc2','default':'yandex','protocols':[{'id':'volga','binary':{'name':'openflux-volga-linux-amd64','sha256':digest},
    'performance_profile':VOLGA_PROFILE,'config_protocol':'volga-stream-v1','max_streams':64,'image':'ghcr.io/levl-max/openflux-mod-volga@sha256:'+'b'*64,'image_id':'sha256:'+'c'*64}]}
   self.runtime.save(candidate/'protocol-manifest.json',manifest)
+  library=self.make_support_fixture(candidate)
+  old_support={p.name:p.read_bytes() for p in library.iterdir()}
   assets={p.name:n.sha(p) for p in candidate.iterdir()}
   self.runtime.save(self.runtime.state/'staged.json',{'directory':str(candidate),'assets':assets,'base_sha256':n.sha(self.runtime.binary),'version':'v4.1.0-rc2'})
   flags,commands,run=self.fake_services()
@@ -202,6 +204,42 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(self.runtime.binary.read_bytes(),b'old');self.assertEqual(unit.read_text(),'old unit')
   self.assertEqual(self.runtime.read(self.runtime.state/'installed.json'),installed)
   self.assertEqual(flags,{'legacy':True,'volga':False});self.assertEqual(self.runtime.node(),self.node)
+  self.assertEqual({p.name:p.read_bytes() for p in library.iterdir()},old_support)
+  watchdog=next(c for c in commands if c[0]=='systemd-run')
+  self.assertIn('/recovery/openflux_node.py',watchdog[-2])
+
+ def make_support_fixture(self,candidate):
+  import io,tarfile,openflux_release
+  source=pathlib.Path(__file__).resolve().parents[1]
+  library=self.runtime.path(self.node['library']);library.mkdir(parents=True,exist_ok=True)
+  with tarfile.open(candidate/'openflux-integration-linux.tar.gz','w:gz') as tar:
+   for name in (*openflux_release.MODULES,'install.py','README.md'):
+    data=(source/name).read_bytes();info=tarfile.TarInfo('integration/'+name);info.size=len(data);tar.addfile(info,io.BytesIO(data))
+  (candidate/'openflux-node.py').write_bytes((source/'openflux_node.py').read_bytes())
+  for name in (*openflux_release.MODULES,'openflux_node.py'):
+   (library/name).write_bytes((source/name).read_bytes()+b'\n# previous installed support\n')
+  return library
+
+ def test_interrupted_support_replacement_restores_complete_old_modules(self):
+  import openflux_node as node
+  candidate=self.runtime.state/'candidate';candidate.mkdir()
+  library=self.make_support_fixture(candidate)
+  before={p.name:p.read_bytes() for p in library.iterdir()}
+  plans=self.runtime.support_plan(candidate)
+  flags,commands,run=self.fake_services()
+  original=node.atomic_file;calls=[]
+  def interrupted(source,target,mode=0o755):
+   calls.append(str(target))
+   if len(calls)==3:raise OSError('injected disk failure')
+   original(source,target,mode)
+  with patch.object(self.runtime,'run',side_effect=run):
+   record=self.runtime.begin_transaction('update')
+   with patch.object(node,'atomic_file',side_effect=interrupted),self.assertRaisesRegex(OSError,'disk failure'):
+    self.runtime.install_support(plans,record)
+   self.assertNotEqual({p.name:p.read_bytes() for p in library.iterdir()},before)
+   self.runtime.restore_transaction(record)
+  self.assertEqual({p.name:p.read_bytes() for p in library.iterdir()},before)
+  self.assertFalse((self.runtime.state/'transaction.json').exists())
 
  def test_server_rollback_preserves_original_when_rename_failed(self):
   node=dict(self.node,role='server');self.runtime.save(self.runtime.node_path,node)

@@ -335,3 +335,8 @@ packets for configured documents are accepted. Status/errors omit cookie values.
 Fresh credentials wake blocked startup without restarting the process. Persistent
 interactive verification must still be completed in the browser. Volga server
 status appears separately while Volga is selected.
+
+Volga updates install the verified support modules and panel changes in the same
+transaction as the Volga executable. The recovery watchdog uses a complete copy
+of the previous support code; an interrupted module replacement restores the
+previous files and runtime. Legacy binary, cookies and release channel are preserved.

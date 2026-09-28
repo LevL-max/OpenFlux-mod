@@ -671,6 +671,36 @@ class VolgaRuntime:
     def legacy_active(self):
         return self.run(['systemctl','is-active','--quiet',self.node().get('service','openflux-yandex-client.service')],check=False).returncode==0
 
+    def support_plan(self,directory):
+        import importlib.util
+        import openflux_release
+        extracted=directory/'integration'
+        openflux_release.extract_bundle(directory/'openflux-integration-linux.tar.gz',extracted)
+        library=self.path(self.node()['library'])
+        plans=[(extracted/name,library/name,0o644) for name in openflux_release.MODULES]
+        plans.append((directory/'openflux-node.py',library/'openflux_node.py',0o755))
+        for source,target,mode in plans:compile(source.read_text(),str(source),'exec')
+        panel=self.path('/usr/local/lib/router-panel/router-panel.py')
+        if self.node().get('router_updater') and panel.is_file():
+            spec=importlib.util.spec_from_file_location('volga_candidate_integration',extracted/'router_integration.py')
+            module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+            text=module.patch_panel(panel.read_text());compile(text,str(panel),'exec')
+            source=directory/'panel-new.py';source.write_text(text);plans.append((source,panel,0o644))
+        return plans
+
+    def install_support(self,plans,record):
+        import pathlib,shutil
+        import openflux_node as node
+        backup=pathlib.Path(record['backup']);items=[]
+        for index,(source,target,mode) in enumerate(plans):
+            saved=backup/('support-'+str(index));item={'path':str(target),'present':target.is_file(),'copy':str(saved)}
+            if item['present']:
+                shutil.copy2(target,saved);item.update(sha256=node.sha(saved),mode=target.stat().st_mode&0o777)
+            items.append(item)
+        record['support_files']=items;self.save(self.state/'transaction.json',record)
+        for source,target,mode in plans:node.atomic_file(source,target,mode)
+        if self.node().get('router_updater'):self.run(['systemctl','try-restart','router-panel.service'])
+
     def begin_transaction(self,kind):
         import time,shutil
         import openflux_node as node
@@ -695,8 +725,17 @@ class VolgaRuntime:
             record['recovery_enabled']=self.run(['systemctl','is-enabled','openflux-volga-recovery.timer'],check=False).stdout.strip()=='enabled'
             record['recovery_active']=self.run(['systemctl','is-active','--quiet','openflux-volga-recovery.timer'],check=False).returncode==0
         if kind=='update' and not record['installed'] and (record['binary_present'] or record['unit'] is not None):raise ValueError('Refusing to overwrite an untracked Volga installation')
+        # Recovery must use the old, complete support code even if replacement
+        # of the installed modules is interrupted halfway through.
+        guard=self.path(self.node()['library'])/'openflux_node.py'
+        if kind=='update':
+            import openflux_release
+            recovery=backup/'recovery';recovery.mkdir(mode=0o700)
+            for name in (*openflux_release.MODULES,'openflux_node.py'):
+                shutil.copy2(self.path(self.node()['library'])/name,recovery/name)
+            guard=recovery/'openflux_node.py'
         self.save(self.state/'transaction.json',record)
-        self.run(['systemd-run','--quiet','--unit='+record['watchdog'],'--on-active=180s','--property=Restart=on-failure','--property=RestartSec=5s','/usr/bin/python3',self.node()['library']+'/openflux_node.py','recover-volga'])
+        self.run(['systemd-run','--quiet','--unit='+record['watchdog'],'--on-active=180s','--property=Restart=on-failure','--property=RestartSec=5s','/usr/bin/python3',str(guard),'recover-volga'])
         return record
 
     def restore_transaction(self,record=None):
@@ -707,6 +746,13 @@ class VolgaRuntime:
         self.action('stop') if self.active() else None
         if record['node']['role']=='client':self.run(['systemctl','stop',record['node'].get('service','openflux-yandex-client.service')],check=False)
         if record['kind']=='update':
+            # Validate every backup before restoring any support file.
+            for item in record.get('support_files',[]):
+                if item['present'] and node.sha(item['copy'])!=item['sha256']:raise ValueError('Volga support rollback checksum mismatch')
+            for item in record.get('support_files',[]):
+                if item['present']:node.atomic_file(item['copy'],item['path'],item['mode'])
+                else:pathlib.Path(item['path']).unlink(missing_ok=True)
+            if record.get('support_files') and record['node'].get('router_updater'):self.run(['systemctl','try-restart','router-panel.service'])
             if record['binary_present']:
                 source=pathlib.Path(record['backup'])/'binary'
                 if node.sha(source)!=record['binary_sha256']:raise ValueError('Volga rollback checksum mismatch')
@@ -755,8 +801,10 @@ class VolgaRuntime:
         for name,digest in staged['assets'].items():
             if node.sha(directory/name)!=digest:raise ValueError('Staged Volga artifact changed')
         manifest=validate_volga_manifest(self.read(directory/'protocol-manifest.json'),staged['version'],staged['assets']['openflux-volga-linux-amd64'])
+        plans=self.support_plan(directory)
         profile=self.node();previous=self.begin_transaction('update')
         try:
+            self.install_support(plans,previous)
             if profile['role']=='client':
                 self.run(['systemctl','stop',profile.get('service','openflux-yandex-client.service')])
             if self.active():self.action('stop')

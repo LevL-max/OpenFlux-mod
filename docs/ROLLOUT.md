@@ -45,7 +45,7 @@ confirmed PC2 -> stop PC2 -> PC1 against the same AWS Volga process, with verifi
 HTTPS on both, 64 concurrent SHA-256-verified transfers per client, rejection of
 the 65th connection, private-egress blocking and successful temporary-resource cleanup.
 See [actual AWS functional evidence](VOLGA-AWS-FUNCTIONAL-2026-09-28.md).
-The current 39-test Python integration suite also passed in isolated Linux testing.
+The current 40-test Python integration suite also passed in isolated Linux testing.
 
 The earlier six-hour throughput soak is superseded by the user's instruction to
 freeze performance and stop speed experiments. No new window/rate/worker tuning.
@@ -63,3 +63,8 @@ that the final RC deployment/update path has passed a live test.
 See [integration instructions](../integration/README.md),
 [lab evidence](VOLGA-LAB-ROUTER-2026-09-28.md) and
 [integration verification](VOLGA-INTEGRATION-2026-09-28.md).
+
+Volga updates now apply the verified integration bundle and node controller,
+including panel patches, with support-file backups. The watchdog executes the
+previous support code. An injected mid-copy failure and a failed runtime health
+check both restore all previous modules in Linux tests.
