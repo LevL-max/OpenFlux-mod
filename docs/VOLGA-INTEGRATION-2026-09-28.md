@@ -90,3 +90,32 @@ validated live. Main and deployed installations remain unchanged. PR CI must
 validate this exact source; after review/merge, the release workflow creates a
 draft RC. A short functional RC test remains before stable rollout. No new speed
 experiments or long throughput soak are required.
+
+## Existing AWS and two-client deployment gate
+
+A subsequent read-only SSH audit confirmed the actual deployment topology:
+AWS `3.8.0.35`, PC1 `192.168.1.132`, PC2 `192.168.1.74`. Both mini-PC updater
+settings specify that AWS exit IP, and the document identity hashes on all
+three nodes match. The earlier lab VPS pair is not a deployment target.
+
+AWS has two logical CPUs and 1,998,610,432 bytes of RAM; 1,308,508,160 bytes were
+available at the sample. This is an inventory observation, not a load/capacity
+test. `openflux-yandex-exit.service`, its Legacy container and
+`openflux-recovery-inbox.timer` are active. Existing recovery keys and Disk token
+are present. Volga config, updater state and container are absent. The Legacy
+container PID stayed 131725 across both read-only samples. No AWS files,
+containers, units or network settings were changed.
+
+**Release blocker for the requested two-client topology:**
+`volga/internal/tunnel/endpoint.go` owns one record connection and one yamux
+session. In `volga/internal/recordconn/conn.go`, an authenticated hello from a
+different peer after readiness causes `ErrPeerRestart`. The managed adapter also
+uses one fixed Volga config/state/container per server. Therefore the green
+single-pair tests do not establish simultaneous support for PC1 and PC2. Sharing
+one current Volga config between both clients can disrupt the first session.
+
+Resolve this through isolated per-client instances on the same AWS or explicit
+multi-client server support, with corresponding update/recovery tests and a
+short concurrent functional check before release. Existing recovery keys can
+still be reused; transport session isolation is a separate concern. No further
+throughput tuning is needed or authorized by this finding.

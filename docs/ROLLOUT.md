@@ -20,8 +20,24 @@ Main changes only through a PR.
 
 ## Remaining gates
 
-9. After review/merge, release workflow creates a **draft prerelease**. Verify the exact RC assets before enabling a live installation.
-10. Short functional RC check on server and PC2: SOCKS/HTTPS and SHA-256, cookie recovery, protocol switch and rollback. Restore the prior router mode, review before stable/PC1 rollout.
+9. Resolve simultaneous PC1/PC2 operation before calling the integration release-ready. The current Volga endpoint holds one peer/session, and the adapter manages one Volga instance per server. A second client using the same config can interrupt the first. The 64-stream limit applies within one client session, not to 64 independent mini-PCs.
+10. After the topology fix, review/merge and create a **draft prerelease**. Verify the exact RC assets before enabling a live installation.
+11. Short functional RC check on the existing AWS and PC2: SOCKS/HTTPS and SHA-256, cookie recovery, protocol switch and rollback. Then validate both mini-PCs concurrently using the supported topology. Restore prior router modes and review before stable rollout.
+
+## Confirmed deployment target
+
+The sole server is the existing AWS `3.8.0.35`, with PC1 `192.168.1.132` and
+PC2 `192.168.1.74` as clients. The earlier isolated lab VPS pair is not a rollout
+target. Read-only SSH inventory on 2026-09-28 confirmed the AWS Legacy container
+and recovery timer are active, and both mini-PC settings expect this AWS exit IP.
+No new server or new recovery key set is required.
+
+One possible topology is separate bounded Volga instances for PC1 and PC2 on the
+same AWS, alongside Legacy. This needs instance-aware installation, updates,
+recovery/status isolation and a document/key allocation; it is not implemented
+by the current single-instance adapter. An alternative is multi-client session
+support in the server. Neither option has passed a concurrent two-client check.
+Do not deploy identical single-session Volga configs to both mini-PCs.
 
 The earlier six-hour throughput soak is superseded by the user's instruction to
 freeze performance and stop speed experiments. No new window/rate/worker tuning.
