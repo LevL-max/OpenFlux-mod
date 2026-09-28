@@ -245,9 +245,9 @@ limitation, not proof of end-to-end connectivity for a future protocol.
 
 Run the focused tests with `PYTHONPATH=integration python3 -m unittest discover -s integration/tests -v`.
 
-## Volga (v4.1.0 RC, opt-in)
+## Volga (v4.1.0, opt-in)
 
-Update the existing installation to the reviewed RC integration bundle first.
+Update the existing installation to v4.1.0 first.
 An ordinary update retains Legacy. Volga uses a separate binary, configuration,
 cookies, update state and server container. The six existing bundle module names
 are unchanged so v4.0.x updaters can accept the archive.

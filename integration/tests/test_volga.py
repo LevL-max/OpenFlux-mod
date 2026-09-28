@@ -1,4 +1,4 @@
-import hashlib,io,itertools,json,pathlib,re,tempfile,types,unittest
+import hashlib,io,itertools,json,pathlib,re,tempfile,time,types,unittest
 from unittest.mock import patch
 from cryptography.hazmat.primitives.asymmetric import rsa,ed25519
 from cryptography.hazmat.primitives import serialization
@@ -294,6 +294,15 @@ class VolgaTests(unittest.TestCase):
   with patch.object(self.runtime,'run',side_effect=run):self.runtime.prune_server_containers('openflux-volga-backup-2')
   self.assertEqual(removed,{'openflux-volga-backup-1'})
   self.assertEqual([a[-1] for a in calls if a[:3]==['docker','image','rm']],['sha256:old'])
+
+ def test_stopped_client_still_reports_the_server_state(self):
+  # Clients in AWG mode never run Volga; the panel still shows the server.
+  self.runtime.save(self.runtime.state/'peer-status.json',{'state':'connecting','reported_at':int(time.time())-30,'fetch_failed':False})
+  with patch.object(self.runtime,'active',return_value=False):status=self.runtime.status()
+  self.assertEqual(status['state'],'stopped')
+  self.assertEqual(status['server_authentication']['state'],'connecting');self.assertFalse(status['server_authentication']['stale'])
+  self.runtime.save(self.runtime.state/'peer-status.json',{'state':'connecting','reported_at':int(time.time())-600,'fetch_failed':False})
+  with patch.object(self.runtime,'active',return_value=False):self.assertTrue(self.runtime.status()['server_authentication']['stale'])
 
  def test_config_backups_keep_only_the_newest(self):
   self.runtime.save(self.runtime.node_path,dict(self.node,role='server'))

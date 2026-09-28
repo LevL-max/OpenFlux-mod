@@ -432,6 +432,11 @@ class VolgaRuntime:
         if out['configured']:
             try:out['documents']=list(dict.fromkeys(self.configuration()['documents']))
             except ValueError:out.update(configured=False,reason='Volga configuration needs attention.')
+        # The server's verified report matters most while this client is stopped.
+        peer=self.read(self.state/'peer-status.json')
+        if peer:
+            peer['stale']=bool(peer.get('fetch_failed')) or time.time()-peer.get('reported_at',0)>180
+            out['server_authentication']=peer
         if not out['installed'] or not self.active():return out
         out.update(active=True,state='connecting',reason='Volga is connecting.')
         if node['role']=='client':
@@ -454,10 +459,6 @@ class VolgaRuntime:
             elif kind in ('session_closed','handshake_failed','connecting','stopped'):
                 out.update(state='connecting',reason='Volga is reconnecting.')
         out['checked_at']=int(time.time())
-        peer=self.read(self.state/'peer-status.json')
-        if peer:
-            peer['stale']=bool(peer.get('fetch_failed')) or time.time()-peer.get('reported_at',0)>180
-            out['server_authentication']=peer
         return out
 
     def health(self,seconds=90,require_session=True):
