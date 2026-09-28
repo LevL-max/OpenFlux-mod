@@ -1,0 +1,765 @@
+{
+  "date": "2026-09-28",
+  "version": "v4.1.0-rc2",
+  "source_commit": "bef15276c23d4cf324044aedc8dabcde1f0a137b",
+  "volga_sha256": "e0f794e37006675b68cbba03cf80074816200176a09f6f3b538c02044374bda3",
+  "frozen_profile_blob": "09daf0229d395ad4b39dea82446a33c9d1fc82b4",
+  "final_status": {
+    "pc2": {
+      "state": "stopped",
+      "active": false,
+      "installed": {
+        "version": "v4.1.0-rc2",
+        "sha256": "e0f794e37006675b68cbba03cf80074816200176a09f6f3b538c02044374bda3",
+        "image": "sha256:cb2a651c5f8a1de388256fcb9bbda8d440dc5fc2b2477570017a45a668be6574"
+      },
+      "active_transport": "yandex",
+      "legacy_binary_unchanged": true,
+      "legacy_service_unchanged": true,
+      "keys_unchanged": true,
+      "router_mode_unchanged": true,
+      "route_rules_unchanged": true,
+      "legacy_container_unchanged": true,
+      "limits": {
+        "memory_mib": 256,
+        "cpu_percent": 50
+      },
+      "actual_constraints": "CPUQuotaPerSecUSec=500ms\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\nNoNewPrivileges=yes\nLoadState=loaded\n"
+    },
+    "pc1": {
+      "state": "stopped",
+      "active": false,
+      "installed": {
+        "version": "v4.1.0-rc2",
+        "sha256": "e0f794e37006675b68cbba03cf80074816200176a09f6f3b538c02044374bda3",
+        "image": "sha256:cb2a651c5f8a1de388256fcb9bbda8d440dc5fc2b2477570017a45a668be6574"
+      },
+      "active_transport": "yandex",
+      "legacy_binary_unchanged": true,
+      "legacy_service_unchanged": true,
+      "keys_unchanged": true,
+      "router_mode_unchanged": true,
+      "route_rules_unchanged": true,
+      "legacy_container_unchanged": true,
+      "limits": {
+        "memory_mib": 256,
+        "cpu_percent": 50
+      },
+      "actual_constraints": "CPUQuotaPerSecUSec=500ms\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\nNoNewPrivileges=yes\nLoadState=loaded\n"
+    },
+    "aws": {
+      "state": "connecting",
+      "active": true,
+      "installed": {
+        "version": "v4.1.0-rc2",
+        "sha256": "e0f794e37006675b68cbba03cf80074816200176a09f6f3b538c02044374bda3",
+        "image": "sha256:cb2a651c5f8a1de388256fcb9bbda8d440dc5fc2b2477570017a45a668be6574"
+      },
+      "active_transport": "yandex",
+      "legacy_binary_unchanged": true,
+      "legacy_service_unchanged": true,
+      "keys_unchanged": true,
+      "router_mode_unchanged": true,
+      "route_rules_unchanged": true,
+      "legacy_container_unchanged": true,
+      "limits": {
+        "memory_mib": 256,
+        "cpu_percent": 50
+      },
+      "actual_constraints": {
+        "Memory": 268435456,
+        "MemorySwap": 268435456,
+        "NanoCpus": 500000000,
+        "PidsLimit": 128,
+        "NetworkMode": "bridge",
+        "ReadonlyRootfs": true,
+        "CapDrop": [
+          "ALL"
+        ],
+        "PortBindings": {}
+      }
+    }
+  },
+  "rc2_https": {
+    "pc2": {
+      "bytes": 559,
+      "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d",
+      "version": "v4.1.0-rc2"
+    },
+    "pc1": {
+      "bytes": 559,
+      "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d",
+      "version": "v4.1.0-rc2"
+    }
+  },
+  "cleanup": {
+    "aws": {
+      "temporary_files_removed": true,
+      "unused_release_cache_removed": true,
+      "legacy_keys_routes_and_mode_preserved": true,
+      "rollback_checkpoints_retained": true
+    },
+    "pc1": {
+      "temporary_files_removed": true,
+      "unused_release_cache_removed": true,
+      "legacy_keys_routes_and_mode_preserved": true,
+      "rollback_checkpoints_retained": true
+    },
+    "pc2": {
+      "temporary_files_removed": true,
+      "unused_release_cache_removed": true,
+      "legacy_keys_routes_and_mode_preserved": true,
+      "rollback_checkpoints_retained": true
+    }
+  },
+  "events": [
+    {
+      "host": "aws",
+      "action": "prepare",
+      "result": {
+        "prepared": "server",
+        "release": "v4.1.0-rc1",
+        "legacy_unchanged": true
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "prepare",
+      "result": {
+        "prepared": "client",
+        "release": "v4.1.0-rc1",
+        "legacy_unchanged": true
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "panel",
+      "result": {
+        "protocol_selector": true,
+        "grouped_configs_preserved": true,
+        "configuration_roundtrip": true
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "send",
+      "result": {
+        "encrypted_documents_sent": [
+          true,
+          true
+        ]
+      }
+    },
+    {
+      "host": "aws",
+      "action": "poll",
+      "result": {
+        "applied_document_count": 2,
+        "seen_count": 2,
+        "status_published": true,
+        "peer_status_verified": false,
+        "peer_state": null
+      }
+    },
+    {
+      "host": "aws",
+      "action": "install",
+      "result": {
+        "ok": true,
+        "version": "v4.1.0-rc1",
+        "message": "Volga installed and verified. Previous active protocol preserved."
+      }
+    },
+    {
+      "host": "aws",
+      "action": "rollback",
+      "result": {
+        "ok": true,
+        "message": "Previous Volga version and protocol selection restored."
+      }
+    },
+    {
+      "host": "aws",
+      "action": "install",
+      "result": {
+        "ok": true,
+        "version": "v4.1.0-rc1",
+        "message": "Volga installed and verified. Previous active protocol preserved."
+      }
+    },
+    {
+      "host": "aws",
+      "action": "start",
+      "result": {
+        "ok": true,
+        "action": "start"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "install",
+      "result": {
+        "ok": true,
+        "version": "v4.1.0-rc1",
+        "message": "Volga installed and verified. Previous active protocol preserved."
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "select-volga",
+      "result": {
+        "ok": true,
+        "transport": "volga",
+        "message": "Protocol selected; SOCKS and exit-IP checks passed."
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "start",
+      "result": {
+        "ok": true,
+        "action": "start"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "https",
+      "result": {
+        "bytes": 559,
+        "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d"
+      }
+    },
+    {
+      "host": "aws",
+      "action": "poll",
+      "result": {
+        "applied_document_count": 2,
+        "seen_count": 2,
+        "status_published": true,
+        "peer_status_verified": false,
+        "peer_state": null
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "status",
+      "result": {
+        "state": "connected",
+        "active": true,
+        "installed": {
+          "version": "v4.1.0-rc1",
+          "sha256": "116e9b2b17edc3510b3db3278eec0ed769b70fed852c666a835cc446587dede4",
+          "image": "sha256:507e02f9baff6a776e3d3277ca5612349ecb2452c670679441bffe1affb3dbf9"
+        },
+        "active_transport": "volga",
+        "legacy_binary_unchanged": true,
+        "legacy_service_unchanged": true,
+        "keys_unchanged": true,
+        "router_mode_unchanged": true,
+        "route_rules_unchanged": true,
+        "legacy_container_unchanged": true,
+        "limits": {
+          "memory_mib": 256,
+          "cpu_percent": 50
+        },
+        "actual_constraints": "CPUQuotaPerSecUSec=500ms\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\nNoNewPrivileges=yes\n"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "poll",
+      "result": {
+        "applied_document_count": 0,
+        "seen_count": 0,
+        "status_published": false,
+        "peer_status_verified": true,
+        "peer_state": "connected"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "stop",
+      "result": {
+        "ok": true,
+        "action": "stop"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "select-yandex",
+      "result": {
+        "ok": true,
+        "transport": "yandex",
+        "message": "Protocol selected; SOCKS and exit-IP checks passed."
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "rollback",
+      "result": {
+        "ok": true,
+        "message": "Previous Volga version and protocol selection restored."
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "install",
+      "result": {
+        "ok": true,
+        "version": "v4.1.0-rc1",
+        "message": "Volga installed and verified. Previous active protocol preserved."
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "status",
+      "result": {
+        "state": "stopped",
+        "active": false,
+        "installed": {
+          "version": "v4.1.0-rc1",
+          "sha256": "116e9b2b17edc3510b3db3278eec0ed769b70fed852c666a835cc446587dede4",
+          "image": "sha256:507e02f9baff6a776e3d3277ca5612349ecb2452c670679441bffe1affb3dbf9"
+        },
+        "active_transport": "yandex",
+        "legacy_binary_unchanged": true,
+        "legacy_service_unchanged": true,
+        "keys_unchanged": true,
+        "router_mode_unchanged": true,
+        "route_rules_unchanged": true,
+        "legacy_container_unchanged": true,
+        "limits": {
+          "memory_mib": 256,
+          "cpu_percent": 50
+        },
+        "actual_constraints": "CPUQuotaPerSecUSec=500ms\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\nNoNewPrivileges=yes\n"
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "prepare",
+      "result": {
+        "prepared": "client",
+        "release": "v4.1.0-rc1",
+        "legacy_unchanged": true
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "panel",
+      "result": {
+        "protocol_selector": true,
+        "grouped_configs_preserved": true,
+        "configuration_roundtrip": true
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "send",
+      "result": {
+        "encrypted_documents_sent": [
+          true,
+          true
+        ]
+      }
+    },
+    {
+      "host": "aws",
+      "action": "poll",
+      "result": {
+        "applied_document_count": 2,
+        "seen_count": 4,
+        "status_published": true,
+        "peer_status_verified": false,
+        "peer_state": null
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "panel",
+      "result": {
+        "protocol_selector": true,
+        "grouped_configs_preserved": true,
+        "configuration_roundtrip": true
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "panel",
+      "result": {
+        "protocol_selector": true,
+        "grouped_configs_preserved": true,
+        "configuration_roundtrip": true
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "panel",
+      "result": {
+        "protocol_selector": true,
+        "grouped_configs_preserved": true,
+        "configuration_roundtrip": true
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "status",
+      "result": {
+        "state": "stopped",
+        "active": false,
+        "installed": {},
+        "active_transport": "yandex",
+        "legacy_binary_unchanged": true,
+        "legacy_service_unchanged": true,
+        "keys_unchanged": true,
+        "router_mode_unchanged": true,
+        "route_rules_unchanged": true,
+        "legacy_container_unchanged": true,
+        "limits": {
+          "memory_mib": 256,
+          "cpu_percent": 50
+        },
+        "actual_constraints": "CPUQuotaPerSecUSec=infinity\nMemoryMax=infinity\nMemorySwapMax=infinity\nTasksMax=6771\nNoNewPrivileges=no\nLoadState=not-found\n"
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "panel",
+      "result": {
+        "protocol_selector": true,
+        "grouped_configs_preserved": true,
+        "configuration_roundtrip": true,
+        "actual_hook_layout_offline_check": true
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "prepare",
+      "result": {
+        "prepared": "client",
+        "release": "v4.1.0-rc2",
+        "legacy_unchanged": true
+      }
+    },
+    {
+      "host": "aws",
+      "action": "install",
+      "result": {
+        "ok": true,
+        "version": "v4.1.0-rc2",
+        "message": "Volga installed and verified. Previous active protocol preserved."
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "install",
+      "result": {
+        "ok": true,
+        "version": "v4.1.0-rc2",
+        "message": "Volga installed and verified. Previous active protocol preserved."
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "select-volga",
+      "result": {
+        "ok": true,
+        "transport": "volga",
+        "message": "Protocol selected; SOCKS and exit-IP checks passed."
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "start",
+      "result": {
+        "ok": true,
+        "action": "start"
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "https",
+      "result": {
+        "bytes": 559,
+        "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d"
+      }
+    },
+    {
+      "host": "aws",
+      "action": "poll",
+      "result": {
+        "applied_document_count": 2,
+        "seen_count": 4,
+        "status_published": true,
+        "peer_status_verified": false,
+        "peer_state": null
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "poll",
+      "result": {
+        "applied_document_count": 0,
+        "seen_count": 0,
+        "status_published": false,
+        "peer_status_verified": true,
+        "peer_state": "connected"
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "status",
+      "result": {
+        "state": "connected",
+        "active": true,
+        "installed": {
+          "version": "v4.1.0-rc2",
+          "sha256": "e0f794e37006675b68cbba03cf80074816200176a09f6f3b538c02044374bda3",
+          "image": "sha256:cb2a651c5f8a1de388256fcb9bbda8d440dc5fc2b2477570017a45a668be6574"
+        },
+        "active_transport": "volga",
+        "legacy_binary_unchanged": true,
+        "legacy_service_unchanged": true,
+        "keys_unchanged": true,
+        "router_mode_unchanged": true,
+        "route_rules_unchanged": true,
+        "legacy_container_unchanged": true,
+        "limits": {
+          "memory_mib": 256,
+          "cpu_percent": 50
+        },
+        "actual_constraints": "CPUQuotaPerSecUSec=500ms\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\nNoNewPrivileges=yes\nLoadState=loaded\n"
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "stop",
+      "result": {
+        "ok": true,
+        "action": "stop"
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "select-yandex",
+      "result": {
+        "ok": true,
+        "transport": "yandex",
+        "message": "Protocol selected; SOCKS and exit-IP checks passed."
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "install",
+      "result": {
+        "ok": true,
+        "version": "v4.1.0-rc2",
+        "message": "Volga installed and verified. Previous active protocol preserved."
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "select-volga",
+      "result": {
+        "ok": true,
+        "transport": "volga",
+        "message": "Protocol selected; SOCKS and exit-IP checks passed."
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "start",
+      "result": {
+        "ok": true,
+        "action": "start"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "status",
+      "result": {
+        "state": "connected",
+        "active": true,
+        "installed": {
+          "version": "v4.1.0-rc2",
+          "sha256": "e0f794e37006675b68cbba03cf80074816200176a09f6f3b538c02044374bda3",
+          "image": "sha256:cb2a651c5f8a1de388256fcb9bbda8d440dc5fc2b2477570017a45a668be6574"
+        },
+        "active_transport": "volga",
+        "legacy_binary_unchanged": true,
+        "legacy_service_unchanged": true,
+        "keys_unchanged": true,
+        "router_mode_unchanged": true,
+        "route_rules_unchanged": true,
+        "legacy_container_unchanged": true,
+        "limits": {
+          "memory_mib": 256,
+          "cpu_percent": 50
+        },
+        "actual_constraints": "CPUQuotaPerSecUSec=500ms\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\nNoNewPrivileges=yes\nLoadState=loaded\n"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "https",
+      "result": {
+        "bytes": 559,
+        "sha256": "ff67a9d764d6a2367a187734e697f6a53217db9a21c101d410a113ca871a299d"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "stop",
+      "result": {
+        "ok": true,
+        "action": "stop"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "select-yandex",
+      "result": {
+        "ok": true,
+        "transport": "yandex",
+        "message": "Protocol selected; SOCKS and exit-IP checks passed."
+      }
+    },
+    {
+      "host": "aws",
+      "action": "status",
+      "result": {
+        "state": "connecting",
+        "active": true,
+        "installed": {
+          "version": "v4.1.0-rc2",
+          "sha256": "e0f794e37006675b68cbba03cf80074816200176a09f6f3b538c02044374bda3",
+          "image": "sha256:cb2a651c5f8a1de388256fcb9bbda8d440dc5fc2b2477570017a45a668be6574"
+        },
+        "active_transport": "yandex",
+        "legacy_binary_unchanged": true,
+        "legacy_service_unchanged": true,
+        "keys_unchanged": true,
+        "router_mode_unchanged": true,
+        "route_rules_unchanged": true,
+        "legacy_container_unchanged": true,
+        "limits": {
+          "memory_mib": 256,
+          "cpu_percent": 50
+        },
+        "actual_constraints": {
+          "Memory": 268435456,
+          "MemorySwap": 268435456,
+          "NanoCpus": 500000000,
+          "PidsLimit": 128,
+          "NetworkMode": "bridge",
+          "ReadonlyRootfs": true,
+          "CapDrop": [
+            "ALL"
+          ],
+          "PortBindings": {}
+        }
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "status",
+      "result": {
+        "state": "stopped",
+        "active": false,
+        "installed": {
+          "version": "v4.1.0-rc2",
+          "sha256": "e0f794e37006675b68cbba03cf80074816200176a09f6f3b538c02044374bda3",
+          "image": "sha256:cb2a651c5f8a1de388256fcb9bbda8d440dc5fc2b2477570017a45a668be6574"
+        },
+        "active_transport": "yandex",
+        "legacy_binary_unchanged": true,
+        "legacy_service_unchanged": true,
+        "keys_unchanged": true,
+        "router_mode_unchanged": true,
+        "route_rules_unchanged": true,
+        "legacy_container_unchanged": true,
+        "limits": {
+          "memory_mib": 256,
+          "cpu_percent": 50
+        },
+        "actual_constraints": "CPUQuotaPerSecUSec=500ms\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\nNoNewPrivileges=yes\nLoadState=loaded\n"
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "status",
+      "result": {
+        "state": "stopped",
+        "active": false,
+        "installed": {
+          "version": "v4.1.0-rc2",
+          "sha256": "e0f794e37006675b68cbba03cf80074816200176a09f6f3b538c02044374bda3",
+          "image": "sha256:cb2a651c5f8a1de388256fcb9bbda8d440dc5fc2b2477570017a45a668be6574"
+        },
+        "active_transport": "yandex",
+        "legacy_binary_unchanged": true,
+        "legacy_service_unchanged": true,
+        "keys_unchanged": true,
+        "router_mode_unchanged": true,
+        "route_rules_unchanged": true,
+        "legacy_container_unchanged": true,
+        "limits": {
+          "memory_mib": 256,
+          "cpu_percent": 50
+        },
+        "actual_constraints": "CPUQuotaPerSecUSec=500ms\nMemoryMax=268435456\nMemorySwapMax=0\nTasksMax=128\nNoNewPrivileges=yes\nLoadState=loaded\n"
+      }
+    },
+    {
+      "host": "aws",
+      "action": "cleanup",
+      "result": {
+        "temporary_files_removed": true,
+        "unused_release_cache_removed": true,
+        "legacy_keys_routes_and_mode_preserved": true,
+        "rollback_checkpoints_retained": true
+      }
+    },
+    {
+      "host": "pc1",
+      "action": "cleanup",
+      "result": {
+        "temporary_files_removed": true,
+        "unused_release_cache_removed": true,
+        "legacy_keys_routes_and_mode_preserved": true,
+        "rollback_checkpoints_retained": true
+      }
+    },
+    {
+      "host": "pc2",
+      "action": "cleanup",
+      "result": {
+        "temporary_files_removed": true,
+        "unused_release_cache_removed": true,
+        "legacy_keys_routes_and_mode_preserved": true,
+        "rollback_checkpoints_retained": true
+      }
+    }
+  ],
+  "observed_failures": [
+    {
+      "host": "pc1",
+      "version": "v4.1.0-rc1",
+      "operation": "install",
+      "reason": "Optional runtime dispatcher has no fixed Legacy unit",
+      "result": "Automatic rollback; fixed in RC2"
+    },
+    {
+      "host": "pc2",
+      "operation": "manual recovery poll",
+      "result": "Subsequent poll verified signed connected status; first cause not retained"
+    },
+    {
+      "host": "pc2",
+      "version": "v4.1.0-rc2",
+      "operation": "HTTPS after successful exit-IP health check",
+      "result": "First curl failed; same 20-second probe retried without configuration changes and matched SHA-256",
+      "cause": "Initial harness did not retain curl exit code or error output"
+    }
+  ]
+}

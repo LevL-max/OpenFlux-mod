@@ -48,3 +48,10 @@ Original service PIDs/states matched their pre-test values on all three hosts.
 Installing the RC through the real updater, testing Disk cookie recovery and
 Legacy/Volga panel selection/rollback remain the deployment checks; this report
 does not claim those steps are already complete.
+
+## Subsequent installed rollout
+
+The deployment checks discussed above were later exercised on AWS and both
+mini-PCs. See [the RC2 rollout report](VOLGA-ROLLOUT-2026-09-28.md) for the final
+installed versions, preserved state, cleanup, PC1 compatibility fix and observed
+transient failures. RC2 remains a prerelease.

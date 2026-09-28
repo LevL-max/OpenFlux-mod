@@ -129,3 +129,10 @@ Temporary containers, units and directories were removed; original service
 PIDs/states were unchanged. This does not yet prove the installed updater/panel
 path. A separate `volga_channel` setting now permits RC Volga updates while
 Legacy retains `channel: stable`; the Linux integration suite passes 39 tests.
+
+## Subsequent installed rollout
+
+The deployment checks discussed above were later exercised on AWS and both
+mini-PCs. See [the RC2 rollout report](VOLGA-ROLLOUT-2026-09-28.md) for the final
+installed versions, preserved state, cleanup, PC1 compatibility fix and observed
+transient failures. RC2 remains a prerelease.
