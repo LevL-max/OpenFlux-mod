@@ -109,6 +109,55 @@ class VolgaTests(unittest.TestCase):
   state=self.runtime.read(self.runtime.state/'recovery.json')
   self.assertEqual(len(state['seen']),1);self.assertTrue(state['inboxes'][self.runtime.disk_path(documents[0])]['next_check'])
 
+ def test_recovery_polls_disk_sparingly(self):
+  import recovery_inbox,urllib.parse
+  server=rsa.generate_private_key(public_exponent=65537,key_size=3072);sender=ed25519.Ed25519PrivateKey.generate()
+  keys=self.runtime.path('/etc/openflux-recovery');keys.mkdir(parents=True)
+  for name,key,private in [('server-public.pem',server.public_key(),False),('sender-private.pem',sender,True),('server-private.pem',server,True),('sender-public.pem',sender.public_key(),False)]:
+   data=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()) if private else key.public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
+   (keys/name).write_bytes(data)
+  (keys/'disk-token').write_text('fixture-token')
+  documents=list(dict.fromkeys(self.cfg['documents']));packets={}
+  for doc in documents:
+   packets[self.runtime.disk_path(doc)]=self.runtime.package_cookies(doc,'curl "'+EDITOR+'" -b "Session_id=fixture"')['package']
+  self.runtime.save(self.runtime.node_path,dict(self.node,role='server'))
+  self.runtime.save(self.runtime.config_path,dict(self.cfg,role='server',egress_policy='public'))
+  calls=[]
+  def fetch(url,**kwargs):
+   if url.startswith('https://cloud-api.'):
+    split=urllib.parse.urlsplit(url);path=urllib.parse.parse_qs(split.query)['path'][0]
+    calls.append(('meta' if split.path.endswith('/resources') else 'link',path))
+    return {'md5':'md5-'+path,'href':path}
+   calls.append(('file',url));return packets[url]
+  start=int(time.time());clock=[start]  # the packets expire an hour after sealing
+  with patch.object(recovery_inbox,'fetch',side_effect=fetch),patch.object(recovery_inbox,'upload') as upload,patch('time.time',side_effect=lambda:clock[0]),patch.object(self.runtime,'status',return_value={'state':'connecting','active':True}),patch.object(self.runtime,'import_cookies') as applied:
+   self.runtime.recovery_poll()
+   self.assertEqual(applied.call_count,2);self.assertEqual(upload.call_count,1)
+   self.assertEqual(sorted(k for k,_ in calls),['file','file','link','link','meta','meta'])
+   # The timer fires again a minute later: nothing is due, Disk is not called.
+   calls.clear();clock[0]=start+60;self.runtime.recovery_poll()
+   self.assertEqual(calls,[]);self.assertEqual(upload.call_count,1)
+   # Two minutes on: one metadata request per inbox, no download of an unchanged file.
+   clock[0]=start+121;self.runtime.recovery_poll()
+   self.assertEqual(sorted(k for k,_ in calls),['meta','meta']);self.assertEqual(applied.call_count,2)
+   self.assertEqual(upload.call_count,1)
+   # The status goes out again on the 10-minute heartbeat, or at once on a change.
+   clock[0]=start+601;self.runtime.recovery_poll();self.assertEqual(upload.call_count,2)
+   with patch.object(self.runtime,'status',return_value={'state':'auth_blocked','active':True,'needs_cookies':True}):
+    clock[0]=start+620;self.runtime.recovery_poll();self.assertEqual(upload.call_count,3)
+
+ def test_client_fetches_server_status_every_five_minutes(self):
+  import recovery_inbox
+  keys=self.runtime.path('/etc/openflux-recovery');keys.mkdir(parents=True);(keys/'disk-token').write_text('fixture-token')
+  public=rsa.generate_private_key(public_exponent=65537,key_size=2048).public_key()
+  (keys/'server-public.pem').write_bytes(public.public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
+  fetched=[];clock=[1_900_000_000]
+  def fetch(url,**kwargs):fetched.append(url);raise OSError('offline')
+  with patch.object(recovery_inbox,'fetch',side_effect=fetch),patch('time.time',side_effect=lambda:clock[0]):
+   self.runtime.recovery_poll();n=len(fetched);self.assertGreater(n,0)
+   clock[0]+=recovery_inbox.CLIENT_POLL_EVERY-1;self.runtime.recovery_poll();self.assertEqual(len(fetched),n)
+   clock[0]+=1;self.runtime.recovery_poll();self.assertGreater(len(fetched),n)
+
  def test_resource_constraints_and_egress_container_isolation(self):
   text=self.runtime.unit_text()
   for field in ['MemoryMax=256M','CPUQuota=50%','AF_NETLINK','Conflicts=openflux-yandex-client.service','GOMEMLIMIT=160MiB']:self.assertIn(field,text)
@@ -321,7 +370,10 @@ class VolgaTests(unittest.TestCase):
   with patch.object(self.runtime,'active',return_value=False):status=self.runtime.status()
   self.assertEqual(status['state'],'stopped')
   self.assertEqual(status['server_authentication']['state'],'connecting');self.assertFalse(status['server_authentication']['stale'])
-  self.runtime.save(self.runtime.state/'peer-status.json',{'state':'connecting','reported_at':int(time.time())-600,'fetch_failed':False})
+  # A server publishes at least every 10 min: 15 min old still counts, 21 min does not.
+  self.runtime.save(self.runtime.state/'peer-status.json',{'state':'connecting','reported_at':int(time.time())-900,'fetch_failed':False})
+  with patch.object(self.runtime,'active',return_value=False):self.assertFalse(self.runtime.status()['server_authentication']['stale'])
+  self.runtime.save(self.runtime.state/'peer-status.json',{'state':'connecting','reported_at':int(time.time())-1260,'fetch_failed':False})
   with patch.object(self.runtime,'active',return_value=False):self.assertTrue(self.runtime.status()['server_authentication']['stale'])
 
  def test_config_backups_keep_only_the_newest(self):

@@ -18,7 +18,8 @@ class RecoveryTests(unittest.TestCase):
   report=r.sign_status({'state':'auth_failed','needs_cookies':False,'cookies':'SECRET','token':'SECRET'},self.server,now=1000)
   self.assertNotIn('SECRET',json.dumps(report))
   self.assertEqual(r.verify_status(report,self.server.public_key(),now=1001)['state'],'auth_failed')
-  self.assertTrue(r.verify_status(report,self.server.public_key(),now=1181)['stale'])
+  self.assertFalse(r.verify_status(report,self.server.public_key(),now=1000+r.STATUS_STALE_AFTER)['stale'])
+  self.assertTrue(r.verify_status(report,self.server.public_key(),now=1001+r.STATUS_STALE_AFTER)['stale'])
   report['status']['state']='connected'
   with self.assertRaises(Exception):r.verify_status(report,self.server.public_key(),now=1001)
 if __name__=='__main__':unittest.main()

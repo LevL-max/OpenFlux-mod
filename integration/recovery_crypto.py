@@ -53,6 +53,10 @@ def sign_status(status,server_private,now=None,protocol='yandex'):
     value['signature']=encode(server_private.sign(canonical(value),padding.PSS(mgf=padding.MGF1(hashes.SHA256()),salt_length=padding.PSS.MAX_LENGTH),hashes.SHA256()))
     return value
 
+# A server publishes its status on a change and at least every 10 min, and a
+# client fetches it every 5 min; older than this, a status no longer counts.
+STATUS_STALE_AFTER=1200
+
 def verify_status(value,server_public,now=None,protocol='yandex'):
     if not isinstance(value,dict) or len(canonical(value))>16000:raise ValueError('Invalid server status')
     signed=dict(value);signature=signed.pop('signature',None)
@@ -61,4 +65,4 @@ def verify_status(value,server_public,now=None,protocol='yandex'):
     destination(protocol)
     schema='openflux-server-status-v1' if protocol=='yandex' else 'openflux-volga-server-status-v1'
     if signed.get('schema')!=schema or not isinstance(created,int) or created>now+120 or not isinstance(signed.get('status'),dict):raise ValueError('Invalid server status timestamp')
-    return {'state':signed['status'].get('state','unknown'),'status':signed['status'],'reported_at':created,'stale':now-created>180}
+    return {'state':signed['status'].get('state','unknown'),'status':signed['status'],'reported_at':created,'stale':now-created>STATUS_STALE_AFTER}
