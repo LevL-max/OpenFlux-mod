@@ -22,5 +22,6 @@ func (c *volgaV6YandexCarrier) VolgaV6PhysicalHealth(now time.Time) volgaV6Physi
 		WSRawMessages: snap.WSRawMessages, WSIgnoredMessages: snap.WSIgnoredMessages, WSJSONErrors: snap.WSJSONErrors,
 		HTTPStatuses: snap.HTTPStatuses, HTTPTransportErrors: snap.HTTPTransportErrors,
 		RelayPostsPerSecond: snap.RelayPostsPerSecond, RelayRetryAt: snap.RelayRetryAt,
+		SessionPings: snap.SessionPings, SessionPingFailures: snap.SessionPingFailures, SessionPingRejected: snap.SessionPingRejected,
 	}
 }

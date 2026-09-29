@@ -142,7 +142,8 @@ def _status():
     if CLIENT:
         try:
             peer=json.loads(pathlib.Path('/var/lib/openflux-recovery/peer-status.json').read_text())
-            peer['stale']=bool(peer.get('fetch_failed')) or int(time.time())-peer.get('reported_at',0)>180
+            # 1200 = recovery_crypto.STATUS_STALE_AFTER, kept literal to avoid importing cryptography here.
+            peer['stale']=bool(peer.get('fetch_failed')) or int(time.time())-peer.get('reported_at',0)>1200
             out['server_authentication']=peer
         except (OSError,ValueError):out['server_authentication']={'state':'unknown','stale':True,'reason':'Server status is not configured or has not arrived.'}
     if not CLIENT:

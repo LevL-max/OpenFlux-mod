@@ -108,22 +108,23 @@ func TestVolgaV6QuietServerWaitsForAPeerWithoutRepairsOrRecycles(t *testing.T) {
 	}
 
 	r := newLonelyVolgaV6Runtime(t, true, start)
-	// Nobody to deliver to: no repairs, only a renewal every 90 s so a client stays audible.
-	if handoffs, repairs := tickSeconds(r, start, 1, 400); repairs != 0 || !reflect.DeepEqual(handoffs, []int{90, 180, 270, 360}) {
+	// Nobody to deliver to: no repairs. The session pings keep a client
+	// audible, so the carriers are renewed only every 20 min as a safety net.
+	if handoffs, repairs := tickSeconds(r, start, 1, 2500); repairs != 0 || !reflect.DeepEqual(handoffs, []int{1200, 2400}) {
 		t.Fatalf("quiet server: handoffs at %v s, repairs=%d", handoffs, repairs)
 	}
-	if !r.Snapshot(start.Add(400 * time.Second)).WaitingForPeer {
+	if !r.Snapshot(start.Add(2500 * time.Second)).WaitingForPeer {
 		t.Fatal("snapshot does not report waiting for a peer")
 	}
 
 	// The client's first frame restores normal recovery at once.
-	r.lastInbound.Store(start.Add(400 * time.Second).UnixNano())
+	r.lastInbound.Store(start.Add(2500 * time.Second).UnixNano())
 	r.peerActivity.Store(true)
-	res := r.Tick(context.Background(), start.Add(401*time.Second))
+	res := r.Tick(context.Background(), start.Add(2501*time.Second))
 	if res.Repairs == 0 || res.Handoff || res.Recovery.Reason != "" {
 		t.Fatalf("after the peer arrived: repairs=%d handoff=%v reason=%q", res.Repairs, res.Handoff, res.Recovery.Reason)
 	}
-	if r.Snapshot(start.Add(401 * time.Second)).WaitingForPeer {
+	if r.Snapshot(start.Add(2501 * time.Second)).WaitingForPeer {
 		t.Fatal("snapshot still reports waiting with a peer present")
 	}
 }
@@ -136,9 +137,92 @@ func TestVolgaV6QuietServerGoesQuietAfterItsPeerLeaves(t *testing.T) {
 	if handoffs, repairs := tickSeconds(r, start, 1, 29); !reflect.DeepEqual(handoffs, []int{2, 7, 17}) || repairs == 0 {
 		t.Fatalf("first 30 s: handoffs at %v s, repairs=%d", handoffs, repairs)
 	}
-	// ...then QuietAfter of silence: no repairs, a renewal 90 s after the last one.
-	if handoffs, repairs := tickSeconds(r, start, 30, 600); !reflect.DeepEqual(handoffs, []int{107, 197, 287, 377, 467, 557}) || repairs != 0 {
+	// ...then QuietAfter of silence: no repairs, a renewal 20 min after the last one.
+	if handoffs, repairs := tickSeconds(r, start, 30, 2500); !reflect.DeepEqual(handoffs, []int{1217, 2417}) || repairs != 0 {
 		t.Fatalf("after the peer left: handoffs at %v s, repairs=%d", handoffs, repairs)
+	}
+}
+
+// pingRejectedVolgaV6Carrier reports session pings Yandex refused.
+type pingRejectedVolgaV6Carrier struct {
+	*linkedVolgaV6Carrier
+	rejected uint64
+}
+
+func (c *pingRejectedVolgaV6Carrier) VolgaV6PhysicalHealth(time.Time) volgaV6PhysicalHealth {
+	return volgaV6PhysicalHealth{Known: true, SessionPingRejected: c.rejected}
+}
+
+func TestVolgaV6RefusedSessionPingRenewsTheAuthorization(t *testing.T) {
+	for _, quiet := range []bool{true, false} {
+		cfg := defaultVolgaV6RuntimeConfig()
+		cfg.Quiet = quiet
+		var carriers []*pingRejectedVolgaV6Carrier
+		r := newVolgaV6Runtime(50007, func(generation uint64, _ func(volgaV6WireFrame)) (volgaV6PhysicalCarrier, error) {
+			c := &pingRejectedVolgaV6Carrier{linkedVolgaV6Carrier: &linkedVolgaV6Carrier{generation: generation, factory: newLinkedVolgaV6Factory()}}
+			carriers = append(carriers, c)
+			return c, nil
+		}, cfg, nil)
+		start := time.Unix(7500, 0)
+		if err := r.startAt(context.Background(), start); err != nil {
+			t.Fatal(err)
+		}
+		// The editor session is gone 30 s after authorization...
+		carriers[len(carriers)-1].rejected = 1
+		if res := r.Tick(context.Background(), start.Add(30*time.Second)); res.Handoff {
+			t.Fatalf("quiet=%v: renewed within ResubscribeSpacing", quiet)
+		}
+		// ...so the carriers are authorized afresh once ResubscribeSpacing has passed.
+		res := r.Tick(context.Background(), start.Add(61*time.Second))
+		if !res.Handoff || res.Recovery.Reason != "session-ping-rejected" {
+			t.Fatalf("quiet=%v: handoff=%v reason=%q", quiet, res.Handoff, res.Recovery.Reason)
+		}
+		// The fresh carrier's pings are accepted: nothing more for now.
+		if res := r.Tick(context.Background(), start.Add(200*time.Second)); res.Handoff {
+			t.Fatalf("quiet=%v: extra handoff %q", quiet, res.Recovery.Reason)
+		}
+	}
+}
+
+func TestVolgaV6NewCookiesEndARenewalPause(t *testing.T) {
+	cfg := defaultVolgaV6RuntimeConfig()
+	cfg.Quiet = true
+	changed, checks := false, 0
+	cfg.credentialsChanged = func() bool { checks++; return changed }
+	attempts, fail := 0, false
+	r := newVolgaV6Runtime(50009, func(generation uint64, _ func(volgaV6WireFrame)) (volgaV6PhysicalCarrier, error) {
+		attempts++
+		if fail {
+			return nil, ErrLoginRequired
+		}
+		return &linkedVolgaV6Carrier{generation: generation, factory: newLinkedVolgaV6Factory()}, nil
+	}, cfg, nil)
+	start := time.Unix(8000, 0)
+	if err := r.startAt(context.Background(), start); err != nil {
+		t.Fatal(err)
+	}
+	// Two refused safety renewals: the next one would wait an hour (the cap).
+	fail = true
+	tickSeconds(r, start, 1, 3700)
+	if attempts != 3 {
+		t.Fatalf("%d authorizations after two refused renewals, want 3", attempts)
+	}
+	if checks < 3700/int(credentialCheckEvery/time.Second)-1 || checks > 3700/int(credentialCheckEvery/time.Second)+1 {
+		t.Fatalf("cookie store checked %d times in 3700 s, want about every %v", checks, credentialCheckEvery)
+	}
+	// Fresh cookies arrive: the runtime renews within one check, not in an hour.
+	changed, fail = true, false
+	var at int
+	for s := 3701; s <= 3720 && at == 0; s++ {
+		if res := r.Tick(context.Background(), start.Add(time.Duration(s)*time.Second)); res.Handoff {
+			if res.Recovery.Reason != "credentials-changed" {
+				t.Fatalf("renewed for %q", res.Recovery.Reason)
+			}
+			at = s
+		}
+	}
+	if at == 0 || at > 3701+int(credentialCheckEvery/time.Second) {
+		t.Fatalf("renewal after new cookies at %d s", at)
 	}
 }
 

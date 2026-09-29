@@ -62,11 +62,13 @@ type YandexDocsTransport struct {
 	browserCookie    string
 	browserUserAgent string
 	cookieStore      *transport.CookieStore
+	cookieStoreSum   string // the store's fingerprint as last loaded or written here
 	cookieMu         sync.RWMutex
 
 	userCounter atomic.Int32
 	baseUserID  string
 	authBlocked atomic.Bool
+	refusals    atomic.Int32 // Yandex answered but turned the exit away, in a row
 
 	perfQueueFull   atomic.Uint64
 	perfWSWrites    atomic.Uint64
@@ -103,6 +105,10 @@ func (t *YandexDocsTransport) SetCookieStore(path string) error {
 		return err
 	}
 	t.cookieStore = store
+	sum, _ := cookieStoreFingerprint(path)
+	t.cookieMu.Lock()
+	t.cookieStoreSum = sum
+	t.cookieMu.Unlock()
 	if cached := store.Load(t.url); len(cached) > 0 {
 		t.cookieMu.Lock()
 		t.browserCookie = cookieMapToHeader(cached)
@@ -151,7 +157,16 @@ func (t *YandexDocsTransport) persistCookieMap(values map[string]string) error {
 	if t.cookieStore == nil || len(values) == 0 {
 		return nil
 	}
-	return t.cookieStore.Save(t.url, values)
+	if err := t.cookieStore.Save(t.url, values); err != nil {
+		return err
+	}
+	// Our own write is not news: only another writer's change triggers a reload.
+	if sum, err := cookieStoreFingerprint(t.cookieStore.Path()); err == nil {
+		t.cookieMu.Lock()
+		t.cookieStoreSum = sum
+		t.cookieMu.Unlock()
+	}
+	return nil
 }
 
 func (t *YandexDocsTransport) currentBrowserState() (string, string) {
@@ -340,6 +355,9 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 				t.blockUntilCookieStoreChange()
 				return
 			}
+			if !isNetworkFailure(err) {
+				t.refusals.Add(1)
+			}
 			utils.Debugf("[YDOCS] fetchDocInfo failed: %v", err)
 			t.scheduleReconnect(attempt)
 			return
@@ -369,6 +387,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			status := 0
 			if resp != nil {
 				status = resp.StatusCode
+				t.refusals.Add(1)
 			}
 			utils.Debugf("[YDOCS] WebSocket dial failed (http %d): %v", status, err)
 			t.scheduleReconnect(attempt)
@@ -391,6 +410,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			var timeout net.Error
 			switch {
 			case errors.Is(err, errDocumentAuthRejected):
+				t.refusals.Add(1)
 				utils.Statusf("[YDOCS] AUTH_REJECTED: document authentication rejected")
 			case errors.As(err, &timeout) && timeout.Timeout():
 				utils.Statusf("[YDOCS] AUTH_WAIT_TIMEOUT: handshake timed out; retrying")
@@ -410,6 +430,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			utils.SafeGo("yandex.writer", t.writerLoop)
 		}
 		t.authBlocked.Store(false)
+		t.refusals.Store(0)
 		t.SetConnected(true)
 		utils.Statusf("[YDOCS] OnlyOffice authentication successful")
 
@@ -659,6 +680,9 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 	}
 
 	d := reconnectBackoff(next)
+	if r := refusalBackoff(int(t.refusals.Load())); r > d {
+		d = r
+	}
 	utils.Statusf("[YDOCS] CONNECTING: retry scheduled")
 	utils.Debugf("[YDOCS] reconnecting in %v (attempt %d)", d, next)
 	time.Sleep(d)
@@ -666,8 +690,74 @@ func (t *YandexDocsTransport) scheduleReconnect(attempt int) {
 		return
 	}
 
+	t.reloadCookieStoreIfChanged()
 	t.RecordReconnect()
 	t.connectToDoc(next)
+}
+
+// refusalBackoff spaces retries after Yandex itself turned the exit away (an
+// error page, a redirect loop, a rejected handshake) rather than the network
+// failing. Repeating such a request every few seconds only looks like a bot
+// replaying a dead session: on 2026-09-29 a revoked session was retried every
+// ~20 s for two hours. After three quick tries the pause doubles from 30 s up
+// to 10 min.
+func refusalBackoff(refusals int) time.Duration {
+	if refusals <= 3 {
+		return 0
+	}
+	d := 30 * time.Second << min(refusals-4, 5)
+	if d > 10*time.Minute {
+		d = 10 * time.Minute
+	}
+	return d + time.Duration(rand.Int63n(int64(d/4)+1))
+}
+
+// isNetworkFailure reports a failure to reach Yandex at all: DNS, connect,
+// reset or timeout. Anything else means Yandex answered but did not let the
+// exit in.
+func isNetworkFailure(err error) bool {
+	var ue *url.Error
+	if errors.As(err, &ue) {
+		err = ue.Err
+	}
+	var op *net.OpError
+	var dns *net.DNSError
+	var ne net.Error
+	switch {
+	case errors.As(err, &op), errors.As(err, &dns):
+		return true
+	case errors.As(err, &ne) && ne.Timeout():
+		return true
+	case errors.Is(err, io.EOF), errors.Is(err, io.ErrUnexpectedEOF):
+		return true
+	}
+	return false
+}
+
+// reloadCookieStoreIfChanged picks up cookies another writer stored while the
+// exit keeps retrying, for example the Disk recovery inbox. Before, only a
+// restart or the AUTH_BLOCKED latch re-read the store, so fresh cookies sat
+// unused while the old ones were retried.
+func (t *YandexDocsTransport) reloadCookieStoreIfChanged() {
+	path := t.cookieStorePath()
+	if path == "" {
+		return
+	}
+	sum, err := cookieStoreFingerprint(path)
+	if err != nil {
+		return
+	}
+	t.cookieMu.RLock()
+	known := t.cookieStoreSum
+	t.cookieMu.RUnlock()
+	if sum == known {
+		return
+	}
+	if err := t.reloadCookieStore(); err != nil {
+		utils.Debugf("[YDOCS] changed cookie store is not usable yet: %v", err)
+		return
+	}
+	t.refusals.Store(0) // fresh cookies earn quick retries again
 }
 
 func (t *YandexDocsTransport) cookieStorePath() string {
@@ -706,8 +796,10 @@ func (t *YandexDocsTransport) reloadCookieStore() error {
 		return errors.New("Yandex cookie store contains no cookies for this document")
 	}
 
+	sum, _ := cookieStoreFingerprint(path)
 	t.cookieMu.Lock()
 	t.cookieStore = store
+	t.cookieStoreSum = sum
 	t.browserCookie = cookieMapToHeader(cached)
 	t.cookieMu.Unlock()
 
@@ -785,6 +877,24 @@ func reconnectBackoff(n int) time.Duration {
 	return d
 }
 
+// docRedirectPolicy stops a redirect loop. A loop through Yandex Passport is a
+// revoked or expired session bouncing between the document and the login:
+// that is ErrLoginRequired, which latches AUTH_BLOCKED until new cookies
+// arrive. A short hop through Passport to refresh a session is allowed.
+func docRedirectPolicy(req *http.Request, via []*http.Request) error {
+	if len(via) < 10 {
+		return nil
+	}
+	passport := strings.Contains(req.URL.Hostname(), "passport.yandex")
+	for _, r := range via {
+		passport = passport || strings.Contains(r.URL.Hostname(), "passport.yandex")
+	}
+	if passport {
+		return fmt.Errorf("%w: redirect loop through Yandex Passport", ErrLoginRequired)
+	}
+	return fmt.Errorf("stopped after 10 redirects (login required? doc not public?)")
+}
+
 func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, error) {
 	if strings.HasPrefix(url, "file://") {
 		return loadStaticDocInfo(strings.TrimPrefix(url, "file://"), userID)
@@ -796,13 +906,8 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 			cookie:    cookieHeader,
 			userAgent: userAgent,
 		},
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return fmt.Errorf("stopped after 10 redirects (login required? doc not public?)")
-			}
-			return nil
-		},
-		Timeout: 15 * time.Second,
+		CheckRedirect: docRedirectPolicy,
+		Timeout:       15 * time.Second,
 	}
 
 	var (

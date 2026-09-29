@@ -23,20 +23,33 @@ type volgaV6RuntimeConfig struct {
 
 	// Quiet (a server) waits silently while no peer frame has arrived for
 	// QuietAfter, or none since start: its outstanding DATA then has no
-	// receiver. It sends no repairs and renews its carriers, each renewal a
-	// fresh authorization of every lane, every QuietRecycleInterval. Yandex
-	// delivers to an idle carrier only for about two minutes after its
-	// authorization (on AWS a client was heard 18 s-1m41s after one, not at
-	// 3m53s or later), so the interval stays below that. A peer frame restores
-	// normal recovery; a live session's yamux keepalives arrive every 5 s. A
-	// client keeps fast recovery.
+	// receiver. It sends no repairs. Every carrier pings its editor session
+	// once a minute, as an open browser tab does; without that ping Yandex
+	// stopped delivering to an idle carrier about two minutes after its
+	// authorization. The carriers are still renewed, each renewal a fresh
+	// authorization of every lane: every QuietRecycleInterval as a safety
+	// net, and after a push socket reconnect or a refused ping. A peer frame
+	// restores normal recovery; a live session's yamux keepalives arrive every
+	// 5 s. A client keeps fast recovery.
 	Quiet                bool
 	QuietAfter           time.Duration
 	QuietRecycleInterval time.Duration
 	// ResubscribeSpacing is the least time between recycles caused by a
 	// reconnected push socket; see Tick.
 	ResubscribeSpacing time.Duration
+
+	// credentialsChanged, when set, reports that a CAPTCHA/login-latched
+	// document has fresh cookies in the store. Tick then renews at once
+	// instead of waiting for the spaced retry.
+	credentialsChanged func() bool
 }
+
+// credentialCheckEvery bounds how often a blocked runtime reads the cookie
+// store; maxQuietRenewalPause caps the doubled quiet renewal pause.
+const (
+	credentialCheckEvery = 5 * time.Second
+	maxQuietRenewalPause = time.Hour
+)
 
 func defaultVolgaV6RuntimeConfig() volgaV6RuntimeConfig {
 	return volgaV6RuntimeConfig{
@@ -48,7 +61,7 @@ func defaultVolgaV6RuntimeConfig() volgaV6RuntimeConfig {
 		CarrierStartTimeout:  15 * time.Second,
 		RepairWorkers:        4,
 		QuietAfter:           30 * time.Second,
-		QuietRecycleInterval: 90 * time.Second,
+		QuietRecycleInterval: 20 * time.Minute,
 		ResubscribeSpacing:   time.Minute,
 	}
 }
@@ -103,6 +116,7 @@ type volgaV6Runtime struct {
 	retireAt          map[uint64]time.Time
 	lastRenewal       time.Time // start, the last handoff or the last renewal attempt
 	renewFailures     int       // failed renewal attempts in a row; each doubles the spacing
+	lastCredCheck     time.Time
 }
 
 func newVolgaV6Runtime(sessionID uint64, factory volgaV6CarrierFactory, cfg volgaV6RuntimeConfig, onData func([][]byte)) *volgaV6Runtime {
@@ -330,6 +344,13 @@ func (r *volgaV6Runtime) Tick(ctx context.Context, now time.Time) volgaV6Runtime
 		result.Recovery.Reason = "provider-rate-limit"
 		return result
 	}
+	if r.credentialsChangedAt(now) {
+		result.Recovery.Reason, result.Recovery.Recycle = "credentials-changed", true
+		if r.renew(ctx, now, &result, result.Recovery.Reason) {
+			r.recovery.ResetRetryBudget(now)
+		}
+		return result
+	}
 	snap := r.session.Snapshot(now)
 	if r.quietAt(now) {
 		return r.waitForPeer(ctx, now, snap, health, result)
@@ -340,7 +361,7 @@ func (r *volgaV6Runtime) Tick(ctx context.Context, now time.Time) volgaV6Runtime
 	case result.Recovery.Recycle:
 		renewed = r.handoff(ctx, now, &result, result.Recovery.Reason)
 	case r.resubscribeDue(now, health):
-		result.Recovery.Reason, result.Recovery.Recycle = "websocket-resubscribe", true
+		result.Recovery.Reason, result.Recovery.Recycle = renewalReason(health), true
 		renewed = r.renew(ctx, now, &result, result.Recovery.Reason)
 	}
 	if renewed {
@@ -439,29 +460,55 @@ func (r *volgaV6Runtime) quietAt(now time.Time) bool {
 }
 
 // resubscribeDue reports that the active carrier's push socket has reconnected
-// since the last authorization. The socket then reuses the subscription signed
-// at that authorization; once that is stale it connects but stays silent. On
-// AWS it went silent 5-12 min after each authorization, and a server waiting
-// for a client missed it. Only a fresh authorization restores delivery.
-// Spacing doubles after each failed renewal, up to 32 times.
+// since the last authorization, or that Yandex refused a session ping. A
+// reconnected socket reuses the subscription signed at that authorization;
+// once that is stale it connects but stays silent. On AWS it went silent 5-12
+// min after each authorization, and a server waiting for a client missed it.
+// A refused ping means the editor session itself is gone. Only a fresh
+// authorization restores delivery. Spacing doubles after each failed renewal,
+// up to 32 times.
 func (r *volgaV6Runtime) resubscribeDue(now time.Time, health volgaV6PhysicalHealth) bool {
 	age, failures := r.renewalAge(now)
-	return health.WSReconnects > 0 && age >= r.config.ResubscribeSpacing<<min(failures, 5)
+	return (health.WSReconnects > 0 || health.SessionPingRejected > 0) && age >= r.config.ResubscribeSpacing<<min(failures, 5)
+}
+
+// credentialsChangedAt checks the latched documents' cookies at most every
+// credentialCheckEvery. New cookies arrive by hand or through the Disk inbox
+// while the runtime may be deep in a doubled renewal pause.
+func (r *volgaV6Runtime) credentialsChangedAt(now time.Time) bool {
+	if r.config.credentialsChanged == nil {
+		return false
+	}
+	r.mu.Lock()
+	due := now.Sub(r.lastCredCheck) >= credentialCheckEvery
+	if due {
+		r.lastCredCheck = now
+	}
+	r.mu.Unlock()
+	return due && r.config.credentialsChanged()
+}
+
+func renewalReason(health volgaV6PhysicalHealth) string {
+	if health.SessionPingRejected > 0 {
+		return "session-ping-rejected"
+	}
+	return "websocket-resubscribe"
 }
 
 // waitForPeer keeps a Quiet runtime silent: no repairs or ACK repeats. It
 // renews its carriers only to keep hearing a client: after a push socket
-// reconnect, and once QuietRecycleInterval has passed since the last renewal.
-// Both pauses double after each failed renewal. The progress clock stays fresh
-// so a returning peer is not met with an instant stall verdict.
+// reconnect or a refused session ping, and once QuietRecycleInterval has
+// passed since the last renewal. Both pauses double after each failed renewal.
+// The progress clock stays fresh so a returning peer is not met with an
+// instant stall verdict.
 func (r *volgaV6Runtime) waitForPeer(ctx context.Context, now time.Time, snap volgaV6ReliableSnapshot, health volgaV6PhysicalHealth, result volgaV6RuntimeTickResult) volgaV6RuntimeTickResult {
 	r.recovery.deferProgress(now)
 	result.Recovery = volgaV6RecoveryDecision{AdmissionLimit: r.recovery.AdmissionLimit(snap.ReplayDepth), Reason: "waiting-for-peer"}
 	age, failures := r.renewalAge(now)
 	switch {
 	case r.resubscribeDue(now, health):
-		result.Recovery.Reason = "websocket-resubscribe"
-	case age >= r.config.QuietRecycleInterval<<min(failures, 5):
+		result.Recovery.Reason = renewalReason(health)
+	case age >= min(r.config.QuietRecycleInterval<<min(failures, 5), maxQuietRenewalPause):
 		result.Recovery.Reason = "quiet-keepalive"
 	default:
 		return result

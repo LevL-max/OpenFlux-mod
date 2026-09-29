@@ -41,6 +41,12 @@ type VolgaV6ExperimentalOptions struct {
 	// keepalive carrier recycle while no client frame arrives. A client keeps
 	// fast recovery.
 	Quiet bool
+	// QuietRecycleInterval overrides the quiet server's safety renewal (0 keeps
+	// the default). SessionPingInterval overrides the editor session ping (0
+	// keeps the default, negative disables it). Both exist so a live run can
+	// fall back to frequent renewals without a rebuild.
+	QuietRecycleInterval time.Duration
+	SessionPingInterval  time.Duration
 }
 
 func NewVolgaV6Experimental(o VolgaV6ExperimentalOptions) (*YandexVolgaV6Transport, error) {
@@ -90,6 +96,12 @@ func NewVolgaV6Experimental(o VolgaV6ExperimentalOptions) (*YandexVolgaV6Transpo
 	if o.SendWorkers != 0 && (o.SendWorkers < 1 || o.SendWorkers > 256) {
 		return nil, errors.New("Volga lab: send_workers must be 1-256")
 	}
+	if o.QuietRecycleInterval != 0 && (o.QuietRecycleInterval < time.Minute || o.QuietRecycleInterval > time.Hour) {
+		return nil, errors.New("Volga lab: quiet_recycle_seconds must be 60-3600")
+	}
+	if o.SessionPingInterval > 0 && (o.SessionPingInterval < 15*time.Second || o.SessionPingInterval > 5*time.Minute) {
+		return nil, errors.New("Volga lab: session_ping_seconds must be 15-300, or negative to disable")
+	}
 	cfg := DefaultVolgaV6TransportConfig(o.Documents)
 	cfg.Telemetry = false
 	cfg.QueueSize, cfg.SendQueueSize, cfg.SendWorkers = 512, 64, 64
@@ -98,6 +110,13 @@ func NewVolgaV6Experimental(o VolgaV6ExperimentalOptions) (*YandexVolgaV6Transpo
 	}
 	cfg.Runtime.CarrierStartTimeout = 30 * time.Second
 	cfg.Runtime.Quiet = o.Quiet
+	cfg.Runtime.credentialsChanged = p.blockedCookiesChanged
+	if o.QuietRecycleInterval != 0 {
+		cfg.Runtime.QuietRecycleInterval = o.QuietRecycleInterval
+	}
+	if o.SessionPingInterval != 0 {
+		cfg.Yandex.SessionPingInterval = o.SessionPingInterval
+	}
 	cfg.Yandex.HTTPProtocol = "http1"
 	cfg.Yandex.RelayEnvelope = "minimal"
 	cfg.Yandex.RelayPostsPerSecond = rate
@@ -204,6 +223,9 @@ func (p *experimentalV6Pool) VolgaV6PhysicalHealth(now time.Time) volgaV6Physica
 		out.WSIgnoredMessages += s.WSIgnoredMessages
 		out.WSJSONErrors += s.WSJSONErrors
 		out.HTTPTransportErrors += s.HTTPTransportErrors
+		out.SessionPings += s.SessionPings
+		out.SessionPingFailures += s.SessionPingFailures
+		out.SessionPingRejected += s.SessionPingRejected
 		out.RelayPostsPerSecond = s.RelayPostsPerSecond
 		if s.RelayRetryAt.After(out.RelayRetryAt) {
 			out.RelayRetryAt = s.RelayRetryAt

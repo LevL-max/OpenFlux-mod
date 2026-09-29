@@ -435,7 +435,8 @@ class VolgaRuntime:
         # The server's verified report matters most while this client is stopped.
         peer=self.read(self.state/'peer-status.json')
         if peer:
-            peer['stale']=bool(peer.get('fetch_failed')) or time.time()-peer.get('reported_at',0)>180
+            # 1200 = recovery_crypto.STATUS_STALE_AFTER, kept literal to avoid importing cryptography here.
+            peer['stale']=bool(peer.get('fetch_failed')) or time.time()-peer.get('reported_at',0)>1200
             out['server_authentication']=peer
         if not out['installed'] or not self.active():return out
         out.update(active=True,state='connecting',reason='Volga is connecting.')
@@ -566,33 +567,42 @@ class VolgaRuntime:
         import recovery_crypto,recovery_inbox
         keys=self.path('/etc/openflux-recovery');token=(keys/'disk-token').read_text().strip()
         path=self.disk_path();state=self.read(self.state/'recovery.json',{'seen':[]})
+        now=int(time.time())
         def download(name,limit=230000):
             link=recovery_inbox.fetch('https://cloud-api.yandex.net/v1/disk/resources/download?'+urllib.parse.urlencode({'path':name}),token=token)
             return recovery_inbox.fetch(link['href'],limit=limit)
         if self.node()['role']=='client':
+            previous=self.read(self.state/'peer-status.json',{})
+            if now-int(previous.get('checked_at') or 0)<recovery_inbox.CLIENT_POLL_EVERY:return
             try:
                 public=serialization.load_pem_public_key((keys/'server-public.pem').read_bytes())
                 peer=recovery_crypto.verify_status(download(path+'.status.json',16000),public,protocol='volga')
-                previous=self.read(self.state/'peer-status.json',{})
                 if peer['reported_at']<previous.get('reported_at',0):raise ValueError('Older Volga status')
                 peer.update(checked_at=int(time.time()),fetch_failed=False)
             except Exception:
-                peer=self.read(self.state/'peer-status.json',{'state':'unknown','reported_at':0})
+                peer=previous or {'state':'unknown','reported_at':0}
                 peer.update(checked_at=int(time.time()),fetch_failed=True,stale=True)
             self.save(self.state/'peer-status.json',peer);return
         private=serialization.load_pem_private_key((keys/'server-private.pem').read_bytes(),password=None)
         try:
-            report=recovery_crypto.sign_status(self.status(),private,protocol='volga')
-            recovery_inbox.upload(path+'.status.json',report,token)
-            state['status_published_at']=int(time.time())
+            status=self.status()
+            view={k:status.get(k) for k in ('state','reason','needs_cookies','active','carrier_ready')}
+            signature=recovery_inbox.status_signature(view,tuple(view))
+            if recovery_inbox.publish_due(state,signature,now):
+                recovery_inbox.upload(path+'.status.json',recovery_crypto.sign_status(status,private,protocol='volga'),token)
+                state.update(status_published_at=now,status_signature=signature)
+                state.pop('status_publish_error',None)
         except Exception:state['status_publish_error']='Volga status upload unavailable'
         # Separate document files prevent A being overwritten by B before the
         # next poll. Failure/missing cookies for A never delay processing B.
         for document in dict.fromkeys(self.configuration()['documents']):
             inbox=self.disk_path(document);entry=state.setdefault('inboxes',{}).setdefault(inbox,{})
-            if time.time()<entry.get('next_check',0):continue
+            if now<entry.get('next_check',0) or now-int(entry.get('checked_at') or 0)<recovery_inbox.SERVER_POLL_EVERY:continue
+            entry['checked_at']=now
             try:
-                packet=download(inbox)
+                md5=recovery_inbox.disk_md5(inbox,token)
+                if md5 and md5==entry.get('md5'):continue  # unchanged since it was last downloaded
+                packet=download(inbox);entry['md5']=md5
                 if packet.get('id') not in state['seen']:
                     trusted=list((keys/'trusted-senders').glob('*.pem'))
                     if (keys/'sender-public.pem').exists():trusted.append(keys/'sender-public.pem')
