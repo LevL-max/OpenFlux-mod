@@ -56,7 +56,11 @@ func defaultVolgaV6YandexConfig() volgaV6YandexConfig {
 		ForceHTTP2:          false,
 		HTTPBodyLimit:       8000,
 		WSHandshakeTimeout:  10 * time.Second,
-		WSReadTimeout:       60 * time.Second,
+		// The push service pings an idle socket every 60 s (server-interval-sec).
+		// A 60 s read deadline raced that ping: a slightly late one read as a
+		// dead socket, and every reconnect cost a renewal of all lanes. On AWS
+		// that happened every 2-7 min.
+		WSReadTimeout:       150 * time.Second,
 		ReconnectMinDelay:   500 * time.Millisecond,
 		ReconnectMaxDelay:   30 * time.Second,
 		ReconnectMultiplier: 1.5,

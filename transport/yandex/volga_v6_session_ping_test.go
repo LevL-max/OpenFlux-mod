@@ -94,6 +94,13 @@ func TestVolgaV6SessionPingLoopEndsWithTheCarrier(t *testing.T) {
 	}
 }
 
+func TestVolgaV6PushReadDeadlineOutlastsTheServerPing(t *testing.T) {
+	// push.yandex.ru pings an idle socket every 60 s; the deadline must not race it.
+	if got := defaultVolgaV6YandexConfig().WSReadTimeout; got < 2*time.Minute {
+		t.Fatalf("websocket read deadline %v races the 60 s server ping", got)
+	}
+}
+
 func TestVolgaV6SessionPingDefaultsAndDisable(t *testing.T) {
 	if got := newVolgaV6YandexCarrier(1, "https://disk.yandex.ru/i/test", volgaV6YandexConfig{}, nil).config.SessionPingInterval; got != time.Minute {
 		t.Fatalf("default ping interval %v, want 1m", got)
