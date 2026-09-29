@@ -45,6 +45,11 @@ type config struct {
 	RecordWindowBytes int `json:"record_window_bytes"`
 	FlushMillis       int `json:"flush_millis"` // <0 disables coalescing
 	SendWorkers       int `json:"send_workers"`
+	// Optional idle knobs. Absent keeps the defaults: a session ping every
+	// 60 s and a quiet server renewal every 20 min. They allow a fallback to
+	// frequent renewals without a rebuild.
+	QuietRecycleSeconds int `json:"quiet_recycle_seconds"`
+	SessionPingSeconds  int `json:"session_ping_seconds"` // <0 disables the ping
 }
 
 var outputMu sync.Mutex
@@ -105,6 +110,12 @@ func load(path string) (config, []byte, error) {
 	if c.SendWorkers != 0 && (c.SendWorkers < 1 || c.SendWorkers > 256) {
 		return c, nil, errors.New("send_workers must be 1-256 when set")
 	}
+	if c.QuietRecycleSeconds != 0 && (c.QuietRecycleSeconds < 60 || c.QuietRecycleSeconds > 3600) {
+		return c, nil, errors.New("quiet_recycle_seconds must be 60-3600 when set")
+	}
+	if c.SessionPingSeconds > 0 && (c.SessionPingSeconds < 15 || c.SessionPingSeconds > 300) {
+		return c, nil, errors.New("session_ping_seconds must be 15-300, or negative to disable")
+	}
 	if c.EgressPolicy == "" {
 		c.EgressPolicy = "allowlist"
 	}
@@ -144,7 +155,8 @@ func runSession(parent context.Context, c config, key []byte) error {
 	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 	profile := credentialFingerprint(c.BrowserProfile)
-	tr, e := yandex.NewVolgaV6Experimental(yandex.VolgaV6ExperimentalOptions{Documents: c.Documents, CookieStore: c.CookieStore, BrowserProfile: c.BrowserProfile, PostsPerSecond: c.PostsPerSecond, PerLaneBudget: c.PerLaneBudget, SendWorkers: c.SendWorkers, Quiet: c.Role == "server"})
+	tr, e := yandex.NewVolgaV6Experimental(yandex.VolgaV6ExperimentalOptions{Documents: c.Documents, CookieStore: c.CookieStore, BrowserProfile: c.BrowserProfile, PostsPerSecond: c.PostsPerSecond, PerLaneBudget: c.PerLaneBudget, SendWorkers: c.SendWorkers, Quiet: c.Role == "server",
+		QuietRecycleInterval: time.Duration(c.QuietRecycleSeconds) * time.Second, SessionPingInterval: time.Duration(c.SessionPingSeconds) * time.Second})
 	if e != nil {
 		return e
 	}
@@ -197,7 +209,8 @@ func runSession(parent context.Context, c config, key []byte) error {
 	event("carrier_started", map[string]any{"role": c.Role, "version": version, "protocol": c.Protocol,
 		"lanes": len(c.Documents), "posts_per_second": postRate, "per_lane_budget": c.PerLaneBudget, "aggregate_posts_per_second": aggregate,
 		"max_streams": c.MaxStreams, "egress_policy": c.EgressPolicy,
-		"record_chunk_bytes": effChunk, "record_window_bytes": effWindow, "flush_millis": effFlushMillis, "send_workers": effWorkers})
+		"record_chunk_bytes": effChunk, "record_window_bytes": effWindow, "flush_millis": effFlushMillis, "send_workers": effWorkers,
+		"quiet_recycle_seconds": c.QuietRecycleSeconds, "session_ping_seconds": c.SessionPingSeconds})
 	done := make(chan error, 2)
 	go func() { done <- ep.Run(ctx) }()
 	workers := 1
@@ -230,7 +243,8 @@ func runSession(parent context.Context, c config, key []byte) error {
 				continue
 			}
 			s := tr.Snapshot(now)
-			event("status", map[string]any{"stream": ep.Stats(), "auth_blocked": tr.AuthBlocked(), "post_failures": s.Carrier.ActiveHealth.PostFailures, "http_statuses": s.Carrier.ActiveHealth.HTTPStatuses, "repairs": s.RepairsSent, "ws_reconnects": s.Carrier.ActiveHealth.WSReconnects, "handoffs": s.Carrier.Handoffs, "waiting_for_peer": s.WaitingForPeer})
+			event("status", map[string]any{"stream": ep.Stats(), "auth_blocked": tr.AuthBlocked(), "post_failures": s.Carrier.ActiveHealth.PostFailures, "http_statuses": s.Carrier.ActiveHealth.HTTPStatuses, "repairs": s.RepairsSent, "ws_reconnects": s.Carrier.ActiveHealth.WSReconnects, "handoffs": s.Carrier.Handoffs, "waiting_for_peer": s.WaitingForPeer,
+				"session_pings": s.Carrier.ActiveHealth.SessionPings, "session_ping_failures": s.Carrier.ActiveHealth.SessionPingFailures, "last_handoff_reason": s.LastHandoffReason})
 		}
 	}
 	cancel()

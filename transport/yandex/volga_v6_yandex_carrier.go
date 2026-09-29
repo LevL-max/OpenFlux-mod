@@ -40,6 +40,11 @@ type volgaV6YandexConfig struct {
 	ReconnectMinDelay   time.Duration
 	ReconnectMaxDelay   time.Duration
 	ReconnectMultiplier float64
+
+	// SessionPingInterval spaces the empty POST to the editor session's ping
+	// endpoint that an open browser tab sends about once a minute. Zero keeps
+	// the default; a negative value disables the ping.
+	SessionPingInterval time.Duration
 }
 
 func defaultVolgaV6YandexConfig() volgaV6YandexConfig {
@@ -55,6 +60,7 @@ func defaultVolgaV6YandexConfig() volgaV6YandexConfig {
 		ReconnectMinDelay:   500 * time.Millisecond,
 		ReconnectMaxDelay:   30 * time.Second,
 		ReconnectMultiplier: 1.5,
+		SessionPingInterval: time.Minute,
 	}
 }
 
@@ -79,6 +85,9 @@ type volgaV6YandexCarrierSnapshot struct {
 	HTTPTransportErrors uint64
 	RelayPostsPerSecond float64
 	RelayRetryAt        time.Time
+	SessionPings        uint64
+	SessionPingFailures uint64
+	SessionPingRejected uint64
 }
 
 // volgaV6YandexCarrier is a disposable physical generation. It intentionally
@@ -118,6 +127,9 @@ type volgaV6YandexCarrier struct {
 	wsJSONErrors        atomic.Uint64
 	httpStatuses        [600]atomic.Uint64
 	httpTransportErrors atomic.Uint64
+	sessionPings        atomic.Uint64
+	sessionPingFailures atomic.Uint64
+	sessionPingRejected atomic.Uint64
 
 	started  atomic.Bool
 	stopOnce sync.Once
@@ -154,6 +166,9 @@ func newVolgaV6YandexCarrier(generation uint64, docURL string, cfg volgaV6Yandex
 	}
 	if cfg.ReconnectMultiplier <= 1 {
 		cfg.ReconnectMultiplier = defaults.ReconnectMultiplier
+	}
+	if cfg.SessionPingInterval == 0 {
+		cfg.SessionPingInterval = defaults.SessionPingInterval
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	if cfg.relayGate == nil {
@@ -245,7 +260,85 @@ func (c *volgaV6YandexCarrier) Start(ctx context.Context) error {
 		return fmt.Errorf("volga v6 generation %d websocket readiness: %w", c.generation, err)
 	}
 	c.started.Store(true)
+	if c.config.SessionPingInterval > 0 {
+		go c.sessionPingLoop(c.config.SessionPingInterval)
+	}
 	return nil
+}
+
+// sessionPingLoop does what an open editor tab does: an empty POST to the
+// session's ping endpoint about once a minute. Without it Yandex stopped
+// delivering to an idle carrier about two minutes after its authorization.
+// The loop ends with the carrier.
+func (c *volgaV6YandexCarrier) sessionPingLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			_ = c.sendSessionPing()
+		}
+	}
+}
+
+// sendSessionPing posts one ping. A 401/403/404/410 means the editor session
+// is gone, which the runtime answers with a fresh authorization.
+func (c *volgaV6YandexCarrier) sendSessionPing() error {
+	if err := c.config.relayGate.wait(c.ctx); err != nil {
+		return err
+	}
+	auth, httpClient := c.authSnapshot()
+	if auth == nil || httpClient == nil {
+		c.sessionPingFailures.Add(1)
+		return fmt.Errorf("volga v6 generation %d transport unavailable", c.generation)
+	}
+	urlStr := fmt.Sprintf("https://volga.yandex.ru/session/main/%s/ping", auth.RequestPath)
+	req, err := http.NewRequestWithContext(c.ctx, http.MethodPost, urlStr, http.NoBody)
+	if err != nil {
+		c.sessionPingFailures.Add(1)
+		return err
+	}
+	setVolgaV6SessionHeaders(req, auth)
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		c.sessionPingFailures.Add(1)
+		return err
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	switch resp.StatusCode {
+	case http.StatusNoContent, http.StatusOK:
+		c.sessionPings.Add(1)
+		return nil
+	case http.StatusTooManyRequests:
+		c.config.relayGate.limited(resp.Header.Get("Retry-After"), time.Now())
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusGone:
+		c.sessionPingRejected.Add(1)
+	}
+	c.sessionPingFailures.Add(1)
+	return fmt.Errorf("volga v6 session ping status %d", resp.StatusCode)
+}
+
+// setVolgaV6SessionHeaders sets what the editor sends with every session call:
+// the relay POST and the ping.
+func setVolgaV6SessionHeaders(req *http.Request, auth *volgaAuth) {
+	req.Header.Set("User-Agent", volgaUserAgent)
+	req.Header.Set("Authorization", "Bearer "+auth.Token)
+	req.Header.Set("Origin", "https://volga.yandex.ru")
+	req.Header.Set("Referer", "https://volga.yandex.ru/document/?request-path="+auth.RequestPath)
+	req.Header.Set("Accept", "*/*")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	cookieParts := make([]string, 0, len(auth.Cookies))
+	for _, cookie := range auth.Cookies {
+		cookieParts = append(cookieParts, cookie.Name+"="+cookie.Value)
+	}
+	if len(cookieParts) > 0 {
+		req.Header.Set("Cookie", strings.Join(cookieParts, "; "))
+	}
 }
 
 func (c *volgaV6YandexCarrier) Stop() error {
@@ -425,24 +518,9 @@ func (c *volgaV6YandexCarrier) postRelayBody(body []byte) error {
 		c.postFailures.Add(1)
 		return err
 	}
-	req.Header.Set("User-Agent", volgaUserAgent)
-	req.Header.Set("Authorization", "Bearer "+auth.Token)
+	setVolgaV6SessionHeaders(req, auth)
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Origin", "https://volga.yandex.ru")
-	req.Header.Set("Referer", "https://volga.yandex.ru/document/?request-path="+auth.RequestPath)
-	req.Header.Set("Accept", "*/*")
-	req.Header.Set("Sec-Fetch-Dest", "empty")
-	req.Header.Set("Sec-Fetch-Mode", "cors")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
 	req.ContentLength = int64(len(body))
-
-	cookieParts := make([]string, 0, len(auth.Cookies))
-	for _, cookie := range auth.Cookies {
-		cookieParts = append(cookieParts, cookie.Name+"="+cookie.Value)
-	}
-	if len(cookieParts) > 0 {
-		req.Header.Set("Cookie", strings.Join(cookieParts, "; "))
-	}
 
 	started := time.Now()
 	resp, err := httpClient.Do(req)
@@ -507,6 +585,7 @@ func (c *volgaV6YandexCarrier) Snapshot() volgaV6YandexCarrierSnapshot {
 		WSRawMessages: c.wsRawMessages.Load(), WSIgnoredMessages: c.wsIgnoredMessages.Load(), WSJSONErrors: c.wsJSONErrors.Load(),
 		HTTPStatuses: statuses, HTTPTransportErrors: c.httpTransportErrors.Load(),
 		RelayPostsPerSecond: rate, RelayRetryAt: retryAt,
+		SessionPings: c.sessionPings.Load(), SessionPingFailures: c.sessionPingFailures.Load(), SessionPingRejected: c.sessionPingRejected.Load(),
 	}
 }
 

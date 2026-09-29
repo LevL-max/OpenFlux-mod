@@ -99,6 +99,39 @@ func (p *volgaV6AuthProvider) anyBlocked() bool {
 	return false
 }
 
+// blockedCookiesChanged reports that a document latched on a CAPTCHA or login
+// wall now has other cookies in the store, so a renewal can succeed without
+// waiting for its spaced retry. A document whose bootstrap is running is
+// skipped: that bootstrap compares the cookies itself.
+func (p *volgaV6AuthProvider) blockedCookiesChanged() bool {
+	p.mu.Lock()
+	docs := make(map[string]*volgaV6AuthDocument, len(p.docs))
+	for doc, d := range p.docs {
+		docs[doc] = d
+	}
+	p.mu.Unlock()
+	for doc, d := range docs {
+		if !d.blockedFlag.Load() {
+			continue
+		}
+		values, err := p.browserCookies(doc)
+		if err != nil {
+			continue
+		}
+		select {
+		case d.gate <- struct{}{}:
+		default:
+			continue
+		}
+		changed := cookieMapToHeader(values) != d.cookies
+		<-d.gate
+		if changed {
+			return true
+		}
+	}
+	return false
+}
+
 func (p *volgaV6AuthProvider) document(doc string) *volgaV6AuthDocument {
 	p.mu.Lock()
 	defer p.mu.Unlock()

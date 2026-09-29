@@ -49,6 +49,9 @@ type volgaV6PhysicalHealth struct {
 	HTTPTransportErrors uint64
 	RelayPostsPerSecond float64
 	RelayRetryAt        time.Time
+	SessionPings        uint64
+	SessionPingFailures uint64
+	SessionPingRejected uint64 // refused with 401/403/404/410: the editor session is gone
 }
 
 type volgaV6PhysicalHealthReporter interface {
