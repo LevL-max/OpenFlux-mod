@@ -94,7 +94,7 @@ experiments or long throughput soak are required.
 ## Existing AWS and two-client deployment gate
 
 A subsequent read-only SSH audit confirmed the actual deployment topology:
-AWS `3.8.0.35`, PC1 `192.168.1.132`, PC2 `192.168.1.74`. Both mini-PC updater
+AWS, PC1 and PC2 (their addresses are kept outside this public repository). Both mini-PC updater
 settings specify that AWS exit IP, and the document identity hashes on all
 three nodes match. The earlier lab VPS pair is not a deployment target.
 

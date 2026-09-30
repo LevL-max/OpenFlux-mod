@@ -272,7 +272,7 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(probe.call_count,2)
   with patch.object(self.runtime,'status',return_value=status),patch.object(self.runtime,'exit_ok',side_effect=itertools.cycle([True,False])),patch('time.monotonic',side_effect=itertools.count(0.0,1.0)),patch('time.sleep'):
    with self.assertRaisesRegex(RuntimeError,'did not pass'):self.runtime.health(seconds=30)
-  answers=iter([types.SimpleNamespace(returncode=7,stdout=''),types.SimpleNamespace(returncode=0,stdout='3.8.0.35\n')])
+  answers=iter([types.SimpleNamespace(returncode=7,stdout=''),types.SimpleNamespace(returncode=0,stdout='203.0.113.35\n')])
   with patch.object(self.runtime,'run',side_effect=lambda *args,**kwargs:next(answers)):self.assertTrue(self.runtime.exit_ok())
 
  def test_release_manifest_generator_matches_runtime_validator(self):

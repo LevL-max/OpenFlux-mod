@@ -14,13 +14,11 @@ The approved production v4 source was imported from the canonical AWS Git tree a
 - profile: `yandex-batch4-1ms-v1`
 - batching: `4 packets / 1 ms`
 - known-bad setting: `4 packets / 2 ms`
-- AWS exit IP: `3.8.0.35`
+- AWS exit IP: kept outside this public repository
 
 ## Dynamic Yandex model
 
-Production no longer uses static Yandex session JSON at runtime. AWS, Mini-PC1 and Mini-PC2 independently fetch fresh bootstrap/session data from the same public Yandex document URL:
-
-`https://disk.yandex.ru/i/65fb1Od_I1ysSA`
+Production no longer uses static Yandex session JSON at runtime. AWS, Mini-PC1 and Mini-PC2 independently fetch fresh bootstrap/session data from the same public Yandex document URL. The URL itself is deployment data and is kept outside this public repository.
 
 The live URL is stored in:
 
