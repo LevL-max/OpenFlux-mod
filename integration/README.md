@@ -49,6 +49,10 @@ sudo python3 openflux-node.py install --role server \
   --document-url 'YOUR_YANDEX_DOCUMENT_URL'
 ```
 
+A new server loads its runtime image from the release archive
+`openflux-container-linux-amd64.tar.gz` after verifying it against the release digests;
+no container registry access or login is needed.
+
 Both ends must use the intended document/transport settings. Import browser cookies if
 required, then start:
 
@@ -80,6 +84,12 @@ binary and support tools, restarts OpenFlux, checks health and restores the prev
 on failure. An independent systemd timer restores the checkpoint if the update is interrupted.
 The previous running/stopped state is preserved. Updates are explicitly requested; polling
 authentication or Disk does not install a software release.
+
+When Yandex shows a SmartCaptcha or revokes the session (a login wall, or a redirect loop
+through Yandex Passport), OpenFlux enters AUTH_BLOCKED and makes no further Yandex requests
+until the cookie store changes; fresh cookies are then used without a restart. When Yandex
+answers but refuses the connection in another way, OpenFlux retries three times quickly, then
+doubles the pause from 30 s up to 10 min. Network failures keep quick retries.
 
 ```sh
 sudo openfluxctl configure --channel stable
@@ -182,13 +192,15 @@ sudo openfluxctl cookies package --file browser-curl.txt --output server-recover
 
 Use the exact configured filename and replace the previous file. Packets are signed, encrypted
 for the paired server, valid for one hour and applied once. They contain cookies, not commands.
-The server polls approximately once a minute. A blocked connection reloads fresh cookies
-without restarting the OpenFlux service. CAPTCHA may still require fresh browser cookies.
+The server checks the file every 2 minutes with one metadata request and downloads it only
+when it has changed. A blocked connection reloads fresh cookies without restarting the
+OpenFlux service. CAPTCHA may still require fresh browser cookies.
 
-The server also signs its status and publishes `<cookie-file>.status.json`. The client verifies
-that signature using the paired server key. Status older than three minutes is shown as stale,
-never as a fresh successful connection. A missing Disk response is a channel failure, not proof
-that client or server authentication failed. Revoked/expired OAuth tokens require reauthorization.
+The server also signs its status and publishes `<cookie-file>.status.json` when the status
+changes, and at least every 10 minutes. The client fetches it every 5 minutes and verifies the
+signature using the paired server key. Status older than 20 minutes is shown as stale, never
+as a fresh successful connection. A missing Disk response is a channel failure, not proof that
+client or server authentication failed. Revoked/expired OAuth tokens require reauthorization.
 
 ## 5. Existing Mini-PC Router Panel installations
 
@@ -245,9 +257,9 @@ limitation, not proof of end-to-end connectivity for a future protocol.
 
 Run the focused tests with `PYTHONPATH=integration python3 -m unittest discover -s integration/tests -v`.
 
-## Volga (v4.1.0, opt-in)
+## Volga (opt-in)
 
-Update the existing installation to v4.1.0 first.
+Update the existing installation to v4.1.0 or later first.
 An ordinary update retains Legacy. Volga uses a separate binary, configuration,
 cookies, update state and server container. The six existing bundle module names
 are unchanged so v4.0.x updaters can accept the archive.
@@ -311,12 +323,14 @@ and image are verified offline. Legacy keeps running independently. Updates keep
 the previous container for Rollback and remove older containers and images.
 
 Without a client the server stays quiet. It announces itself for 3 s after start,
-then sends no retries. Yandex delivers a client's frames to an idle server only for
-about two minutes after the server's authorization, so the server renews it, for
-every lane, every 90 s and after its push socket reconnects. The same applies 30 s
-after the last client frame. A client's first frame restores normal recovery. A
-refused renewal (a CAPTCHA) is retried with a doubling pause of up to 32 times,
-never in a loop. The panel's heading shows this idle server as "waiting for a client".
+then sends no retries. Every lane pings its editor session once a minute, as an open
+browser tab does; without that ping Yandex stopped delivering a client's frames to an
+idle server about two minutes after its authorization. The server renews its lanes
+only as a safety net every 20 minutes, and when Yandex refuses a ping or the push
+socket reconnects. The same applies 30 s after the last client frame. A client's first
+frame restores normal recovery. A refused renewal (a CAPTCHA) is retried with a doubling
+pause capped at one hour, never in a loop; fresh cookies end that wait within seconds.
+The panel's heading shows this idle server as "waiting for a client".
 
 On the client, `sudo openfluxctl select-protocol volga` checks the session and HTTPS
 through SOCKS, including expected exit IP when configured in the existing router
@@ -346,8 +360,9 @@ sends cannot overwrite one another. Common signed status is
 `server-recovery-volga.json.status.json`. `--disk-path` chooses the Volga base,
 which must differ from Legacy. In the panel choose each document and send its
 fresh browser cURL via Disk, or download both encrypted files and upload them
-under their generated filenames in the configured folder. Missing/failed inboxes
-back off independently, up to 15 minutes. Only unexpired, signed, unreplayed
+under their generated filenames in the configured folder. The server checks each
+inbox every 2 minutes by metadata. Missing/failed inboxes back off independently, up
+to 15 minutes. Only unexpired, signed, unreplayed
 packets for configured documents are accepted. Status/errors omit cookie values.
 
 Fresh credentials wake blocked startup without restarting the process. Persistent
