@@ -12,6 +12,7 @@ COMMAND_DIR = pathlib.Path('/usr/local/sbin')
 UNIT_DIR = pathlib.Path('/etc/systemd/system')
 RUNTIME_DIR = pathlib.Path('/var/lib/openflux/runtime')
 VOLGA_ARCHIVE = 'openflux-volga-container-linux-amd64.tar.gz'
+SERVER_ARCHIVE = 'openflux-container-linux-amd64.tar.gz'
 VOLGA_BINARY = pathlib.Path('/opt/openflux-volga/openflux-volga')
 VOLGA_CONFIG = pathlib.Path('/etc/openflux-volga/config.json')
 VOLGA_INSTALLED = pathlib.Path('/var/lib/openflux-volga-updater/installed.json')
@@ -95,7 +96,7 @@ def candidate(c):
     newest['installed'] = installed; newest['update_available'] = not mod.is_current(installed, newest)
     return newest
 
-def verify_download(row, directory, volga=False):
+def verify_download(row, directory, volga=False, server_image=False):
     # Bootstrap and updates use the same published digests and release manifest.
     base = 'https://github.com/'+REPO+'/releases/'
     tag = row['tag_name']
@@ -104,6 +105,8 @@ def verify_download(row, directory, volga=False):
     required = ('openflux-linux-amd64','openflux-yandex-cookie-import','openflux-integration-linux.tar.gz',SELF_ASSET,'SHA256SUMS')
     # One release carries both protocols; a server set up for Volga takes both.
     if volga: required += ('openflux-volga-linux-amd64','protocol-manifest.json',VOLGA_ARCHIVE)
+    # A new Docker server loads its runtime image from the release, not from a registry.
+    if server_image: required += (SERVER_ARCHIVE,)
     assets = {}
     for name in required:
         found = [a for a in row.get('assets', []) if a.get('name')==name]
@@ -111,7 +114,7 @@ def verify_download(row, directory, volga=False):
         a = found[0]
         if a.get('browser_download_url')!=base+'download/'+tag+'/'+name or not re.fullmatch(r'sha256:[0-9a-f]{64}', a.get('digest','')):
             raise ValueError('Unverified asset '+name)
-        limit=256*1024*1024 if name==VOLGA_ARCHIVE else 70*1024*1024 if name in ('openflux-linux-amd64','openflux-volga-linux-amd64') else 2*1024*1024
+        limit=256*1024*1024 if name in (VOLGA_ARCHIVE,SERVER_ARCHIVE) else 70*1024*1024 if name in ('openflux-linux-amd64','openflux-volga-linux-amd64') else 2*1024*1024
         fetch(a['browser_download_url'], directory/name, limit)
         if sha(directory/name)!=a['digest'][7:]: raise ValueError('Asset digest mismatch: '+name)
         assets[name] = a['digest'][7:]
@@ -346,7 +349,7 @@ def setup(a):
         return tuple(map(int,m.group(1,2,3)))+(1 if m[4] is None else 0,int(m[4] or 0)) if m else (-1,)
     rows=[r for r in rows if not r.get('draft') and r.get('published_at') and (a.channel=='prerelease' or not r.get('prerelease')) and key(r)!=(-1,)]
     if not rows: raise ValueError('No supported published release')
-    row=max(rows,key=key); directory=pathlib.Path(tempfile.mkdtemp(prefix='initial-',dir=STATE)); verify_download(row,directory)
+    row=max(rows,key=key); directory=pathlib.Path(tempfile.mkdtemp(prefix='initial-',dir=STATE)); verify_download(row,directory,server_image=c['backend']=='docker')
     # Use the verified release's archive validator, without executing archive files.
     import tarfile
     names={'openflux_release.py','openflux_auth.py','cookie_import.py','recovery_crypto.py','recovery_inbox.py','router_integration.py','install.py','README.md'}
@@ -360,7 +363,10 @@ def setup(a):
             contents[name]=content
     if seen!=names: raise ValueError('Incomplete integration archive')
     image='ghcr.io/'+REPO.lower()+':'+row['tag_name']
-    if c['backend']=='docker':run(['docker','pull',image],timeout=180)
+    if c['backend']=='docker':
+        # The verified release archive carries this tag; no registry access or login is needed.
+        run(['docker','load','--input',str(directory/SERVER_ARCHIVE)],timeout=180)
+        run(['docker','image','inspect','--format={{.Id}}',image])
     library.mkdir(parents=True,exist_ok=True)
     for name,content in contents.items():(library/name).write_bytes(content)
     if c['role']=='client':

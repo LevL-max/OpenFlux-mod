@@ -15,7 +15,7 @@ class NodeTests(unittest.TestCase):
   with tarfile.open(fileobj=bundle,mode='w:gz') as tar:
    for name in ('openflux_release.py','openflux_auth.py','cookie_import.py','recovery_crypto.py','recovery_inbox.py','router_integration.py','install.py','README.md'):
     data=(source/name).read_bytes();info=tarfile.TarInfo('integration/'+name);info.size=len(data);tar.addfile(info,io.BytesIO(data))
-  assets={'openflux-linux-amd64':b'release-binary','openflux-yandex-cookie-import':(source/'cookie_import.py').read_bytes(),'openflux-integration-linux.tar.gz':bundle.getvalue(),'openflux-node.py':pathlib.Path(n.__file__).read_bytes()}
+  assets={'openflux-linux-amd64':b'release-binary','openflux-yandex-cookie-import':(source/'cookie_import.py').read_bytes(),'openflux-integration-linux.tar.gz':bundle.getvalue(),'openflux-node.py':pathlib.Path(n.__file__).read_bytes(),n.SERVER_ARCHIVE:b'runtime-image-archive'}
   assets['SHA256SUMS']=''.join(hashlib.sha256(v).hexdigest()+'  '+k+'\n' for k,v in assets.items()).encode()
   base='https://github.com/'+n.REPO+'/releases/'
   row={'tag_name':'v4.0.2','html_url':base+'tag/v4.0.2','published_at':'2026-09-25','assets':[{'name':k,'digest':'sha256:'+hashlib.sha256(v).hexdigest(),'browser_download_url':base+'download/v4.0.2/'+k} for k,v in assets.items()]}
@@ -36,7 +36,13 @@ class NodeTests(unittest.TestCase):
     self.assertTrue((commands/'openfluxctl').is_file());self.assertTrue((units/'openflux-auth-status.timer').is_file())
     self.assertEqual(profile['backend'],'docker' if role=='server' else 'systemd')
     self.assertFalse(any(argv[:2]==['docker','start'] or argv[0]=='iptables' for argv in calls))
-    if role=='server':self.assertTrue(any(argv[:2]==['docker','create'] for argv in calls));self.assertTrue((root/'runtime'/'run.sh').is_file())
+    if role=='server':
+     self.assertTrue(any(argv[:2]==['docker','create'] for argv in calls));self.assertTrue((root/'runtime'/'run.sh').is_file())
+     # The runtime image comes from the verified release archive; the registry is never contacted.
+     loads=[argv for argv in calls if argv[:3]==['docker','load','--input']]
+     self.assertEqual(len(loads),1);self.assertTrue(loads[0][3].endswith(n.SERVER_ARCHIVE))
+     self.assertFalse(any(argv[:2]==['docker','pull'] for argv in calls))
+     self.assertIn(['docker','image','inspect','--format={{.Id}}','ghcr.io/'+n.REPO.lower()+':v4.0.2'],calls)
     else:self.assertTrue((units/'custom.service').is_file())
     with self.assertRaisesRegex(ValueError,'Already configured'):n.setup(args)
 
