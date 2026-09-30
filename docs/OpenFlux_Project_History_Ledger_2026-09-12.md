@@ -31,12 +31,12 @@ Important: `OpenFlux_AWS_v4_Daily_Review_Master_Handover_2026-09-12(1).md` is an
 - commit: `22f29ab94ca2f5aa5b85956053b5c4cab1d1e31e`
 - tag: `yandex-working-v4`
 - binary SHA256: `6f242d3c7ef9184811e58df5893e0ad0095da6aeb7354ba02df5da99fa569715`
-- public Yandex document URL: `https://disk.yandex.ru/i/65fb1Od_I1ysSA`
+- public Yandex document URL: kept outside this public repository
 - profile: `yandex-batch4-1ms-v1`
 - transport: `yandex`
 - batching: `4 packets / 1 ms`
 - known bad: `4 packets / 2 ms`
-- AWS exit IP: `3.8.0.35`
+- AWS exit IP: kept outside this public repository
 
 All three production participants now use the dynamic public-URL bootstrap model:
 
