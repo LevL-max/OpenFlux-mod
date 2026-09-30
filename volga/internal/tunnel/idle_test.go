@@ -27,6 +27,15 @@ func TestIdleServerKeepsEpochAndStaysQuiet(t *testing.T) {
 	})
 	server.HandshakeTimeout = 300 * time.Millisecond
 	server.Opts.Announce = 100 * time.Millisecond
+	// A server without an egress policy closes each session at once. It then
+	// retires the client's epoch, possibly before its own ACK reached the
+	// client, which stays unready on that epoch until its own handshake times
+	// out: an artifact of the test, not of a configured server.
+	policy, err := NewTargetDialer("public", nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Policy = policy
 	serverEvents := make(chan string, 100)
 	server.Event = func(s string) { serverEvents <- s }
 	wg.Add(1)
