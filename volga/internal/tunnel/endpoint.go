@@ -94,19 +94,28 @@ func (e *Endpoint) Open(ctx context.Context) (*yamux.Stream, error) {
 	}
 }
 
+// handshaker is the part of a record connection the handshake waits on.
+type handshaker interface {
+	Handshake(context.Context) error
+	Peer() recordconn.Epoch
+}
+
 // handshake gives up after HandshakeTimeout once a peer has answered. A server
 // that has heard no client keeps waiting silently on the same epoch instead of
-// replacing it every timeout while idle.
-func (e *Endpoint) handshake(ctx context.Context, c *recordconn.Conn) error {
+// replacing it every timeout while idle. A client that answers late in a
+// waiting window gets one more full window: otherwise a handshake straddling
+// the window's end failed although the client had just arrived.
+func (e *Endpoint) handshake(ctx context.Context, c handshaker) error {
 	timeout := e.HandshakeTimeout
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	for {
+		answered := c.Peer() != (recordconn.Epoch{})
 		attempt, cancel := context.WithTimeout(ctx, timeout)
 		err := c.Handshake(attempt)
 		cancel()
-		if err == nil || e.Client || ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) || c.Peer() != (recordconn.Epoch{}) {
+		if err == nil || e.Client || ctx.Err() != nil || !errors.Is(err, context.DeadlineExceeded) || answered {
 			return err
 		}
 	}

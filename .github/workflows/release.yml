@@ -197,6 +197,7 @@ jobs:
           - An idle Volga server keeps its editor sessions alive with the ping an open browser tab sends every minute, instead of re-authorizing every lane every 90 s; a safety renewal runs every 20 min. New cookies end an AUTH_BLOCKED wait within seconds.
           - Cookie recovery calls Yandex Disk far less often: the server checks its inboxes every 2 min by metadata and publishes status on a change or every 10 min; clients fetch it every 5 min.
           - A new Docker server loads its runtime image from the release archive after digest verification; no container registry access is needed.
+          - A Volga client that answers late in the server's waiting window gets a full window to finish its handshake instead of being cut off and reconnecting.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart running installations.
