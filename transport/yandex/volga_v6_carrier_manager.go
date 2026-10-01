@@ -52,10 +52,19 @@ type volgaV6PhysicalHealth struct {
 	SessionPings        uint64
 	SessionPingFailures uint64
 	SessionPingRejected uint64 // refused with 401/403/404/410: the editor session is gone
+	// LanesUp of LanesTotal document lanes are started. A server waiting for
+	// a client keeps one lane per document up; the rest start when it arrives.
+	LanesUp, LanesTotal int
 }
 
 type volgaV6PhysicalHealthReporter interface {
 	VolgaV6PhysicalHealth(now time.Time) volgaV6PhysicalHealth
+}
+
+// volgaV6LaneWaker is a carrier that holds some lanes down until a peer
+// arrives. Wake must not block: it starts the lanes in the background.
+type volgaV6LaneWaker interface {
+	Wake(now time.Time)
 }
 
 type volgaV6CarrierFactory func(generation uint64, onFrame func(volgaV6WireFrame)) (volgaV6PhysicalCarrier, error)
@@ -197,6 +206,16 @@ func (m *volgaV6CarrierManager) SendVolgaV6(frame volgaV6WireFrame) error {
 		return errVolgaV6NoActiveCarrier
 	}
 	return carrier.SendVolgaV6(frame)
+}
+
+// Wake asks the active carrier to start the lanes it holds down, if any.
+func (m *volgaV6CarrierManager) Wake(now time.Time) {
+	m.mu.RLock()
+	carrier := m.active
+	m.mu.RUnlock()
+	if waker, ok := carrier.(volgaV6LaneWaker); ok {
+		waker.Wake(now)
+	}
 }
 
 func (m *volgaV6CarrierManager) Retire(generation uint64) error {

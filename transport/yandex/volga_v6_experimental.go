@@ -11,6 +11,8 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"slices"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -38,8 +40,9 @@ type VolgaV6ExperimentalOptions struct {
 	// as a local bottleneck when interpreting an aggregate-rate result.
 	SendWorkers int
 	// Quiet makes a server wait silently for a client: no repairs and only a
-	// keepalive carrier recycle while no client frame arrives. A client keeps
-	// fast recovery.
+	// keepalive carrier recycle while no client frame arrives. Its carriers
+	// start one lane per document; the others start when a client arrives. A
+	// client keeps fast recovery and starts every lane.
 	Quiet bool
 	// QuietRecycleInterval overrides the quiet server's safety renewal (0 keeps
 	// the default). SessionPingInterval overrides the editor session ping (0
@@ -134,14 +137,17 @@ func NewVolgaV6Experimental(o VolgaV6ExperimentalOptions) (*YandexVolgaV6Transpo
 			laneGates[i] = shared
 		}
 	}
+	// A waiting server needs one session per document to hear a client.
+	var idle []int
+	if o.Quiet {
+		idle = volgaV6FirstLanePerDocument(o.Documents)
+	}
 	factory := func(generation uint64, onFrame func(volgaV6WireFrame)) (volgaV6PhysicalCarrier, error) {
-		pool := &experimentalV6Pool{generation: generation}
-		for i, doc := range o.Documents {
+		return newExperimentalV6Pool(generation, len(o.Documents), idle, cfg.Runtime.CarrierStartTimeout, func(i int) volgaV6PoolLane {
 			laneCfg := cfg.Yandex
 			laneCfg.relayGate = laneGates[i]
-			pool.lanes = append(pool.lanes, newVolgaV6YandexCarrier(generation, doc, laneCfg, onFrame))
-		}
-		return pool, nil
+			return newVolgaV6YandexCarrier(generation, o.Documents[i], laneCfg, onFrame)
+		}), nil
 	}
 	t := newYandexVolgaV6TransportWithFactory(transport.DefaultConfig(), cfg, factory)
 	t.authBlocked = p.anyBlocked
@@ -175,37 +181,207 @@ func (t *YandexVolgaV6Transport) SendContext(ctx context.Context, data []byte) e
 	}
 }
 
+// volgaV6PoolLane is one document lane of a pool generation: a Yandex carrier,
+// or a fake in tests.
+type volgaV6PoolLane interface {
+	volgaV6PhysicalCarrier
+	volgaV6PhysicalHealthReporter
+}
+
+// A lane that failed to wake is retried after this pause, doubling up to the
+// cap while clients keep arriving.
+const (
+	laneWakeRetry    = 30 * time.Second
+	maxLaneWakeRetry = 10 * time.Minute
+)
+
+// volgaV6FirstLanePerDocument lists the first lane of each document: enough
+// sessions for a waiting server to hear a client on any of them. It returns
+// nil, meaning every lane, when no document has a second lane.
+func volgaV6FirstLanePerDocument(docs []string) []int {
+	seen := make(map[string]bool, len(docs))
+	var first []int
+	for i, doc := range docs {
+		if !seen[doc] {
+			seen[doc] = true
+			first = append(first, i)
+		}
+	}
+	if len(first) == len(docs) {
+		return nil
+	}
+	return first
+}
+
 type experimentalV6Pool struct {
-	generation uint64
-	lanes      []*volgaV6YandexCarrier
-	next       atomic.Uint64
+	generation   uint64
+	startTimeout time.Duration
+	// newLane builds lane i. A lane whose start failed is stopped for good, so
+	// a fresh one replaces it before the next attempt.
+	newLane func(i int) volgaV6PoolLane
+	// idle lists the lanes Start brings up; nil means every lane. Wake starts
+	// the rest.
+	idle  []int
+	next  atomic.Uint64
+	ready atomic.Pointer[[]volgaV6PoolLane] // the started lanes, in lane order
+
+	mu        sync.Mutex
+	lanes     []volgaV6PoolLane
+	up        []bool
+	waking    bool
+	wakeFails int
+	wakeAfter time.Time
+	stopped   bool
+	ctx       context.Context // ends with Stop; bounds background lane starts
+	cancel    context.CancelFunc
+}
+
+func newExperimentalV6Pool(generation uint64, lanes int, idle []int, startTimeout time.Duration, newLane func(int) volgaV6PoolLane) *experimentalV6Pool {
+	ctx, cancel := context.WithCancel(context.Background())
+	p := &experimentalV6Pool{
+		generation: generation, startTimeout: startTimeout, newLane: newLane, idle: idle,
+		lanes: make([]volgaV6PoolLane, lanes), up: make([]bool, lanes), ctx: ctx, cancel: cancel,
+	}
+	for i := range p.lanes {
+		p.lanes[i] = newLane(i)
+	}
+	p.ready.Store(&[]volgaV6PoolLane{})
+	return p
 }
 
 func (p *experimentalV6Pool) Generation() uint64 { return p.generation }
+
+// Start brings up the idle lanes, or every lane, and fails the generation if
+// any of them fails.
 func (p *experimentalV6Pool) Start(ctx context.Context) error {
-	for _, c := range p.lanes {
-		if err := c.Start(ctx); err != nil {
+	start := p.idle
+	if start == nil {
+		start = make([]int, len(p.lanes))
+		for i := range start {
+			start[i] = i
+		}
+	}
+	for _, i := range start {
+		p.mu.Lock()
+		lane := p.lanes[i]
+		p.mu.Unlock()
+		if err := lane.Start(ctx); err != nil {
 			p.Stop()
 			return err
 		}
+		p.mu.Lock()
+		p.up[i] = true
+		p.publishLocked()
+		p.mu.Unlock()
 	}
 	return nil
 }
+
+// Wake starts the lanes still down in the background; the runtime calls it on
+// every tick that saw a peer frame. A lane that fails is replaced and retried
+// after a pause, while the session uses the lanes that are up.
+func (p *experimentalV6Pool) Wake(now time.Time) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.stopped || p.waking || now.Before(p.wakeAfter) || !slices.Contains(p.up, false) {
+		return
+	}
+	p.waking = true
+	go p.wakeLanes(now)
+}
+
+func (p *experimentalV6Pool) wakeLanes(at time.Time) {
+	failed := false
+	for i := range p.up {
+		p.mu.Lock()
+		if p.stopped {
+			p.waking = false
+			p.mu.Unlock()
+			return
+		}
+		lane, up := p.lanes[i], p.up[i]
+		p.mu.Unlock()
+		if up {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(p.ctx, p.startTimeout)
+		err := lane.Start(ctx)
+		cancel()
+		p.mu.Lock()
+		switch {
+		case p.stopped:
+			// Stop ran during the start and may have missed this lane.
+			p.waking = false
+			p.mu.Unlock()
+			_ = lane.Stop()
+			return
+		case err != nil:
+			failed = true
+			_ = lane.Stop()
+			p.lanes[i] = p.newLane(i)
+		default:
+			p.up[i] = true
+			p.publishLocked()
+		}
+		p.mu.Unlock()
+	}
+	p.mu.Lock()
+	p.waking = false
+	if failed {
+		p.wakeFails++
+		p.wakeAfter = at.Add(min(laneWakeRetry<<min(p.wakeFails-1, 5), maxLaneWakeRetry))
+	} else {
+		p.wakeFails = 0
+	}
+	p.mu.Unlock()
+}
+
+// publishLocked refreshes the send rotation from the started lanes.
+func (p *experimentalV6Pool) publishLocked() {
+	ready := make([]volgaV6PoolLane, 0, len(p.lanes))
+	for i, lane := range p.lanes {
+		if p.up[i] {
+			ready = append(ready, lane)
+		}
+	}
+	p.ready.Store(&ready)
+}
+
 func (p *experimentalV6Pool) Stop() error {
+	p.mu.Lock()
+	p.stopped = true
+	p.cancel()
+	lanes := slices.Clone(p.lanes)
+	p.mu.Unlock()
 	var first error
-	for _, c := range p.lanes {
+	for _, c := range lanes {
 		if err := c.Stop(); err != nil && first == nil {
 			first = err
 		}
 	}
 	return first
 }
+
 func (p *experimentalV6Pool) SendVolgaV6(f volgaV6WireFrame) error {
-	return p.lanes[(p.next.Add(1)-1)%uint64(len(p.lanes))].SendVolgaV6(f)
+	ready := *p.ready.Load()
+	if len(ready) == 0 {
+		return errVolgaV6NoActiveCarrier
+	}
+	return ready[(p.next.Add(1)-1)%uint64(len(ready))].SendVolgaV6(f)
 }
+
+// VolgaV6PhysicalHealth sums the started lanes; a lane held down is not a
+// disconnected one.
 func (p *experimentalV6Pool) VolgaV6PhysicalHealth(now time.Time) volgaV6PhysicalHealth {
-	out := volgaV6PhysicalHealth{Known: true, Generation: p.generation, Connected: true, HTTPStatuses: make(map[int]uint64)}
-	for _, c := range p.lanes {
+	p.mu.Lock()
+	lanes, up := slices.Clone(p.lanes), slices.Clone(p.up)
+	p.mu.Unlock()
+	out := volgaV6PhysicalHealth{Known: true, Generation: p.generation, Connected: true, HTTPStatuses: make(map[int]uint64), LanesTotal: len(lanes)}
+	for i, c := range lanes {
+		if !up[i] {
+			continue
+		}
+		out.LanesUp++
 		s := c.VolgaV6PhysicalHealth(now)
 		out.Connected = out.Connected && s.Connected
 		out.Posts += s.Posts
@@ -234,5 +410,6 @@ func (p *experimentalV6Pool) VolgaV6PhysicalHealth(now time.Time) volgaV6Physica
 			out.HTTPStatuses[code] += n
 		}
 	}
+	out.Connected = out.Connected && out.LanesUp > 0
 	return out
 }

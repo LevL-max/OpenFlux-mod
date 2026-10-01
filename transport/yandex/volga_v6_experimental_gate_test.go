@@ -32,7 +32,7 @@ func TestVolgaV6ExperimentalSharedGateByDefault(t *testing.T) {
 	if len(pool.lanes) != 2 {
 		t.Fatalf("lanes=%d, want 2", len(pool.lanes))
 	}
-	g0, g1 := pool.lanes[0].config.relayGate, pool.lanes[1].config.relayGate
+	g0, g1 := laneGate(t, pool, 0), laneGate(t, pool, 1)
 	if g0 == nil || g0 != g1 {
 		t.Fatalf("default must share one gate across lanes: g0=%p g1=%p", g0, g1)
 	}
@@ -50,8 +50,8 @@ func TestVolgaV6ExperimentalPerLaneGates(t *testing.T) {
 	}
 	gen1 := experimentalPoolGen(t, tr, 1)
 	seen := map[*volgaV6RelayGate]bool{}
-	for i, lane := range gen1.lanes {
-		g := lane.config.relayGate
+	for i := range gen1.lanes {
+		g := laneGate(t, gen1, i)
 		if g == nil || g.rate != 150 {
 			t.Fatalf("lane %d gate=%p rate=%v, want distinct gate at 150", i, g, gateRate(g))
 		}
@@ -65,7 +65,7 @@ func TestVolgaV6ExperimentalPerLaneGates(t *testing.T) {
 	// so a lane keeps its own Retry-After cooldown across re-authorization.
 	gen2 := experimentalPoolGen(t, tr, 2)
 	for i := range gen1.lanes {
-		if gen1.lanes[i].config.relayGate != gen2.lanes[i].config.relayGate {
+		if laneGate(t, gen1, i) != laneGate(t, gen2, i) {
 			t.Fatalf("lane %d gate not reused across generations", i)
 		}
 	}
@@ -76,6 +76,15 @@ func TestVolgaV6ExperimentalRejectsBadRate(t *testing.T) {
 	if _, err := NewVolgaV6Experimental(VolgaV6ExperimentalOptions{Documents: docs, PostsPerSecond: 5000}); err == nil {
 		t.Fatal("expected rejection of out-of-range posts_per_second")
 	}
+}
+
+func laneGate(t *testing.T, p *experimentalV6Pool, i int) *volgaV6RelayGate {
+	t.Helper()
+	c, ok := p.lanes[i].(*volgaV6YandexCarrier)
+	if !ok {
+		t.Fatalf("lane %d type %T, want *volgaV6YandexCarrier", i, p.lanes[i])
+	}
+	return c.config.relayGate
 }
 
 func gateRate(g *volgaV6RelayGate) float64 {
