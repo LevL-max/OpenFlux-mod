@@ -45,6 +45,9 @@ class VolgaTests(unittest.TestCase):
   self.runtime.save(self.runtime.config_path,self.cfg)
   self.runtime.data.mkdir(parents=True)
   self.runtime.state.mkdir(parents=True)
+  import openflux_auth
+  for name in ('DISK_TOKEN_REJECTED','STATUS_VIEWED'):
+   p=patch.object(openflux_auth,name,self.root/name.lower());p.start();self.addCleanup(p.stop)
 
  def test_frozen_profile_and_managed_paths(self):
   self.assertEqual(json.loads((pathlib.Path(__file__).resolve().parents[2]/'docs/FROZEN-PERFORMANCE-PROFILE.json').read_text()),VOLGA_PROFILE)
@@ -134,20 +137,80 @@ class VolgaTests(unittest.TestCase):
    self.runtime.recovery_poll()
    self.assertEqual(applied.call_count,2);self.assertEqual(upload.call_count,1)
    self.assertEqual(sorted(k for k,_ in calls),['file','file','link','link','meta','meta'])
-   # The timer fires again a minute later: nothing is due, Disk is not called.
-   calls.clear();clock[0]=start+60;self.runtime.recovery_poll()
+   # The timer fires every minute; a working server leaves Disk alone for 15 min.
+   calls.clear()
+   for minute in range(1,15):
+    clock[0]=start+60*minute;self.runtime.recovery_poll()
    self.assertEqual(calls,[]);self.assertEqual(upload.call_count,1)
-   # Two minutes on: one metadata request per inbox, no download of an unchanged file.
-   clock[0]=start+121;self.runtime.recovery_poll()
+   # Fifteen minutes on: one metadata request per inbox, no download of an unchanged file.
+   clock[0]=start+900;self.runtime.recovery_poll()
    self.assertEqual(sorted(k for k,_ in calls),['meta','meta']);self.assertEqual(applied.call_count,2)
    self.assertEqual(upload.call_count,1)
-   # The status goes out again on the 10-minute heartbeat, or at once on a change.
-   clock[0]=start+601;self.runtime.recovery_poll();self.assertEqual(upload.call_count,2)
+   # The status goes out again on the hourly heartbeat, or at once on a change.
+   clock[0]=start+3600;self.runtime.recovery_poll();self.assertEqual(upload.call_count,2)
    with patch.object(self.runtime,'status',return_value={'state':'auth_blocked','active':True,'needs_cookies':True}):
-    clock[0]=start+620;self.runtime.recovery_poll();self.assertEqual(upload.call_count,3)
+    clock[0]=start+3620;self.runtime.recovery_poll();self.assertEqual(upload.call_count,3)
+    # A server waiting for cookies checks its inboxes every 2 min.
+    calls.clear();clock[0]=start+3719;self.runtime.recovery_poll();self.assertEqual(calls,[])
+    clock[0]=start+3720;self.runtime.recovery_poll()
+    self.assertEqual(sorted(k for k,_ in calls),['meta','meta'])
 
- def test_client_fetches_server_status_every_five_minutes(self):
-  import recovery_inbox
+ def server_with_keys(self):
+  keys=self.runtime.path('/etc/openflux-recovery');keys.mkdir(parents=True)
+  server=rsa.generate_private_key(public_exponent=65537,key_size=2048);sender=ed25519.Ed25519PrivateKey.generate()
+  for name,key,private in [('server-public.pem',server.public_key(),False),('sender-private.pem',sender,True),('server-private.pem',server,True),('sender-public.pem',sender.public_key(),False)]:
+   data=key.private_bytes(serialization.Encoding.PEM,serialization.PrivateFormat.PKCS8,serialization.NoEncryption()) if private else key.public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo)
+   (keys/name).write_bytes(data)
+  (keys/'disk-token').write_text('fixture-token')
+  return keys
+
+ def test_refused_token_stops_disk_calls_until_it_changes(self):
+  import openflux_auth,recovery_inbox,urllib.error
+  keys=self.server_with_keys()
+  self.runtime.save(self.runtime.node_path,dict(self.node,role='server'))
+  self.runtime.save(self.runtime.config_path,dict(self.cfg,role='server',egress_policy='public'))
+  calls=[]
+  def refuse(url,**kwargs):
+   calls.append(url);raise urllib.error.HTTPError(url,401,'Unauthorized',{},None)
+  with patch.object(recovery_inbox,'fetch',side_effect=refuse),patch.object(self.runtime,'status',return_value={'state':'connecting'}):
+   self.runtime.recovery_poll()
+   self.assertEqual(len(calls),1);self.assertTrue(openflux_auth.disk_token_rejected('fixture-token'))
+   for _ in range(3):self.runtime.recovery_poll()
+   self.assertEqual(len(calls),1)  # nothing more is sent with the refused token
+   (keys/'disk-token').write_text('fresh-token');self.runtime.recovery_poll()
+   self.assertEqual(len(calls),2)
+
+ def test_inbox_unchanged_after_a_disk_failure_is_downloaded_again(self):
+  import recovery_inbox,urllib.parse
+  self.server_with_keys()
+  documents=list(dict.fromkeys(self.cfg['documents']));packets={}
+  for doc in documents:
+   packets[self.runtime.disk_path(doc)]=self.runtime.package_cookies(doc,'curl "'+EDITOR+'" -b "Session_id=fixture"')['package']
+  self.runtime.save(self.runtime.node_path,dict(self.node,role='server'))
+  self.runtime.save(self.runtime.config_path,dict(self.cfg,role='server',egress_policy='public'))
+  down=[False];files=[]
+  def fetch(url,**kwargs):
+   if down[0]:raise OSError('Disk unavailable')
+   if url.startswith('https://cloud-api.'):
+    path=urllib.parse.parse_qs(urllib.parse.urlsplit(url).query)['path'][0]
+    return {'md5':'md5-'+path,'href':path}
+   files.append(url);return packets[url]
+  start=int(time.time());clock=[start]
+  with patch.object(recovery_inbox,'fetch',side_effect=fetch),patch.object(recovery_inbox,'upload'),patch('time.time',side_effect=lambda:clock[0]),patch.object(self.runtime,'status',return_value={'state':'connecting'}),patch.object(self.runtime,'import_cookies'):
+   self.runtime.recovery_poll();self.assertEqual(len(files),2)
+   down[0]=True;clock[0]=start+900;self.runtime.recovery_poll()
+   entry=self.runtime.read(self.runtime.state/'recovery.json')['inboxes'][self.runtime.disk_path(documents[0])]
+   self.assertEqual(entry['inbox'],'Yandex Disk temporarily unavailable')
+   # Disk is back and the files are unchanged: they are downloaded again, so
+   # the Disk failure does not outlive Disk.
+   down[0]=False;clock[0]=start+1800;self.runtime.recovery_poll()
+   self.assertEqual(len(files),4)
+   for doc in documents:
+    entry=self.runtime.read(self.runtime.state/'recovery.json')['inboxes'][self.runtime.disk_path(doc)]
+    self.assertEqual((entry['inbox'],entry['failures']),('Applied or already seen',0))
+
+ def test_client_fetches_server_status_only_while_someone_looks(self):
+  import openflux_auth,recovery_inbox
   keys=self.runtime.path('/etc/openflux-recovery');keys.mkdir(parents=True);(keys/'disk-token').write_text('fixture-token')
   public=rsa.generate_private_key(public_exponent=65537,key_size=2048).public_key()
   (keys/'server-public.pem').write_bytes(public.public_bytes(serialization.Encoding.PEM,serialization.PublicFormat.SubjectPublicKeyInfo))
@@ -155,8 +218,13 @@ class VolgaTests(unittest.TestCase):
   def fetch(url,**kwargs):fetched.append(url);raise OSError('offline')
   with patch.object(recovery_inbox,'fetch',side_effect=fetch),patch('time.time',side_effect=lambda:clock[0]):
    self.runtime.recovery_poll();n=len(fetched);self.assertGreater(n,0)
-   clock[0]+=recovery_inbox.CLIENT_POLL_EVERY-1;self.runtime.recovery_poll();self.assertEqual(len(fetched),n)
-   clock[0]+=1;self.runtime.recovery_poll();self.assertGreater(len(fetched),n)
+   # Nobody looks: the next fetch waits 6 hours.
+   clock[0]+=recovery_inbox.CLIENT_POLL_IDLE-1;self.runtime.recovery_poll();self.assertEqual(len(fetched),n)
+   clock[0]+=1;self.runtime.recovery_poll();self.assertGreater(len(fetched),n);n=len(fetched)
+   # While the panel is open, every minute.
+   with patch.object(openflux_auth,'status_viewed',return_value=True):
+    clock[0]+=recovery_inbox.CLIENT_POLL_VIEWED-1;self.runtime.recovery_poll();self.assertEqual(len(fetched),n)
+    clock[0]+=1;self.runtime.recovery_poll();self.assertGreater(len(fetched),n)
 
  def test_resource_constraints_and_egress_container_isolation(self):
   text=self.runtime.unit_text()
@@ -183,7 +251,12 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(router_integration.patch_panel(changed),changed)
   self.assertIn("'openflux-updater','openflux-volga-config'],modes:['openflux']",changed)
   self.assertIn("'openflux-cookies','openflux-volga-config']);",changed)
-  self.assertIn('data-volga-panel="4"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
+  self.assertIn('data-volga-panel="5"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
+  # One browser login per place: no button puts one session on both, and a refused Disk token is shown.
+  self.assertNotIn('CookieBoth',changed);self.assertNotIn('cookiesBoth',changed)
+  self.assertEqual(changed.count(router_integration.SEPARATE_LOGINS),2)
+  self.assertIn('within 2 minutes while it waits for cookies, otherwise within 15 minutes',changed)
+  for element in ('id="openfluxDiskToken"','id="volgaDiskToken"','legacyAuth.disk_token_rejected'):self.assertEqual(changed.count(element),1)
   # An idle Volga server is "connecting"; its heading says what that means.
   self.assertIn("connecting:'waiting for a client'",changed);self.assertIn("['auth_blocked','stopped']",changed)
   for summary in ('>Legacy browser cookies<','>Volga browser cookies<'):self.assertEqual(changed.count(summary),1)
@@ -210,11 +283,14 @@ class VolgaTests(unittest.TestCase):
     self.assertEqual(r.patch_panel(panel),fresh)
     # An unexpected layout changes nothing: installation then rolls back.
     with self.assertRaises(ValueError):r.patch_panel(panel.replace(r.COOKIE_HTML,r.COOKIE_HTML.replace('Copy as cURL','Copy')))
-  # A v4.1.0/v4.1.1 panel changes only its section headings.
-  v3=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V3).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V3)
-  self.assertNotEqual(r.VOLGA_HOOK,r.VOLGA_HOOK_V3);self.assertIn('data-volga-panel="3"',v3)
-  self.assertEqual(r.patch_panel(v3),fresh)
+  # v4.1.0/v4.1.1 (v3) and v4.1.2-v4.1.5 (v4) panels: they shared the v4 script.
+  v3=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V3).replace(r.VOLGA_JS,r.VOLGA_JS_V4).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V3)
+  v4=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V4).replace(r.VOLGA_JS,r.VOLGA_JS_V4).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V4)
+  self.assertNotEqual(r.VOLGA_HOOK,r.VOLGA_HOOK_V3);self.assertIn('data-volga-panel="3"',v3);self.assertIn('data-volga-panel="4"',v4)
+  for old in (r.VOLGA_HTML_V4,r.VOLGA_JS_V4,r.VOLGA_HOOK_V4):self.assertIn('CookieBoth',old)
+  self.assertEqual(r.patch_panel(v3),fresh);self.assertEqual(r.patch_panel(v4),fresh)
   with self.assertRaises(ValueError):r.patch_panel(v3.replace(r.VOLGA_HOOK_V3,r.VOLGA_HOOK_V3.replace('waiting','idle')))
+  with self.assertRaises(ValueError):r.patch_panel(v4.replace(r.VOLGA_JS_V4,r.VOLGA_JS_V4.replace('cookieLinks','links')))
 
  def test_panel_status_carries_the_legacy_document_link(self):
   import openflux_auth as a
@@ -370,10 +446,10 @@ class VolgaTests(unittest.TestCase):
   with patch.object(self.runtime,'active',return_value=False):status=self.runtime.status()
   self.assertEqual(status['state'],'stopped')
   self.assertEqual(status['server_authentication']['state'],'connecting');self.assertFalse(status['server_authentication']['stale'])
-  # A server publishes at least every 10 min: 15 min old still counts, 21 min does not.
-  self.runtime.save(self.runtime.state/'peer-status.json',{'state':'connecting','reported_at':int(time.time())-900,'fetch_failed':False})
+  # A server publishes at least every hour: 70 min old still counts, 76 min does not.
+  self.runtime.save(self.runtime.state/'peer-status.json',{'state':'connecting','reported_at':int(time.time())-4200,'fetch_failed':False})
   with patch.object(self.runtime,'active',return_value=False):self.assertFalse(self.runtime.status()['server_authentication']['stale'])
-  self.runtime.save(self.runtime.state/'peer-status.json',{'state':'connecting','reported_at':int(time.time())-1260,'fetch_failed':False})
+  self.runtime.save(self.runtime.state/'peer-status.json',{'state':'connecting','reported_at':int(time.time())-4560,'fetch_failed':False})
   with patch.object(self.runtime,'active',return_value=False):self.assertTrue(self.runtime.status()['server_authentication']['stale'])
 
  def test_config_backups_keep_only_the_newest(self):

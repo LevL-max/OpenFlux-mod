@@ -458,6 +458,7 @@ def main():
             os.execv(c['binary'],[c['binary']]+c['args'])
         elif a.action=='status':
             import openflux_auth
+            openflux_auth.note_viewer()  # a client then fetches the server status within a minute
             result={'installed':identify(c),'role':c['role'],'channel':c['channel'],'authentication':openflux_auth.status()}
         elif a.action=='health':health(c,max(1,min(a.seconds,150)));result={'ok':True,'health':'passed'}
         elif a.action=='configure':
