@@ -435,8 +435,8 @@ class VolgaRuntime:
         # The server's verified report matters most while this client is stopped.
         peer=self.read(self.state/'peer-status.json')
         if peer:
-            # 1200 = recovery_crypto.STATUS_STALE_AFTER, kept literal to avoid importing cryptography here.
-            peer['stale']=bool(peer.get('fetch_failed')) or time.time()-peer.get('reported_at',0)>1200
+            import openflux_auth
+            peer['stale']=bool(peer.get('fetch_failed')) or time.time()-peer.get('reported_at',0)>openflux_auth.STATUS_STALE_AFTER
             out['server_authentication']=peer
         if not out['installed'] or not self.active():return out
         out.update(active=True,state='connecting',reason='Volga is connecting.')
@@ -562,28 +562,32 @@ class VolgaRuntime:
         return {'ok':True,'package':packet,'filename':self.disk_path(document).rsplit('/',1)[-1],'message':'Encrypted Volga recovery file ready.'}
 
     def recovery_poll(self):
-        import json,time,urllib.parse
+        import json,time,urllib.error
         from cryptography.hazmat.primitives import serialization
-        import recovery_crypto,recovery_inbox
+        import openflux_auth,recovery_crypto,recovery_inbox
         keys=self.path('/etc/openflux-recovery');token=(keys/'disk-token').read_text().strip()
+        if openflux_auth.disk_token_rejected(token):return  # Disk refused it: wait for a new token
         path=self.disk_path();state=self.read(self.state/'recovery.json',{'seen':[]})
         now=int(time.time())
-        def download(name,limit=230000):
-            link=recovery_inbox.fetch('https://cloud-api.yandex.net/v1/disk/resources/download?'+urllib.parse.urlencode({'path':name}),token=token)
-            return recovery_inbox.fetch(link['href'],limit=limit)
+        def refused(error):
+            if recovery_inbox.refused(error):
+                openflux_auth.reject_disk_token(token);return True
+            return False
         if self.node()['role']=='client':
             previous=self.read(self.state/'peer-status.json',{})
-            if now-int(previous.get('checked_at') or 0)<recovery_inbox.CLIENT_POLL_EVERY:return
+            if not recovery_inbox.client_poll_due(previous.get('checked_at'),now):return
             try:
                 public=serialization.load_pem_public_key((keys/'server-public.pem').read_bytes())
-                peer=recovery_crypto.verify_status(download(path+'.status.json',16000),public,protocol='volga')
+                peer=recovery_crypto.verify_status(recovery_inbox.download(path+'.status.json',token,16000),public,protocol='volga')
                 if peer['reported_at']<previous.get('reported_at',0):raise ValueError('Older Volga status')
                 peer.update(checked_at=int(time.time()),fetch_failed=False)
-            except Exception:
+            except Exception as e:
+                refused(e)
                 peer=previous or {'state':'unknown','reported_at':0}
                 peer.update(checked_at=int(time.time()),fetch_failed=True,stale=True)
             self.save(self.state/'peer-status.json',peer);return
         private=serialization.load_pem_private_key((keys/'server-private.pem').read_bytes(),password=None)
+        status={}
         try:
             status=self.status()
             view={k:status.get(k) for k in ('state','reason','needs_cookies','active','carrier_ready')}
@@ -592,17 +596,22 @@ class VolgaRuntime:
                 recovery_inbox.upload(path+'.status.json',recovery_crypto.sign_status(status,private,protocol='volga'),token)
                 state.update(status_published_at=now,status_signature=signature)
                 state.pop('status_publish_error',None)
-        except Exception:state['status_publish_error']='Volga status upload unavailable'
+        except Exception as e:
+            state['status_publish_error']='Volga status upload unavailable'
+            if refused(e):self.save(self.state/'recovery.json',state);return
+        # A server that waits for cookies checks its inboxes often; one that works rarely.
+        waiting=status.get('needs_cookies') or status.get('state')=='auth_blocked'
+        every=recovery_inbox.SERVER_POLL_WAITING if waiting else recovery_inbox.SERVER_POLL_EVERY
         # Separate document files prevent A being overwritten by B before the
         # next poll. Failure/missing cookies for A never delay processing B.
         for document in dict.fromkeys(self.configuration()['documents']):
             inbox=self.disk_path(document);entry=state.setdefault('inboxes',{}).setdefault(inbox,{})
-            if now<entry.get('next_check',0) or now-int(entry.get('checked_at') or 0)<recovery_inbox.SERVER_POLL_EVERY:continue
+            if now<entry.get('next_check',0) or now-int(entry.get('checked_at') or 0)<every:continue
             entry['checked_at']=now
             try:
                 md5=recovery_inbox.disk_md5(inbox,token)
                 if md5 and md5==entry.get('md5'):continue  # unchanged since it was last downloaded
-                packet=download(inbox);entry['md5']=md5
+                packet=recovery_inbox.download(inbox,token);entry['md5']=md5
                 if packet.get('id') not in state['seen']:
                     trusted=list((keys/'trusted-senders').glob('*.pem'))
                     if (keys/'sender-public.pem').exists():trusted.append(keys/'sender-public.pem')
@@ -618,9 +627,17 @@ class VolgaRuntime:
                     self.import_cookies(document,payload['curl'])
                     state['seen']=(state['seen']+[ident])[-256:];entry['applied_at']=int(time.time())
                 entry.update(failures=0,next_check=0,inbox='Applied or already seen')
-            except Exception:
+            except Exception as e:
+                auth=refused(e)
+                missing=isinstance(e,urllib.error.HTTPError) and e.code==404
+                disk=isinstance(e,(OSError,recovery_inbox.DiskCaptcha)) and not missing
+                # Only a downloaded package has an outcome that stands while the
+                # file is unchanged. After a Disk failure it is downloaded again.
+                if disk or missing:entry.pop('md5',None)
                 failures=entry.get('failures',0)+1
-                entry.update(failures=failures,next_check=int(time.time())+min(900,60*2**min(failures,4)),inbox='Waiting for a valid Volga recovery file')
+                entry.update(failures=failures,next_check=int(time.time())+min(900,60*2**min(failures,4)),
+                    inbox='DISK_AUTH_REQUIRED' if auth else 'Waiting for a Volga recovery file' if missing else 'Yandex Disk temporarily unavailable' if disk else 'Waiting for a valid Volga recovery file')
+                if auth:break
         self.save(self.state/'recovery.json',state)
 
     def limits(self):
@@ -1081,6 +1098,22 @@ VOLGA_HOOK=VOLGA_HOOK_V3.replace('''  const cookieServer=p=>!p.state||p.stale?'u
   cookieBadge($('#volgaCookieBadge'),selected==='volga',vp.state,volgaServer,{connected:'client connected',connecting:'waiting for a client',auth_blocked:'AUTH_BLOCKED',stopped:'stopped'},['auth_blocked','stopped']);
 ''')
 
+# v5: one browser login per place. The combined "save here and send to
+# server" button put one session on the server and on this mini-PC at once;
+# Yandex treats such a session as stolen. The sections say when the server
+# picks cookies up and show a Disk token that Yandex refused.
+VOLGA_HTML_V4,VOLGA_JS_V4,VOLGA_HOOK_V4=VOLGA_HTML,VOLGA_JS,VOLGA_HOOK
+SEPARATE_LOGINS='<p class="small">Use a separate browser login for the server and for each mini-PC, so that no session is used in two places. If you can, copy the server&#39;s cURL from a browser that goes online through the server.</p>'
+VOLGA_HTML=(VOLGA_HTML_V4.replace('data-volga-panel="4"','data-volga-panel="5"')
+    .replace('<button id="openfluxCookieBoth">Save here and send to server</button>','')
+    .replace('<button id="volgaCookieBoth">Save here and send to server</button>','')
+    .replace('<p class="small">The server copy is encrypted for the paired server and goes through your Yandex Disk folder; the server checks it once a minute. Pairing and the Disk path are configured with openfluxctl recovery.</p>',
+             SEPARATE_LOGINS+'<p class="small">The server copy is encrypted for the paired server and goes through your Yandex Disk folder. The server picks it up within 2 minutes while it waits for cookies, otherwise within 15 minutes. Pairing and the Disk path are configured with openfluxctl recovery.</p><p class="small" id="openfluxDiskToken" role="status"></p>')
+    .replace('<p class="small" id="volgaCookieResult" role="status"></p>','<p class="small" id="volgaCookieResult" role="status"></p>'+SEPARATE_LOGINS+'<p class="small" id="volgaDiskToken" role="status"></p>'))
+VOLGA_JS=VOLGA_JS_V4[:VOLGA_JS_V4.index('async function cookiesBoth(')]+VOLGA_JS_V4[VOLGA_JS_V4.index('function cookieLinks('):VOLGA_JS_V4.index("$('#openfluxCookieBoth').onclick")]
+VOLGA_HOOK=VOLGA_HOOK_V4.replace("$('#openfluxCookieBoth').disabled=$('#volgaCookieBoth').disabled=$('#volgaRecoverySend').disabled=!legacyAuth.recovery_upload_ready;",
+    "$('#volgaRecoverySend').disabled=!legacyAuth.recovery_upload_ready;\n  for(const el of [$('#openfluxDiskToken'),$('#volgaDiskToken')]){el.textContent=legacyAuth.disk_token_rejected?'Yandex Disk refused the Disk OAuth token. Upload a new one under Configuration (OpenFlux · Disk OAuth token); the server cookies and status wait until then.':'';el.style.color='#d97706';}\n  ")
+
 # Older status lines read the selected protocol's status. Both sections are
 # visible now, so the Legacy lines read Legacy's own status.
 LEGACY_STATUS_V3=(
@@ -1098,10 +1131,13 @@ def patch_volga_panel(text):
         old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);"
         new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
         if new not in text:text=replace(text,old,new)
-    if 'data-volga-panel="4"' in text:return text
+    if 'data-volga-panel="5"' in text:return text
+    if 'data-volga-panel="4"' in text:
+        # A v4.1.2-v4.1.5 panel: the combined send button goes, the notes change.
+        return replace(replace(replace(text,VOLGA_HTML_V4,VOLGA_HTML),VOLGA_JS_V4,VOLGA_JS),VOLGA_HOOK_V4,VOLGA_HOOK)
     if 'data-volga-panel="3"' in text:
-        # A v4.1.0/v4.1.1 panel: only the section headings change.
-        return replace(replace(text,VOLGA_HTML_V3,VOLGA_HTML),VOLGA_HOOK_V3,VOLGA_HOOK)
+        # A v4.1.0/v4.1.1 panel: it had the v4 script.
+        return replace(replace(replace(text,VOLGA_HTML_V3,VOLGA_HTML),VOLGA_JS_V4,VOLGA_JS),VOLGA_HOOK_V3,VOLGA_HOOK)
     # The Legacy cookie sections sit right after the Volga block. Exact matches
     # or no change at all: an unexpected layout makes the install roll back.
     legacy=COOKIE_HTML+RECOVERY_HTML

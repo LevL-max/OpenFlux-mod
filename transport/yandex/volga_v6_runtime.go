@@ -28,9 +28,10 @@ type volgaV6RuntimeConfig struct {
 	// stopped delivering to an idle carrier about two minutes after its
 	// authorization. The carriers are still renewed, each renewal a fresh
 	// authorization of every lane: every QuietRecycleInterval as a safety
-	// net, and after a push socket reconnect or a refused ping. A peer frame
-	// restores normal recovery; a live session's yamux keepalives arrive every
-	// 5 s. A client keeps fast recovery.
+	// net, and after a push socket reconnect or a refused ping. A carrier
+	// may keep only one lane per document up while waiting. A peer frame
+	// restores normal recovery and wakes the other lanes; a live session's
+	// yamux keepalives arrive every 5 s. A client keeps fast recovery.
 	Quiet                bool
 	QuietAfter           time.Duration
 	QuietRecycleInterval time.Duration
@@ -335,6 +336,8 @@ func (r *volgaV6Runtime) Tick(ctx context.Context, now time.Time) volgaV6Runtime
 	result := volgaV6RuntimeTickResult{}
 	if r.peerActivity.Swap(false) {
 		r.recovery.PeerActive()
+		// A client is here: bring up the lanes a waiting server held down.
+		r.manager.Wake(now)
 	}
 	result.Retired = r.retireDue(now)
 	health := r.manager.snapshotAt(now).ActiveHealth

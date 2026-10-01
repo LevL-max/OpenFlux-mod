@@ -244,7 +244,8 @@ func runSession(parent context.Context, c config, key []byte) error {
 			}
 			s := tr.Snapshot(now)
 			event("status", map[string]any{"stream": ep.Stats(), "auth_blocked": tr.AuthBlocked(), "post_failures": s.Carrier.ActiveHealth.PostFailures, "http_statuses": s.Carrier.ActiveHealth.HTTPStatuses, "repairs": s.RepairsSent, "ws_reconnects": s.Carrier.ActiveHealth.WSReconnects, "handoffs": s.Carrier.Handoffs, "waiting_for_peer": s.WaitingForPeer,
-				"session_pings": s.Carrier.ActiveHealth.SessionPings, "session_ping_failures": s.Carrier.ActiveHealth.SessionPingFailures, "last_handoff_reason": s.LastHandoffReason})
+				"session_pings": s.Carrier.ActiveHealth.SessionPings, "session_ping_failures": s.Carrier.ActiveHealth.SessionPingFailures, "last_handoff_reason": s.LastHandoffReason,
+				"lanes_up": s.Carrier.ActiveHealth.LanesUp, "lanes_total": s.Carrier.ActiveHealth.LanesTotal})
 		}
 	}
 	cancel()

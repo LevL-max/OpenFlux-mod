@@ -14,6 +14,16 @@ NATIVE = NODE.get('backend') == 'systemd' if NODE else CLIENT
 STATE = pathlib.Path('/var/lib/openflux-auth/status.json')
 STORE = pathlib.Path(NODE.get('cookie_store') or ('/var/lib/openflux-client/yandex-cookies.json' if CLIENT else '/var/lib/openflux-yandex/yandex-cookies.json'))
 HELPER = '/usr/local/sbin/openflux-yandex-cookie-import'
+# Once Yandex Disk refuses a token (HTTP 401/403), no node sends it again: the
+# fingerprint of the refused token is kept here until the token file changes.
+DISK_TOKEN_REJECTED = pathlib.Path('/var/lib/openflux-recovery/disk-token-rejected')
+# A client fetches the server status from Disk while someone looks at it: the
+# panel, or openfluxctl status. Each look touches this file.
+STATUS_VIEWED = pathlib.Path('/run/openflux-status-viewed')
+VIEW_WINDOW = 180
+# A signed server status older than this is shown as unknown; the server
+# publishes on a change and at least hourly. Same as recovery_crypto.STATUS_STALE_AFTER.
+STATUS_STALE_AFTER = 4500
 EVENTS = [
  ('CONNECTING: retry scheduled','connecting','Connection interrupted. Reconnecting…'),
  ('OnlyOffice authentication successful','connected','OnlyOffice authentication succeeded.'),
@@ -42,6 +52,37 @@ def save(path,data):
         os.chmod(tmp,0o600);os.replace(tmp,path)
     finally:
         if os.path.exists(tmp):os.unlink(tmp)
+
+def disk_token_fingerprint(token):
+    return hashlib.sha256(token.encode()).hexdigest()[:16]
+
+def disk_token_rejected(token=None):
+    """Yandex Disk refused this exact token; a new token in the file ends the wait."""
+    try:
+        if token is None:token=(RECOVERY_DIR/'disk-token').read_text().strip()
+        return DISK_TOKEN_REJECTED.read_text().strip()==disk_token_fingerprint(token)
+    except OSError:return False
+
+def reject_disk_token(token):
+    DISK_TOKEN_REJECTED.parent.mkdir(mode=0o700,parents=True,exist_ok=True)
+    fd=os.open(DISK_TOKEN_REJECTED,os.O_WRONLY|os.O_CREAT|os.O_TRUNC,0o600)
+    with os.fdopen(fd,'w') as f:f.write(disk_token_fingerprint(token)+'\n')
+
+def status_viewed():
+    """Someone looked at this client's status within VIEW_WINDOW."""
+    try:return time.time()-STATUS_VIEWED.stat().st_mtime<VIEW_WINDOW
+    except OSError:return False
+
+def note_viewer():
+    """Mark that someone looks at the status; the first look in a while fetches now."""
+    if not CLIENT:return
+    fresh=status_viewed()
+    try:STATUS_VIEWED.touch()
+    except OSError:return
+    if not fresh:
+        for unit in ('openflux-recovery-inbox.service','openflux-volga-recovery.service'):
+            try:command(['systemctl','start','--no-block',unit],timeout=5)
+            except (OSError,subprocess.SubprocessError):pass
 
 def classify(message):
     for needle,state,reason in EVENTS:
@@ -80,6 +121,7 @@ def current_document_url():
 
 def snapshot():
     try:
+        note_viewer()
         legacy=dict(status(),document_url=current_document_url())
         from router_integration import VolgaRuntime
         runtime=VolgaRuntime()
@@ -139,11 +181,11 @@ def _status():
     cfg = RECOVERY_DIR
     out['recovery_sender_ready'] = CLIENT and (cfg/'server-public.pem').is_file() and (cfg/'sender-private.pem').is_file()
     out['recovery_upload_ready'] = out['recovery_sender_ready'] and (cfg/'disk-token').is_file()
+    out['disk_token_rejected'] = (cfg/'disk-token').is_file() and disk_token_rejected()
     if CLIENT:
         try:
             peer=json.loads(pathlib.Path('/var/lib/openflux-recovery/peer-status.json').read_text())
-            # 1200 = recovery_crypto.STATUS_STALE_AFTER, kept literal to avoid importing cryptography here.
-            peer['stale']=bool(peer.get('fetch_failed')) or int(time.time())-peer.get('reported_at',0)>1200
+            peer['stale']=bool(peer.get('fetch_failed')) or int(time.time())-peer.get('reported_at',0)>STATUS_STALE_AFTER
             out['server_authentication']=peer
         except (OSError,ValueError):out['server_authentication']={'state':'unknown','stale':True,'reason':'Server status is not configured or has not arrived.'}
     if not CLIENT:

@@ -140,7 +140,12 @@ Use it when inbound SSH to the server is unavailable. Both nodes still need outb
 to the Yandex Disk API. The document's browser cookies and the Disk OAuth token are separate
 credentials: renewing one does not renew the other.
 
-1. Create/select a Yandex OAuth application for Disk and authorize your own account.
+1. Create/select a Yandex OAuth application for Disk and authorize your own account. Give
+   each node its own token: add `device_id` (6–50 characters) and `device_name` to the
+   authorization link, for example
+   `https://oauth.yandex.ru/authorize?response_type=token&client_id=CLIENT_ID&device_id=openflux-server&device_name=OpenFlux%20server`.
+   Yandex may treat one token used from several places at once as stolen, and a device
+   token can be revoked alone.
 2. For automatic upload **and server status**, grant Disk read and write access. Read-only
    access supports server downloads but cannot upload cookies or publish its status.
 3. Create a folder such as `OpenFlux Recovery` in your Disk. Choose a shared file path,
@@ -192,15 +197,20 @@ sudo openfluxctl cookies package --file browser-curl.txt --output server-recover
 
 Use the exact configured filename and replace the previous file. Packets are signed, encrypted
 for the paired server, valid for one hour and applied once. They contain cookies, not commands.
-The server checks the file every 2 minutes with one metadata request and downloads it only
-when it has changed. A blocked connection reloads fresh cookies without restarting the
-OpenFlux service. CAPTCHA may still require fresh browser cookies.
+The server checks the file every 15 minutes, and every 2 minutes while it waits for cookies,
+with one metadata request, and downloads it only when it has changed. A blocked connection
+reloads fresh cookies without restarting the OpenFlux service. CAPTCHA may still require
+fresh browser cookies.
 
 The server also signs its status and publishes `<cookie-file>.status.json` when the status
-changes, and at least every 10 minutes. The client fetches it every 5 minutes and verifies the
-signature using the paired server key. Status older than 20 minutes is shown as stale, never
-as a fresh successful connection. A missing Disk response is a channel failure, not proof that
-client or server authentication failed. Revoked/expired OAuth tokens require reauthorization.
+changes, and at least every hour. The client fetches it while someone looks at it (the panel
+or `openfluxctl status`), otherwise every 6 hours, and verifies the signature using the paired
+server key. Status older than 75 minutes is shown as stale, never as a fresh successful
+connection. A missing Disk response is a channel failure, not proof that client or server
+authentication failed. A download that a storage host does not answer is retried with a new
+link. When Disk refuses the token (HTTP 401/403), the node sends no further Disk request until
+the token file changes, and the panel says so: revoked or expired OAuth tokens require
+reauthorization.
 
 ## 5. Existing Mini-PC Router Panel installations
 
@@ -219,9 +229,11 @@ has one section per protocol, **Legacy browser cookies** and **Volga browser coo
 visible whichever protocol is selected: the server needs fresh cookies for either. Each section
 links its document(s), which open in a new tab, and shows this mini-PC's authentication and last
 failure. When Disk pairing is configured, it also shows the separately verified server state and
-response time; its heading names the selected protocol and highlights AUTH_BLOCKED. One pasted
-Copy as cURL can be saved here and sent to the server in one step, or used for either action alone,
-or downloaded as the encrypted server file. Sending needs a configured write-capable Disk token.
+response time; its heading names the selected protocol and highlights AUTH_BLOCKED. A pasted
+Copy as cURL is saved on this mini-PC, sent to the server, or downloaded as the encrypted server
+file; each is a separate action. Use a separate browser login for the server and for each
+mini-PC: Yandex may treat one browser session used from two places at once as stolen. Sending
+needs a configured write-capable Disk token.
 
 To attach the standalone CLI to an existing installation, use `adopt` with its actual paths:
 
@@ -323,7 +335,10 @@ and image are verified offline. Legacy keeps running independently. Updates keep
 the previous container for Rollback and remove older containers and images.
 
 Without a client the server stays quiet. It announces itself for 3 s after start,
-then sends no retries. Every lane pings its editor session once a minute, as an open
+then sends no retries. It keeps one lane per document up; the other lanes start when a
+client's first frame arrives. A lane that fails to start is retried after a pause that
+doubles from 30 s to 10 minutes, while the session uses the lanes that are up. The status
+line reports `lanes_up` of `lanes_total`. Every lane that is up pings its editor session once a minute, as an open
 browser tab does; without that ping Yandex stopped delivering a client's frames to an
 idle server about two minutes after its authorization. The server renews its lanes
 only as a safety net every 20 minutes, and when Yandex refuses a ping or the push
@@ -361,7 +376,8 @@ sends cannot overwrite one another. Common signed status is
 which must differ from Legacy. In the panel choose each document and send its
 fresh browser cURL via Disk, or download both encrypted files and upload them
 under their generated filenames in the configured folder. The server checks each
-inbox every 2 minutes by metadata. Missing/failed inboxes back off independently, up
+inbox every 15 minutes by metadata, every 2 minutes while Volga waits for cookies.
+Missing/failed inboxes back off independently, up
 to 15 minutes. Only unexpired, signed, unreplayed
 packets for configured documents are accepted. Status/errors omit cookie values.
 
