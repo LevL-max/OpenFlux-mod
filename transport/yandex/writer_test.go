@@ -1,8 +1,11 @@
 package yandex
 
 import (
+	"bytes"
 	"encoding/base64"
+	"errors"
 	"fmt"
+	"net"
 	"sort"
 	"testing"
 	"time"
@@ -95,10 +98,89 @@ func TestWriterExitsAfterStop(t *testing.T) {
 	}
 }
 
+func TestWriterDropsAConnectionThatStopsTakingData(t *testing.T) {
+	old := docWriteTimeout
+	docWriteTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { docWriteTimeout = old })
+	release := make(chan struct{})
+	t.Cleanup(func() { close(release) })
+	// The peer never reads: the socket buffers fill and the next write blocks,
+	// as on a half-open connection.
+	session := handshakePeer(t, func(*websocket.Conn) { <-release })
+	session.WriteQueue = make(chan []byte, 1024)
+	tr := NewYandexDocsTransport("https://disk.yandex.ru/i/test", transport.DefaultConfig())
+	tr.BaseTransport.Start()
+	tr.session = session
+	tr.SetConnected(true)
+	t.Cleanup(func() { tr.Stop() })
+	go tr.writerLoop()
+	packet := bytes.Repeat([]byte{1}, 32<<10)
+	for deadline := time.Now().Add(10 * time.Second); tr.IsConnected(); {
+		if time.Now().After(deadline) {
+			t.Fatal("the writer kept a connection whose peer stopped taking data")
+		}
+		select {
+		case session.WriteQueue <- packet:
+		default:
+			time.Sleep(time.Millisecond)
+		}
+	}
+	// The connection is closed, so a reader blocked on it fails at once.
+	if _, _, err := session.Conn.ReadMessage(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("read after the drop: %v, want a closed connection", err)
+	}
+}
+
+func TestKeepAliveFailureDropsTheConnection(t *testing.T) {
+	session := handshakePeer(t, func(c *websocket.Conn) { c.ReadMessage() })
+	cfg := transport.DefaultConfig()
+	cfg.KeepAliveInterval = 20 * time.Millisecond
+	tr := NewYandexDocsTransport("https://disk.yandex.ru/i/test", cfg)
+	tr.BaseTransport.Start()
+	tr.session = session
+	tr.SetConnected(true)
+	t.Cleanup(func() { tr.Stop() })
+	session.Conn.UnderlyingConn().Close() // every write now fails
+	go tr.keepAliveLoop()
+	for deadline := time.Now().Add(5 * time.Second); tr.IsConnected(); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("a failed keep-alive left the connection up")
+		}
+	}
+}
+
+// BenchmarkDocWrite measures one cursor message with and without the write
+// deadline: the per-packet cost of bounding writes.
+func BenchmarkDocWrite(b *testing.B) {
+	for _, timeout := range []time.Duration{0, 20 * time.Second} {
+		b.Run(fmt.Sprintf("deadline=%v", timeout), func(b *testing.B) {
+			old := docWriteTimeout
+			docWriteTimeout = timeout
+			defer func() { docWriteTimeout = old }()
+			session := handshakePeer(b, func(c *websocket.Conn) {
+				c.SetReadDeadline(time.Time{})
+				for {
+					if _, _, err := c.ReadMessage(); err != nil {
+						return
+					}
+				}
+			})
+			msg := []byte(cursorMessage(bytes.Repeat([]byte{7}, 1200)))
+			b.SetBytes(int64(len(msg)))
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := session.safeWrite(websocket.TextMessage, msg); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestExtractCursorPayload(t *testing.T) {
 	tr := &YandexDocsTransport{}
 	for msg, want := range map[string]string{
-		`42["message",{"type":"cursor","cursor":"18;QUJD"}]`:           "QUJD",
+		`42["message",{"type":"cursor","cursor":"18;QUJD"}]`:            "QUJD",
 		`42["message",{"type":"cursor","cursor":"7;AAAA","other":"x"}]`: "AAAA",
 		`42["message",{"type":"cursor"}]`:                               "",
 	} {
