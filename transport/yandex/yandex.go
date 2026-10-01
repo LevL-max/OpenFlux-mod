@@ -47,9 +47,17 @@ type DocSession struct {
 	writeMu    sync.Mutex
 }
 
+// docWriteTimeout bounds one WebSocket write to the document. A write into a
+// half-open connection (a NAT or network change dropped it) would otherwise
+// block until the kernel gives up, many minutes later. Zero disables it.
+var docWriteTimeout = 20 * time.Second
+
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if docWriteTimeout > 0 {
+		_ = s.Conn.SetWriteDeadline(time.Now().Add(docWriteTimeout))
+	}
 	return s.Conn.WriteMessage(messageType, data)
 }
 
@@ -494,7 +502,8 @@ func (t *YandexDocsTransport) writerLoop() {
 
 		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
 			t.perfWriteErrors.Add(1)
-			utils.Debugf("[YDOCS] Write error: %v", err)
+			utils.Debugf("[YDOCS] Write error, reconnecting: %v", err)
+			t.dropConnection(session)
 		} else {
 			t.perfWSWrites.Add(1)
 			t.perfWSBytes.Add(uint64(len(msg)))
@@ -606,11 +615,19 @@ func (t *YandexDocsTransport) keepAliveLoop() {
 
 		if session != nil && session.Conn != nil && t.IsConnected() {
 			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
-				utils.Debugf("[YDOCS] Keep-alive failed: %v", err)
-				t.SetConnected(false)
+				utils.Debugf("[YDOCS] Keep-alive failed, reconnecting: %v", err)
+				t.dropConnection(session)
 			}
 		}
 	}
+}
+
+// dropConnection ends a connection that failed a write: a WebSocket write
+// error leaves it unusable. The reader, which may sit in ReadMessage on a
+// half-open socket, then fails at once and schedules the reconnect.
+func (t *YandexDocsTransport) dropConnection(session *DocSession) {
+	t.SetConnected(false)
+	_ = session.Conn.Close()
 }
 
 func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
