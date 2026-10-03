@@ -202,6 +202,8 @@ jobs:
           - While it waits for a client, a Volga server keeps one lane per document up and starts the others when a client arrives, halving its editor pings and renewals.
           - Router Panel asks for a separate browser login for the server and for each mini-PC; the combined save-and-send buttons are gone.
           - A Legacy connection to the document that stops taking writes, a half-open socket after a NAT or network change, is closed and reconnected within about 20 s instead of hanging for many minutes.
+          - A failed protocol switch in Router Panel says why (fresh browser cookies needed, no connection within the check time, another operation running) instead of a generic error; the previous protocol is selected again as before.
+          - Router Panel shows the router's last OPENFLUX start, restart or automatic return to the previous mode, and the mode buttons show the reason a mode did not start.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart running installations.
