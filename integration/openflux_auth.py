@@ -21,6 +21,8 @@ DISK_TOKEN_REJECTED = pathlib.Path('/var/lib/openflux-recovery/disk-token-reject
 # panel, or openfluxctl status. Each look touches this file.
 STATUS_VIEWED = pathlib.Path('/run/openflux-status-viewed')
 VIEW_WINDOW = 180
+# A router core that switches LAN modes records its last OPENFLUX outcome here.
+ROUTER_EVENT = pathlib.Path('/var/lib/router-core/openflux-last.json')
 # A signed server status older than this is shown as unknown; the server
 # publishes on a change and at least hourly. Same as recovery_crypto.STATUS_STALE_AFTER.
 STATUS_STALE_AFTER = 4500
@@ -119,6 +121,16 @@ def current_document_url():
         except (OSError,ValueError):pass
     return url if isinstance(url,str) and url.startswith('https://') else None
 
+def router_event():
+    """The router's last OPENFLUX start, restart or automatic return to another
+    mode (router-core), shown as plain text in the panel; None without one."""
+    try:data=json.loads(ROUTER_EVENT.read_text())
+    except (OSError,ValueError):return None
+    if not isinstance(data,dict) or not isinstance(data.get('at'),int) or not isinstance(data.get('message'),str):return None
+    kind=data.get('kind') if data.get('kind') in ('start','restart','fallback','watchdog') else 'event'
+    message=''.join(c for c in data['message'] if c.isprintable())[:600]
+    return {'kind':kind,'ok':data.get('ok') is True,'at':data['at'],'message':message}
+
 def snapshot():
     try:
         note_viewer()
@@ -129,7 +141,7 @@ def snapshot():
             volga=runtime.status();selected=runtime.node().get('active_transport','yandex')
         except Exception:
             volga={'state':'unknown','configured':False,'installed':False};selected='yandex'
-        return {**(volga if selected=='volga' else legacy),'active_transport':selected,'protocols':{'yandex':legacy,'volga':volga}}
+        return {**(volga if selected=='volga' else legacy),'active_transport':selected,'protocols':{'yandex':legacy,'volga':volga},'router_event':router_event()}
     except Exception:return {'state':'unknown','reason':'Authentication status unavailable. Check the status helper.'}
 
 def _status():

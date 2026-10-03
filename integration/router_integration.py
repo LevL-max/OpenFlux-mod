@@ -1114,6 +1114,37 @@ VOLGA_JS=VOLGA_JS_V4[:VOLGA_JS_V4.index('async function cookiesBoth(')]+VOLGA_JS
 VOLGA_HOOK=VOLGA_HOOK_V4.replace("$('#openfluxCookieBoth').disabled=$('#volgaCookieBoth').disabled=$('#volgaRecoverySend').disabled=!legacyAuth.recovery_upload_ready;",
     "$('#volgaRecoverySend').disabled=!legacyAuth.recovery_upload_ready;\n  for(const el of [$('#openfluxDiskToken'),$('#volgaDiskToken')]){el.textContent=legacyAuth.disk_token_rejected?'Yandex Disk refused the Disk OAuth token. Upload a new one under Configuration (OpenFlux · Disk OAuth token); the server cookies and status wait until then.':'';el.style.color='#d97706';}\n  ")
 
+# v6: the router reports its last OPENFLUX start, restart or automatic return
+# to the previous mode (router-core /var/lib/router-core/openflux-last.json)
+# right under the protocol selector, for a day.
+VOLGA_HTML_V5,VOLGA_JS_V5,VOLGA_HOOK_V5=VOLGA_HTML,VOLGA_JS,VOLGA_HOOK
+VOLGA_HTML=VOLGA_HTML_V5.replace('data-volga-panel="5"','data-volga-panel="6"').replace(
+    '<span class="small" id="openfluxProtocolResult" role="status"></span>\n  </div>',
+    '<span class="small" id="openfluxProtocolResult" role="status"></span>\n  </div>\n  <p class="small" id="openfluxRouterEvent" role="status" style="margin:8px 0 0"></p>')
+VOLGA_JS=VOLGA_JS_V5
+VOLGA_HOOK=VOLGA_HOOK_V5+'''  const rev=of.router_event||null, revEl=$('#openfluxRouterEvent');
+  if(rev&&rev.at&&Date.now()/1000-rev.at<86400){const warn=!rev.ok||rev.kind==='watchdog'||rev.kind==='fallback';revEl.textContent='Router · '+new Date(rev.at*1000).toLocaleString()+': '+rev.message;revEl.style.color=warn?'#d97706':'';revEl.style.fontWeight=warn?'600':'';}else revEl.textContent='';
+'''
+
+# The mode buttons show why a mode did not start: the last line of the mode
+# controller, e.g. "OPENFLUX was not started: AUTH_BLOCKED… AWG kept serving
+# the LAN." Both router panel layouts get the same answer and timeout.
+MODE_API=(
+    ('ok,out,rc=run(["/usr/bin/env","ROUTER_UPDATER_LOCK_HELD=1",*cmd],400 if target=="openflux" else 180);actual=current_mode()',
+     'ok,out,rc=run(["/usr/bin/env","ROUTER_UPDATER_LOCK_HELD=1",*cmd],600 if target=="openflux" else 180);actual=current_mode()'),
+    ('ok,out,rc=run(["env","ROUTER_UPDATER_LOCK_HELD=1"]+cmd,340);actual=current_mode()',
+     'ok,out,rc=run(["/usr/bin/env","ROUTER_UPDATER_LOCK_HELD=1",*cmd],600 if target=="openflux" else 180);actual=current_mode()'),
+    ('return self.j({"ok":False,"error":f"{actual.upper()} remains selected; startup failed. Use Restart/Rotate or select another mode.","output":out[-5000:]},500)',
+     r'''return self.j({"ok":False,"error":(f"{target.upper()} was not started; {actual.upper()} is active." if actual!=target else f"{actual.upper()} remains selected; startup failed. Use Restart/Rotate or select another mode.")+"\n"+(out.strip().splitlines() or [""])[-1][-600:],"output":out[-5000:]},500)'''),
+    ('return self.j({"ok":False,"error":f"{actual.upper()} remains selected. Use Restart/Rotate to retry.\\n{out[-2000:]}","output":out[-5000:]},500)',
+     r'''return self.j({"ok":False,"error":(f"{target.upper()} was not started; {actual.upper()} is active." if actual!=target else f"{actual.upper()} remains selected; startup failed. Use Restart/Rotate or select another mode.")+"\n"+(out.strip().splitlines() or [""])[-1][-600:],"output":out[-5000:]},500)'''))
+
+def patch_mode_api(text):
+    # Optional: a layout without these lines keeps its own handler.
+    for old,new in MODE_API:
+        if text.count(old)==1:text=text.replace(old,new)
+    return text
+
 # Older status lines read the selected protocol's status. Both sections are
 # visible now, so the Legacy lines read Legacy's own status.
 LEGACY_STATUS_V3=(
@@ -1131,35 +1162,60 @@ def patch_volga_panel(text):
         old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);"
         new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
         if new not in text:text=replace(text,old,new)
-    if 'data-volga-panel="5"' in text:return text
-    if 'data-volga-panel="4"' in text:
+    if 'data-volga-panel="6"' in text:return text
+    if 'data-volga-panel="5"' in text:
+        # A v4.1.6/v4.1.7 panel: the router's OPENFLUX events line appears.
+        text=replace(replace(replace(text,VOLGA_HTML_V5,VOLGA_HTML),VOLGA_JS_V5,VOLGA_JS),VOLGA_HOOK_V5,VOLGA_HOOK)
+    elif 'data-volga-panel="4"' in text:
         # A v4.1.2-v4.1.5 panel: the combined send button goes, the notes change.
-        return replace(replace(replace(text,VOLGA_HTML_V4,VOLGA_HTML),VOLGA_JS_V4,VOLGA_JS),VOLGA_HOOK_V4,VOLGA_HOOK)
-    if 'data-volga-panel="3"' in text:
+        text=replace(replace(replace(text,VOLGA_HTML_V4,VOLGA_HTML),VOLGA_JS_V4,VOLGA_JS),VOLGA_HOOK_V4,VOLGA_HOOK)
+    elif 'data-volga-panel="3"' in text:
         # A v4.1.0/v4.1.1 panel: it had the v4 script.
-        return replace(replace(replace(text,VOLGA_HTML_V3,VOLGA_HTML),VOLGA_JS_V4,VOLGA_JS),VOLGA_HOOK_V3,VOLGA_HOOK)
-    # The Legacy cookie sections sit right after the Volga block. Exact matches
-    # or no change at all: an unexpected layout makes the install roll back.
-    legacy=COOKIE_HTML+RECOVERY_HTML
-    if 'data-volga-panel="2"' in text:
-        text=replace(replace(replace(text,VOLGA_HTML_V2+legacy,VOLGA_HTML),VOLGA_JS_V2,VOLGA_JS),VOLGA_HOOK_V2,VOLGA_HOOK)
-    elif 'id="openfluxProtocolControls"' in text:
-        # An rc1/rc2 panel.
-        text=replace(replace(replace(text,VOLGA_HTML_V1+legacy,VOLGA_HTML),VOLGA_JS_V1,VOLGA_JS),VOLGA_HOOK_V1,VOLGA_HOOK)
+        text=replace(replace(replace(text,VOLGA_HTML_V3,VOLGA_HTML),VOLGA_JS_V4,VOLGA_JS),VOLGA_HOOK_V3,VOLGA_HOOK)
     else:
-        text=replace(text,'import openflux_auth','import openflux_auth\nfrom router_integration import openflux_runtime_unit')
-        # Preserve card anchors and the existing bridge. Status queries follow the
-        # selected unit, including older panels using names without .service.
-        for literal in ('"openflux-yandex-client.service"',"'openflux-yandex-client.service'",'"openflux-yandex-client"',"'openflux-yandex-client'"):
-            text=text.replace(literal,'openflux_runtime_unit()')
-        marker='<div class="small" id="openfluxHealth" style="margin-top:8px"></div>'
-        text=replace(text,marker+legacy,marker+VOLGA_HTML)
-        marker="$('#openfluxState').textContent="
-        start=text.index(marker);end=text.index('\n',start)
-        text=text[:end]+VOLGA_HOOK+text[end:]
-        text=replace(text,'refreshNetwork();setInterval(refreshNetwork,5000);',VOLGA_JS+'\nrefreshNetwork();setInterval(refreshNetwork,5000);')
-    for old,new in LEGACY_STATUS_V3:text=replace(text,old,new)
-    return text
+        # The Legacy cookie sections sit right after the Volga block. Exact matches
+        # or no change at all: an unexpected layout makes the install roll back.
+        legacy=COOKIE_HTML+RECOVERY_HTML
+        if 'data-volga-panel="2"' in text:
+            text=replace(replace(replace(text,VOLGA_HTML_V2+legacy,VOLGA_HTML),VOLGA_JS_V2,VOLGA_JS),VOLGA_HOOK_V2,VOLGA_HOOK)
+        elif 'id="openfluxProtocolControls"' in text:
+            # An rc1/rc2 panel.
+            text=replace(replace(replace(text,VOLGA_HTML_V1+legacy,VOLGA_HTML),VOLGA_JS_V1,VOLGA_JS),VOLGA_HOOK_V1,VOLGA_HOOK)
+        else:
+            text=replace(text,'import openflux_auth','import openflux_auth\nfrom router_integration import openflux_runtime_unit')
+            # Preserve card anchors and the existing bridge. Status queries follow the
+            # selected unit, including older panels using names without .service.
+            for literal in ('"openflux-yandex-client.service"',"'openflux-yandex-client.service'",'"openflux-yandex-client"',"'openflux-yandex-client'"):
+                text=text.replace(literal,'openflux_runtime_unit()')
+            marker='<div class="small" id="openfluxHealth" style="margin-top:8px"></div>'
+            text=replace(text,marker+legacy,marker+VOLGA_HTML)
+            marker="$('#openfluxState').textContent="
+            start=text.index(marker);end=text.index('\n',start)
+            text=text[:end]+VOLGA_HOOK+text[end:]
+            text=replace(text,'refreshNetwork();setInterval(refreshNetwork,5000);',VOLGA_JS+'\nrefreshNetwork();setInterval(refreshNetwork,5000);')
+        for old,new in LEGACY_STATUS_V3:text=replace(text,old,new)
+    return patch_mode_api(text)
+
+# What a failed protocol switch tells the browser. Only these fixed texts are
+# shown, never the exception itself: no browser text, credential, raw
+# subprocess output or key path. Every switch restores the previous protocol.
+PROTOCOL_ERRORS=(
+    ('AUTH_BLOCKED','Legacy: Yandex asks for fresh browser cookies (captcha or login). Save fresh Legacy cookies on this mini-PC, then apply the protocol again.'),
+    ('Volga requires fresh browser cookies','Volga: Yandex asks for fresh browser cookies (captcha or login). Save fresh Volga cookies on this mini-PC for both documents, then apply the protocol again.'),
+    ('OpenFlux health check failed','Legacy did not connect within 100 s, or its exit IP was wrong. Check the server status in the Legacy section.'),
+    ('Volga did not pass session and exit-IP checks','Volga did not connect within 90 s, or its exit IP was wrong. Check the Volga server status.'),
+    ('OpenFlux stopped during its health check','The Legacy client stopped during its check; see openflux-clientctl logs on this mini-PC.'),
+    ('Volga stopped during health check','The Volga client stopped during its check; see journalctl -u openflux-volga-client on this mini-PC.'),
+    ('Install the verified Volga release first','Install the verified Volga release in Router Updater first.'),
+    ('This protocol is not installed or supported','This protocol is not installed or supported.'))
+BUSY_ERROR='Another router or Volga operation is running; retry shortly.'
+
+def protocol_error(exc):
+    text=str(exc)
+    if 'Another router/Volga operation is running' in text or isinstance(exc,BlockingIOError):return BUSY_ERROR
+    for needle,message in PROTOCOL_ERRORS:
+        if needle in text:return message+' The previous protocol is selected again.'
+    return 'Protocol switch failed; the previous protocol is selected again. Check this protocol’s cookies, configuration and server status.'
 
 def volga_panel_post(handler):
     import json,types,contextlib,fcntl
@@ -1189,8 +1245,11 @@ def volga_panel_post(handler):
                 elif handler.path.endswith('/cookies'):result=runtime.import_cookies(body.get('document'),body.get('curl'))
                 else:result=runtime.package_cookies(body.get('document'),body.get('curl'),upload=body.get('upload') is True)
         handler.j(result)
-    except Exception:
+    except Exception as exc:
         # No browser text, credential, raw subprocess output or key path is
-        # reflected to a remote browser on an exception.
-        handler.j({'ok':False,'error':'Volga operation failed. Check configuration, release availability and cookie pairing. Any runtime switch/update is restored on failure.'},400)
+        # reflected to a remote browser on an exception: fixed texts only.
+        if handler.path.endswith('/protocol'):error=protocol_error(exc)
+        elif isinstance(exc,BlockingIOError):error=BUSY_ERROR
+        else:error='Volga operation failed. Check configuration, release availability and cookie pairing. Any runtime switch/update is restored on failure.'
+        handler.j({'ok':False,'error':error},400)
     return True
