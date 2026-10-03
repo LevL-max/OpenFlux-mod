@@ -251,7 +251,7 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(router_integration.patch_panel(changed),changed)
   self.assertIn("'openflux-updater','openflux-volga-config'],modes:['openflux']",changed)
   self.assertIn("'openflux-cookies','openflux-volga-config']);",changed)
-  self.assertIn('data-volga-panel="5"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
+  self.assertIn('data-volga-panel="6"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
   # One browser login per place: no button puts one session on both, and a refused Disk token is shown.
   self.assertNotIn('CookieBoth',changed);self.assertNotIn('cookiesBoth',changed)
   self.assertEqual(changed.count(router_integration.SEPARATE_LOGINS),2)
