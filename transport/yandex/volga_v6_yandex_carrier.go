@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -211,6 +212,7 @@ func (c *volgaV6YandexCarrier) Generation() uint64 { return c.generation }
 
 func volgaV6HTTPTransport(cfg volgaV6YandexConfig) *http.Transport {
 	tr := &http.Transport{
+		DialContext:  ipv4First(&net.Dialer{}),
 		MaxIdleConns: cfg.MaxIdleConns, MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
 		IdleConnTimeout: cfg.IdleConnTimeout, DisableCompression: true,
 		ForceAttemptHTTP2: cfg.ForceHTTP2,
@@ -221,6 +223,16 @@ func volgaV6HTTPTransport(cfg volgaV6YandexConfig) *http.Transport {
 		tr.Protocols.SetHTTP2(cfg.HTTPProtocol == "http2")
 	}
 	return tr
+}
+
+// volgaV6WSDialer opens a carrier's push.yandex.ru socket, IPv4 first.
+func volgaV6WSDialer(handshake time.Duration) websocket.Dialer {
+	return websocket.Dialer{
+		HandshakeTimeout: handshake,
+		NetDialContext:   ipv4First(&net.Dialer{}),
+		ReadBufferSize:   4 << 20,
+		WriteBufferSize:  4 << 20,
+	}
 }
 
 func (c *volgaV6YandexCarrier) Start(ctx context.Context) error {
@@ -697,11 +709,7 @@ func (w *volgaV6YandexWS) connect() (bool, error) {
 	}
 	header.Set("Cookie", strings.Join(cookieParts, "; "))
 
-	dialer := websocket.Dialer{
-		HandshakeTimeout: w.carrier.config.WSHandshakeTimeout,
-		ReadBufferSize:   4 << 20,
-		WriteBufferSize:  4 << 20,
-	}
+	dialer := volgaV6WSDialer(w.carrier.config.WSHandshakeTimeout)
 	conn, _, err := dialer.DialContext(w.ctx, wsURL, header)
 	if err != nil {
 		return false, fmt.Errorf("volga v6 websocket dial: %w", err)

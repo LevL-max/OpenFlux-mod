@@ -246,7 +246,7 @@ func (rt browserStateRoundTripper) RoundTrip(req *http.Request) (*http.Response,
 	}
 	base := rt.base
 	if base == nil {
-		base = http.DefaultTransport
+		base = yandexHTTPTransport
 	}
 	return base.RoundTrip(clone)
 }
@@ -375,13 +375,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			userID = info.UserID
 		}
 
-		dialer := websocket.Dialer{
-			HandshakeTimeout: 15 * time.Second,
-			NetDialContext: (&net.Dialer{
-				Timeout:   10 * time.Second,
-				KeepAlive: 30 * time.Second,
-			}).DialContext,
-		}
+		dialer := docWSDialer()
 		headers := http.Header{}
 		_, browserUA := t.currentBrowserState()
 		headers.Set("User-Agent", browserUA)
@@ -459,6 +453,17 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			t.handleMessage(session, message)
 		}
 	}()
+}
+
+// docWSDialer opens the document WebSocket, IPv4 first (see dial.go).
+func docWSDialer() websocket.Dialer {
+	return websocket.Dialer{
+		HandshakeTimeout: 15 * time.Second,
+		NetDialContext: ipv4First(&net.Dialer{
+			Timeout:   10 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}),
+	}
 }
 
 func (t *YandexDocsTransport) writerLoop() {
@@ -919,7 +924,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 	cookieHeader, userAgent := t.currentBrowserState()
 	client := &http.Client{
 		Transport: browserStateRoundTripper{
-			base:      http.DefaultTransport,
+			base:      yandexHTTPTransport,
 			cookie:    cookieHeader,
 			userAgent: userAgent,
 		},
@@ -935,7 +940,7 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 	for bootstrapAttempt := 0; bootstrapAttempt < 3; bootstrapAttempt++ {
 		cookieHeader, userAgent = t.currentBrowserState()
 		client.Transport = browserStateRoundTripper{
-			base:      http.DefaultTransport,
+			base:      yandexHTTPTransport,
 			cookie:    cookieHeader,
 			userAgent: userAgent,
 		}

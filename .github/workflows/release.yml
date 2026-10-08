@@ -204,6 +204,8 @@ jobs:
           - A Legacy connection to the document that stops taking writes, a half-open socket after a NAT or network change, is closed and reconnected within about 20 s instead of hanging for many minutes.
           - A failed protocol switch in Router Panel says why (fresh browser cookies needed, no connection within the check time, another operation running) instead of a generic error; the previous protocol is selected again as before.
           - Router Panel shows the router's last OPENFLUX start, restart or automatic return to the previous mode, and the mode buttons show the reason a mode did not start.
+          - Legacy and Volga reach Yandex over IPv4 first and use IPv6 only when IPv4 fails, so a node whose network gains IPv6 keeps presenting the address its browser cookies and passed checks belong to.
+          - Built with Go 1.26.8, which carries the security fixes of Go 1.26.5 to 1.26.8 for TLS, HTTP, URL parsing and networking.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart running installations.

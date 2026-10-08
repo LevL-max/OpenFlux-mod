@@ -1,6 +1,6 @@
 module openflux-volga-lab
 
-go 1.26.4
+go 1.26.8
 
 require (
 	github.com/hashicorp/yamux v0.1.2
