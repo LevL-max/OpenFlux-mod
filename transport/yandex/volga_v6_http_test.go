@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestVolgaV6HTTPProtocolSelection(t *testing.T) {
@@ -34,6 +35,20 @@ func TestVolgaV6HTTPProtocolSelection(t *testing.T) {
 				t.Fatalf("negotiated %s for mode %s", resp.Proto, mode)
 			}
 		})
+	}
+}
+
+// Every V6 connection to Yandex dials IPv4 first (see dial.go).
+func TestVolgaV6DialsIPv4First(t *testing.T) {
+	if volgaV6HTTPTransport(defaultVolgaV6YandexConfig()).DialContext == nil {
+		t.Fatal("the relay transport has no IPv4-first dial")
+	}
+	if volgaV6WSDialer(time.Second).NetDialContext == nil {
+		t.Fatal("the push socket dialer has no IPv4-first dial")
+	}
+	tr, ok := newVolgaV6AuthProvider("").client(nil).Transport.(*http.Transport)
+	if !ok || tr.DialContext == nil {
+		t.Fatal("the authorization transport has no IPv4-first dial")
 	}
 }
 

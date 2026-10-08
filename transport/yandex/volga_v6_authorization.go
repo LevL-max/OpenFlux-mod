@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"html"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -212,7 +213,7 @@ func (p *volgaV6AuthProvider) client(cookies map[string]string) *http.Client {
 	}
 	rt := p.roundTripper
 	if rt == nil {
-		rt = &http.Transport{MaxIdleConns: 4, MaxIdleConnsPerHost: 4, IdleConnTimeout: 30 * time.Second}
+		rt = &http.Transport{DialContext: ipv4First(&net.Dialer{}), MaxIdleConns: 4, MaxIdleConnsPerHost: 4, IdleConnTimeout: 30 * time.Second}
 	}
 	if len(p.browserHeaders) != 0 {
 		rt = &volgaV6BrowserTransport{base: rt, headers: p.browserHeaders.Clone()}

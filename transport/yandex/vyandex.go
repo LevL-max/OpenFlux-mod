@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
@@ -148,6 +149,7 @@ func authorizeContext(ctx context.Context, docURL string) (*volgaAuth, error) {
 	session := &http.Client{
 		Jar: jar,
 		Transport: &http.Transport{
+			DialContext:         ipv4First(&net.Dialer{}),
 			MaxIdleConns:        100,
 			MaxIdleConnsPerHost: 100,
 			IdleConnTimeout:     90 * time.Second,
@@ -460,6 +462,7 @@ type relayClient struct {
 
 func newRelayClient(auth *volgaAuth, cfg VolgaConfig, stats *VolgaStats) *relayClient {
 	tr := &http.Transport{
+		DialContext:         ipv4First(&net.Dialer{}),
 		MaxIdleConns:        cfg.MaxIdleConns,
 		MaxIdleConnsPerHost: cfg.MaxIdleConnsPerHost,
 		IdleConnTimeout:     cfg.IdleConnTimeout,
@@ -791,6 +794,7 @@ func (w *wsListener) connect() error {
 
 	dialer := websocket.Dialer{
 		HandshakeTimeout: w.config.WSHandshakeTimeout,
+		NetDialContext:   ipv4First(&net.Dialer{}),
 		ReadBufferSize:   4 << 20,
 		WriteBufferSize:  4 << 20,
 	}
