@@ -251,7 +251,7 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(router_integration.patch_panel(changed),changed)
   self.assertIn("'openflux-updater','openflux-volga-config'],modes:['openflux']",changed)
   self.assertIn("'openflux-cookies','openflux-volga-config']);",changed)
-  self.assertIn('data-volga-panel="6"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
+  self.assertIn('data-volga-panel="7"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
   # One browser login per place: no button puts one session on both, and a refused Disk token is shown.
   self.assertNotIn('CookieBoth',changed);self.assertNotIn('cookiesBoth',changed)
   self.assertEqual(changed.count(router_integration.SEPARATE_LOGINS),2)
@@ -266,7 +266,7 @@ class VolgaTests(unittest.TestCase):
   self.assertEqual(changed.count('id="volgaOneDevice"'),1);self.assertIn("confirm('Volga works on one mini-PC at a time.",changed)
   # Both sections stay visible, so Legacy lines read Legacy's own status even while Volga is selected.
   self.assertNotRegex(changed,r'\bof\.(last_failure|recovery_sender_ready|recovery_upload_ready|server_authentication)\b')
-  self.assertLess(changed.index('const legacyAuth=of.protocols?.yandex||of'),changed.index('legacyAuth.last_failure'))
+  self.assertLess(changed.index('const legacyAuth=of.protocols?.yandex||of'),changed.index('legacyAuth.client_check'))
   # Document links are built with DOM calls from https URLs only; the panel embeds the JS in a Python string.
   for unsafe in ('innerHTML','\\','`'):self.assertNotIn(unsafe,router_integration.VOLGA_JS[len(router_integration.VOLGA_JS_V2):])
   self.assertIn("u.startsWith('https://')",router_integration.VOLGA_JS)
@@ -275,6 +275,7 @@ class VolgaTests(unittest.TestCase):
   r=router_integration;fresh=r.patch_panel(BASE_PANEL)
   def older(html,js,hook):
    text=fresh.replace(r.VOLGA_HTML,html+r.COOKIE_HTML+r.RECOVERY_HTML).replace(r.VOLGA_JS,js).replace(r.VOLGA_HOOK,hook)
+   text=text.replace(r.LEGACY_CHECK_V7[1],r.LEGACY_CHECK_V7[0])
    for old,new in r.LEGACY_STATUS_V3:text=text.replace(new,old)
    return text
   for name,html,js,hook in [('rc3',r.VOLGA_HTML_V2,r.VOLGA_JS_V2,r.VOLGA_HOOK_V2),('rc2',r.VOLGA_HTML_V1,r.VOLGA_JS_V1,r.VOLGA_HOOK_V1)]:
@@ -284,8 +285,8 @@ class VolgaTests(unittest.TestCase):
     # An unexpected layout changes nothing: installation then rolls back.
     with self.assertRaises(ValueError):r.patch_panel(panel.replace(r.COOKIE_HTML,r.COOKIE_HTML.replace('Copy as cURL','Copy')))
   # v4.1.0/v4.1.1 (v3) and v4.1.2-v4.1.5 (v4) panels: they shared the v4 script.
-  v3=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V3).replace(r.VOLGA_JS,r.VOLGA_JS_V4).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V3)
-  v4=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V4).replace(r.VOLGA_JS,r.VOLGA_JS_V4).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V4)
+  v3=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V3).replace(r.VOLGA_JS,r.VOLGA_JS_V4).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V3).replace(r.LEGACY_CHECK_V7[1],r.LEGACY_CHECK_V7[0])
+  v4=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V4).replace(r.VOLGA_JS,r.VOLGA_JS_V4).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V4).replace(r.LEGACY_CHECK_V7[1],r.LEGACY_CHECK_V7[0])
   self.assertNotEqual(r.VOLGA_HOOK,r.VOLGA_HOOK_V3);self.assertIn('data-volga-panel="3"',v3);self.assertIn('data-volga-panel="4"',v4)
   for old in (r.VOLGA_HTML_V4,r.VOLGA_JS_V4,r.VOLGA_HOOK_V4):self.assertIn('CookieBoth',old)
   self.assertEqual(r.patch_panel(v3),fresh);self.assertEqual(r.patch_panel(v4),fresh)

@@ -438,8 +438,12 @@ class VolgaRuntime:
             import openflux_auth
             peer['stale']=bool(peer.get('fetch_failed')) or time.time()-peer.get('reported_at',0)>openflux_auth.STATUS_STALE_AFTER
             out['server_authentication']=peer
-        if not out['installed'] or not self.active():return out
+        client=node['role']=='client'
+        if not out['installed'] or not self.active():
+            if client and out['installed']:out['client_check']=self.client_check(None)
+            return out
         out.update(active=True,state='connecting',reason='Volga is connecting.')
+        checks=[]
         if node['role']=='client':
             p=self.run(['systemctl','show',VOLGA_UNIT,'-p','InvocationID','--value'],check=False)
             invocation=p.stdout.strip()
@@ -451,7 +455,10 @@ class VolgaRuntime:
         for line in (p.stdout+'\n'+p.stderr).splitlines():
             try:e=json.loads(line)
             except ValueError:continue
+            if not isinstance(e,dict):continue
             kind=e.get('event');data=e.get('data')
+            check=self.check_event(e)
+            if check:checks.append(check)
             if kind=='carrier_started':out['carrier_ready']=True
             if kind=='auth_blocked' or kind=='status' and isinstance(data,dict) and data.get('auth_blocked'):
                 out.update(state='auth_blocked',needs_cookies=True,reason='Refresh browser cookies for Volga.')
@@ -459,8 +466,51 @@ class VolgaRuntime:
                 out.update(state='connected',needs_cookies=False,reason='Volga session is ready.')
             elif kind in ('session_closed','handshake_failed','connecting','stopped'):
                 out.update(state='connecting',reason='Volga is reconnecting.')
+        if client:out['client_check']=self.client_check(checks)
         out['checked_at']=int(time.time())
         return out
+
+    # Log lines that settle whether Yandex accepted this mini-PC's Volga cookies.
+    CHECK_PATTERN='"event":"(auth_blocked|session_ready|carrier_started)"|"auth_blocked":true'
+
+    @staticmethod
+    def check_event(e):
+        """(time, 'refused' or 'ok') for a Volga event about its cookies, else None."""
+        import datetime,re
+        kind=e.get('event');data=e.get('data')
+        if kind=='auth_blocked' or kind=='status' and isinstance(data,dict) and data.get('auth_blocked'):verdict='refused'
+        elif kind in ('session_ready','carrier_started'):verdict='ok'
+        else:return None
+        try:ts=datetime.datetime.fromisoformat(re.sub(r'(\.\d{6})\d+',r'\1',str(e.get('time'))).replace('Z','+00:00')).timestamp()
+        except ValueError:return None
+        return ts,verdict
+
+    def client_check(self,checks):
+        """This mini-PC's last verdict on its Volga cookies (openflux_auth.client_check).
+        checks are the running client's (time, verdict) pairs; for a stopped client
+        (None) the runs nobody polled are read back from the journal."""
+        import fcntl,json,time
+        import openflux_auth as auth
+        path=self.state/'client-check.json'
+        self.state.mkdir(parents=True,exist_ok=True,mode=0o700)
+        with open(self.state/'.client-check.lock','a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            rec=self.read(path,{}) or {};before=json.dumps(rec,sort_keys=True)
+            if checks is None:
+                checks=[];last=float(rec.get('scanned_at',0));started=time.time()
+                if started-last>=auth.SCAN_EVERY:
+                    p=self.run(['journalctl','--no-pager','-o','cat','-u',VOLGA_UNIT,'--since','@%d'%int(max(last-1,started-auth.SCAN_BACK)),'--grep',self.CHECK_PATTERN],check=False,timeout=20)
+                    for line in p.stdout.splitlines():
+                        try:e=json.loads(line)
+                        except ValueError:continue
+                        check=self.check_event(e) if isinstance(e,dict) else None
+                        if check:checks.append(check)
+                    rec['scanned_at']=started
+            for ts,verdict in checks:
+                if verdict=='refused':auth.record_check(rec,ts,'auth_blocked','Yandex asked for a captcha or login.')
+                else:auth.record_check(rec,ts,'connected','')
+            if json.dumps(rec,sort_keys=True)!=before:self.save(path,rec)
+        return auth.client_check(rec,[self.data/'cookies.json',self.data/'browser.json'])
 
     def health(self,seconds=90,require_session=True):
         import time
@@ -1126,6 +1176,30 @@ VOLGA_HOOK=VOLGA_HOOK_V5+'''  const rev=of.router_event||null, revEl=$('#openflu
   if(rev&&rev.at&&Date.now()/1000-rev.at<86400){const warn=!rev.ok||rev.kind==='watchdog'||rev.kind==='fallback';revEl.textContent='Router · '+new Date(rev.at*1000).toLocaleString()+': '+rev.message;revEl.style.color=warn?'#d97706':'';revEl.style.fontWeight=warn?'600':'';}else revEl.textContent='';
 '''
 
+# v7: this mini-PC's last check of its own cookies stays on the panel after the
+# client stops (it stops at once when Yandex refuses them). A refusal warns in
+# the section, on its badge and on the OPENFLUX card until fresh cookies are
+# saved or a later check passes; Legacy's old "last issue" line gives way to it.
+VOLGA_HTML_V6,VOLGA_JS_V6,VOLGA_HOOK_V6=VOLGA_HTML,VOLGA_JS,VOLGA_HOOK
+VOLGA_HTML=VOLGA_HTML_V6.replace('data-volga-panel="6"','data-volga-panel="7"')
+VOLGA_JS=VOLGA_JS_V6
+CLIENT_CHECK_JS='''  const checkText=(c,name)=>!c?'':c.result==='refused'?(c.cookies_saved_after?'fresh '+name+' cookies saved after Yandex refused the previous ones on '+new Date(c.at*1000).toLocaleString()+'; they are checked at the next start':new Date(c.at*1000).toLocaleString()+': Yandex did not accept these cookies (captcha or login) — save fresh '+name+' cookies on this mini-PC'):'last check '+new Date(c.at*1000).toLocaleString()+': cookies accepted';
+  const refused=c=>!!c&&c.result==='refused'&&!c.cookies_saved_after;
+  const clientBadge=p=>p.state==='stopped'&&refused(p.client_check)?'refused':p.state;
+'''
+VOLGA_HOOK=(VOLGA_HOOK_V6
+    .replace("  const cookieServer=(p,names)=>","  "+CLIENT_CHECK_JS.strip()+"\n  const cookieServer=(p,names)=>")
+    .replace("const warn=client==='auth_blocked'||alarms.includes(server.state)&&!server.stale;el.textContent=(active?' · selected':'')+' · '+(client==='auth_blocked'?'this mini-PC: AUTH_BLOCKED':'server: '+cookieServer(server,names));",
+             "const warn=client==='auth_blocked'||client==='refused'||alarms.includes(server.state)&&!server.stale;el.textContent=(active?' · selected':'')+' · '+(client==='auth_blocked'?'this mini-PC: AUTH_BLOCKED':client==='refused'?'this mini-PC: cookies refused':'server: '+cookieServer(server,names));")
+    .replace("cookieBadge($('#openfluxCookieBadge'),selected==='yandex',legacyAuth.state,","cookieBadge($('#openfluxCookieBadge'),selected==='yandex',clientBadge(legacyAuth),")
+    .replace("cookieBadge($('#volgaCookieBadge'),selected==='volga',vp.state,","cookieBadge($('#volgaCookieBadge'),selected==='volga',clientBadge(vp),")
+    .replace("stopped:'Stopped'})[vp.state]||'Unknown');\n",
+             "stopped:'Stopped'})[vp.state]||'Unknown')+(vp.state==='stopped'&&vp.client_check?' · '+checkText(vp.client_check,'Volga'):'');\n"
+             "  {const w=vp.state==='auth_blocked'||vp.state==='stopped'&&refused(vp.client_check);$('#volgaClientState').style.color=w?'#d97706':'';$('#volgaClientState').style.fontWeight=w?'600':'';}\n"
+             "  if(of.state==='stopped'&&refused((selected==='volga'?vp:legacyAuth).client_check))$('#openfluxState').textContent='Stopped · Yandex refused this mini-PC’s '+(selected==='volga'?'Volga':'Legacy')+' cookies — save fresh ones below';\n"))
+for _old in ("  const cookieServer=(p,names)=>","client==='refused'","clientBadge(legacyAuth),","clientBadge(vp),","checkText(vp.client_check,'Volga')"):
+    assert _old in VOLGA_HOOK,_old
+
 # The mode buttons show why a mode did not start: the last line of the mode
 # controller, e.g. "OPENFLUX was not started: AUTH_BLOCKED… AWG kept serving
 # the LAN." Both router panel layouts get the same answer and timeout.
@@ -1154,6 +1228,15 @@ LEGACY_STATUS_V3=(
     ("$('#openfluxRecoverySend').disabled=!of.recovery_upload_ready;","$('#openfluxRecoverySend').disabled=!legacyAuth.recovery_upload_ready;"),
     ("const peer=of.server_authentication||{}, ps=peer.status||{};","const peer=legacyAuth.server_authentication||{}, ps=peer.status||{};"))
 
+# v7: the Legacy section's "last client authentication issue" stayed forever,
+# even after later successes; it shows the last check's verdict instead.
+LEGACY_CHECK_V7=(LEGACY_STATUS_V3[0][1],
+    "{const lc=legacyAuth.client_check||null,el=$('#openfluxLastFailure');el.textContent=lc?'This mini-PC: '+checkText(lc,'Legacy'):'';el.style.color=refused(lc)?'#d97706':'';el.style.fontWeight=refused(lc)?'600':'';}")
+
+def patch_legacy_check(text):
+    old,new=LEGACY_CHECK_V7
+    return text if new in text else replace(text,old,new)
+
 def patch_volga_panel(text):
     if 'const CFG_GROUPS=' in text:
         old="'openflux-updater'],modes:['openflux']"
@@ -1162,8 +1245,11 @@ def patch_volga_panel(text):
         old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);"
         new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
         if new not in text:text=replace(text,old,new)
-    if 'data-volga-panel="6"' in text:return text
-    if 'data-volga-panel="5"' in text:
+    if 'data-volga-panel="7"' in text:return text
+    if 'data-volga-panel="6"' in text:
+        # A v4.1.8/v4.1.9 panel: the last cookie check of this mini-PC stays visible.
+        text=replace(replace(replace(text,VOLGA_HTML_V6,VOLGA_HTML),VOLGA_JS_V6,VOLGA_JS),VOLGA_HOOK_V6,VOLGA_HOOK)
+    elif 'data-volga-panel="5"' in text:
         # A v4.1.6/v4.1.7 panel: the router's OPENFLUX events line appears.
         text=replace(replace(replace(text,VOLGA_HTML_V5,VOLGA_HTML),VOLGA_JS_V5,VOLGA_JS),VOLGA_HOOK_V5,VOLGA_HOOK)
     elif 'data-volga-panel="4"' in text:
@@ -1194,7 +1280,7 @@ def patch_volga_panel(text):
             text=text[:end]+VOLGA_HOOK+text[end:]
             text=replace(text,'refreshNetwork();setInterval(refreshNetwork,5000);',VOLGA_JS+'\nrefreshNetwork();setInterval(refreshNetwork,5000);')
         for old,new in LEGACY_STATUS_V3:text=replace(text,old,new)
-    return patch_mode_api(text)
+    return patch_mode_api(patch_legacy_check(text))
 
 # What a failed protocol switch tells the browser. Only these fixed texts are
 # shown, never the exception itself: no browser text, credential, raw
