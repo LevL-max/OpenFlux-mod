@@ -91,6 +91,47 @@ def classify(message):
         if needle.lower() in message.lower():return state,reason
     return None
 
+# A stopped client still has a verdict on its cookies: the last check of the
+# last run. Runs nobody polled (a protocol check, a failed OPENFLUX start) are
+# read back from the journal, at most every SCAN_EVERY seconds; the first read
+# goes back SCAN_BACK seconds.
+SCAN_EVERY=10
+SCAN_BACK=3*86400
+# Cookies written this long after a refusal are new ones (a refused run itself
+# writes the store only before it is refused, after a first-tier captcha).
+SAVED_AFTER_MARGIN=2
+
+def record_check(out,ts,state,reason):
+    """Keep the newest refusal and the newest successful authentication."""
+    if state in ('auth_failed','auth_blocked'):
+        if ts>=float((out.get('last_failure') or {}).get('at',0)):out['last_failure']={'at':ts,'state':state,'reason':reason}
+    elif state=='connected' and ts>float((out.get('last_success') or {}).get('at',0)):out['last_success']={'at':ts}
+
+def client_check(state,cookie_files):
+    """This client's last verdict on its cookies: refused when Yandex asked for a
+    captcha or a login after the last successful authentication. Cookies saved
+    after that refusal are checked at the next start. None until a first check."""
+    failure=state.get('last_failure') or {};success=state.get('last_success') or {}
+    if failure.get('state')=='auth_blocked' and float(failure.get('at',0))>float(success.get('at',0)):
+        saved=0
+        for path in cookie_files:
+            try:saved=max(saved,path.stat().st_mtime)
+            except OSError:pass
+        return {'result':'refused','at':failure['at'],'cookies_saved_after':saved>float(failure['at'])+SAVED_AFTER_MARGIN}
+    if success.get('at'):return {'result':'ok','at':success['at']}
+    return None
+
+def scan_journal(out,since):
+    """Record the cookie checks of runs that ended before anyone polled them."""
+    pattern='|'.join(re.escape(e[0]) for e in EVENTS)
+    try:p=command(['journalctl','--no-pager','-o','json','-u',UNIT,'--since','@%d'%int(since),'--grep',pattern,'--case-sensitive=no'],timeout=20)
+    except (OSError,subprocess.SubprocessError):return
+    for line in p.stdout.splitlines():
+        try:
+            d=json.loads(line);ts=int(d['__REALTIME_TIMESTAMP'])/1e6;event=classify(str(d.get('MESSAGE','')))
+        except (ValueError,KeyError,TypeError):continue
+        if event:record_check(out,ts,*event)
+
 def runtime():
     if NATIVE:
         p=command(['systemctl','show',UNIT,'-p','ActiveState,InvocationID'])
@@ -152,10 +193,13 @@ def _status():
         failure['reason']='Previous authentication handshake did not complete; this did not confirm expired cookies.'
     active,invocation=runtime()
     same=previous.get('invocation')==invocation
-    out=dict(previous) if same else {'last_failure':previous.get('last_failure')}
+    out=dict(previous) if same else {k:previous[k] for k in ('last_failure','last_success','scanned_at') if previous.get(k)}
     out.update(active=active,invocation=invocation,checked_at=int(time.time()))
     if not active:
         out.update(state='stopped',reason='OpenFlux is stopped.')
+        last_scan=float(out.get('scanned_at',0))
+        if CLIENT and NATIVE and time.time()-last_scan>=SCAN_EVERY:
+            started=time.time();scan_journal(out,max(last_scan-1,started-SCAN_BACK));out['scanned_at']=started
     else:
         if not same:out.update(state='connecting',reason='Connecting to Yandex…')
         events=[]
@@ -185,8 +229,7 @@ def _status():
             if ts<float(out.get('event_at',0)) and same:continue
             state,reason=event
             out.update(state=state,reason=reason,event_at=ts)
-            if state in ('auth_failed','auth_blocked'):
-                out['last_failure']={'at':ts,'state':state,'reason':reason}
+            record_check(out,ts,state,reason)
         out.setdefault('state','connecting');out.setdefault('reason','Connecting to Yandex…')
     out['needs_cookies']=out['state']=='auth_blocked'
     out['cookie_store_present']=STORE.is_file()
@@ -195,6 +238,7 @@ def _status():
     out['recovery_upload_ready'] = out['recovery_sender_ready'] and (cfg/'disk-token').is_file()
     out['disk_token_rejected'] = (cfg/'disk-token').is_file() and disk_token_rejected()
     if CLIENT:
+        out['client_check']=client_check(out,[STORE])
         try:
             peer=json.loads(pathlib.Path('/var/lib/openflux-recovery/peer-status.json').read_text())
             peer['stale']=bool(peer.get('fetch_failed')) or int(time.time())-peer.get('reported_at',0)>STATUS_STALE_AFTER
@@ -206,7 +250,7 @@ def _status():
             out['recovery']={k:recovery[k] for k in ['checked_at','inbox','applied_at','needs_attention','next_check','status_published_at','status_publish_error'] if k in recovery}
         except (OSError,ValueError):pass
     save(STATE,out)
-    return {k:v for k,v in out.items() if k not in ('invocation','cursor')}
+    return {k:v for k,v in out.items() if k not in ('invocation','cursor','scanned_at')}
 
 def document_url():
     if NODE.get('document_url'): return NODE['document_url']

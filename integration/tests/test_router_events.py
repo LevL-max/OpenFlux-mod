@@ -35,14 +35,14 @@ def mode_handler(body):
 class RouterEventsTest(unittest.TestCase):
     def test_v5_panel_gains_the_router_event_line(self):
         fresh=r.patch_panel(BASE_PANEL)
-        self.assertIn('data-volga-panel="6"',fresh);self.assertEqual(fresh.count('id="openfluxRouterEvent"'),1)
+        self.assertIn('data-volga-panel="7"',fresh);self.assertEqual(fresh.count('id="openfluxRouterEvent"'),1)
         self.assertIn('of.router_event',fresh)
-        v5=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V5).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V5)
+        v5=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V5).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V5).replace(r.LEGACY_CHECK_V7[1],r.LEGACY_CHECK_V7[0])
         self.assertIn('data-volga-panel="5"',v5);self.assertNotIn('openfluxRouterEvent',v5)
         self.assertEqual(r.patch_panel(v5),fresh)
         self.assertEqual(r.patch_panel(fresh),fresh)
         # The panel embeds the script in a Python string: no backslashes or template literals.
-        for unsafe in ('innerHTML','\\','`'):self.assertNotIn(unsafe,r.VOLGA_HOOK[len(r.VOLGA_HOOK_V5):])
+        for unsafe in ('innerHTML','\\','`'):self.assertNotIn(unsafe,r.VOLGA_HOOK_V6[len(r.VOLGA_HOOK_V5):])
 
     def test_both_mode_handlers_show_the_controller_reason(self):
         for name,body in (('pc1',PC1_MODE),('pc2',PC2_MODE)):

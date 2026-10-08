@@ -206,6 +206,7 @@ jobs:
           - Router Panel shows the router's last OPENFLUX start, restart or automatic return to the previous mode, and the mode buttons show the reason a mode did not start.
           - Legacy and Volga reach Yandex over IPv4 first and use IPv6 only when IPv4 fails, so a node whose network gains IPv6 keeps presenting the address its browser cookies and passed checks belong to.
           - Built with Go 1.26.8, which carries the security fixes of Go 1.26.5 to 1.26.8 for TLS, HTTP, URL parsing and networking.
+          - Router Panel keeps this mini-PC's last check of its own cookies after the client stops. When Yandex refused them (captcha or login), the protocol's cookie section, its badge and the OPENFLUX card say so until fresh cookies are saved or a later check passes; Legacy's old "last issue" line no longer outlives later successes.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart running installations.
