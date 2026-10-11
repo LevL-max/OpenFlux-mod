@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Single-TCP-connection SHA-256 probe; no HTTP retry or resume.
+"""SHA-256 transfer probe; one TCP connection per file, no retry or resume.
 
 Run origin only on a private address reachable from the exit container.
 This script does not change services, routes, firewall rules or credentials.
 """
 import argparse
+import concurrent.futures
 import hashlib
 import http.client
 import http.server
@@ -86,7 +87,7 @@ class Origin(http.server.BaseHTTPRequestHandler):
         self.wfile.write(payload)
 
 
-def probe(args, direction):
+def probe(args, direction, connection_index=0):
     class Connection(http.client.HTTPConnection):
         def connect(self):
             sock = socket.create_connection((args.socks_host, args.socks_port), args.timeout)
@@ -108,7 +109,7 @@ def probe(args, direction):
     size, rate = args.mib << 20, args.rate_kib << 10
     conn = Connection(args.host, args.port, timeout=args.timeout)
     start, transferred = time.monotonic(), 0
-    row = dict(direction=direction, requested=size, rate_limit_Bps=rate,
+    row = dict(direction=direction, requested=size, rate_limit_Bps=rate, connection_index=connection_index,
                connections=1, started_at=time.time(), integrity=False)
     try:
         if direction == 'download':
@@ -163,14 +164,30 @@ def main():
     parser.add_argument('--rate-kib', type=int, default=0)
     parser.add_argument('--timeout', type=float, default=600)
     parser.add_argument('--direction', choices=('download', 'upload', 'both'), default='both')
+    parser.add_argument('--connections', type=int, default=1, help='Concurrent independent TCP transfers, 1..8')
     args = parser.parse_args()
-    if not 1 <= args.mib <= 512 or args.rate_kib < 0 or args.timeout <= 0:
-        parser.error('Invalid size, rate or timeout')
+    if not 1 <= args.mib <= 512 or args.rate_kib < 0 or args.timeout <= 0 or not 1 <= args.connections <= 8:
+        parser.error('Invalid size, rate, timeout or connection count')
     if args.mode == 'origin':
         http.server.ThreadingHTTPServer((args.host, args.port), Origin).serve_forever()
     else:
         directions = ('download', 'upload') if args.direction == 'both' else (args.direction,)
-        return 0 if all(probe(args, direction) for direction in directions) else 1
+        for direction in directions:
+            if args.connections == 1:
+                if not probe(args, direction): return 1
+                continue
+            started = time.time()
+            with concurrent.futures.ThreadPoolExecutor(args.connections) as pool:
+                results = list(pool.map(lambda index: probe(args, direction, index), range(args.connections)))
+            elapsed = time.time() - started
+            valid = all(results)
+            total = (args.mib << 20) * args.connections
+            print(json.dumps(dict(aggregate=True, direction=direction, connections=args.connections,
+                                  integrity=valid, bytes=total if valid else None, started_at=started,
+                                  finished_at=time.time(), seconds=round(elapsed, 3),
+                                  mbps=round(total * 8 / elapsed / 1e6, 3) if valid else None)), flush=True)
+            if not valid: return 1
+        return 0
 
 
 if __name__ == '__main__':

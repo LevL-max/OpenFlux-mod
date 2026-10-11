@@ -252,6 +252,7 @@ func (t *MailruDocsTransport) Start() error {
 	t.baseUserID = randUserID()
 	utils.SafeGo("mailru.keepAlive", t.keepAliveLoop)
 	utils.SafeGo("mailru.stats", t.perfStatsLoop)
+	utils.SafeGo("mailru.documentKey", func() { t.documentKeyLoop(30 * time.Second) })
 	if t.editorActivity {
 		utils.SafeGo("mailru.editorActivity", t.editorActivityLoop)
 	}

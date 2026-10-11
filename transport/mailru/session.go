@@ -135,3 +135,49 @@ func (t *MailruDocsTransport) perfStatsLoop() {
 		previousWrites, previousBytes = writes, bytes
 	}
 }
+
+// A public URL can acquire a new editor key while an old WebSocket remains
+// healthy. Both sessions authorize, but their cursors belong to different rooms.
+// Refresh metadata without disturbing a connection whose key is unchanged.
+func (t *MailruDocsTransport) documentKeyLoop(interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-t.done:
+			return
+		case <-ticker.C:
+			t.refreshDocumentKey()
+		}
+	}
+}
+
+func (t *MailruDocsTransport) refreshDocumentKey() {
+	t.Mu.RLock()
+	session := t.session
+	ready := t.IsConnected() && t.IsRunning()
+	t.Mu.RUnlock()
+	if !ready || session == nil {
+		return
+	}
+	info, err := t.fetchDocInfo(t.weblink)
+	if err != nil {
+		if t.IsRunning() {
+			t.statusThrottled("key-refresh", time.Minute, "[M-DOCS] cannot refresh document metadata; keeping current connection")
+		}
+		return
+	}
+	if info.DocKey == session.Info.DocKey {
+		return
+	}
+	t.Mu.Lock()
+	current := t.session == session && t.IsRunning() && t.IsConnected()
+	if current {
+		t.SetConnected(false)
+	}
+	t.Mu.Unlock()
+	if current {
+		utils.Statusf("[M-DOCS] document key changed; reconnecting to current editor session")
+		_ = session.Conn.Close() // reader owns reconnect and fetches a fresh token
+	}
+}
