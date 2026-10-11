@@ -38,7 +38,7 @@ func main() {
 	mailruEditorActivity := flag.Bool("mailru-editor-activity", false, "Mail.ru: send fake saveChanges edits like a live editor (changes the document)")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
 	yandexSafeMode := flag.Bool("yandex-safe-mode", false, "Fragment Legacy cursor payloads below 2600 bytes and pace all writes at 10/s (enable on both peers)")
-	yandexLanes := flag.Int("yandex-lanes", 1, "Legacy participant count: 1 or experimental 2 (2 requires safe mode on both peers)")
+	yandexLanes := flag.Int("yandex-lanes", 1, "Legacy participants: 1..8 (multiple participants require safe mode on both peers)")
 	yandexCookieFile := flag.String("yandex-cookie-file", "", "Optional one-time raw browser Cookie header seed")
 	yandexCookieStore := flag.String("yandex-cookie-store", "", "Persistent Yandex cookie store JSON path")
 	yandexUserAgent := flag.String("yandex-user-agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:153.0) Gecko/20100101 Firefox/153.0", "User-Agent used for Yandex HTTP/WebSocket bootstrap")
@@ -87,8 +87,8 @@ func main() {
 		log.Fatalf("Invalid --batch-delay-us: %d", *batchDelayUs)
 	}
 	var trans transport.Transport
-	if *yandexLanes < 1 || *yandexLanes > 2 || (*yandexLanes == 2 && (*transportType != "yandex" || !*yandexSafeMode)) {
-		log.Fatal("--yandex-lanes must be 1, or 2 with --transport=yandex --yandex-safe-mode=true")
+	if *yandexLanes < 1 || *yandexLanes > 8 || (*yandexLanes > 1 && (*transportType != "yandex" || !*yandexSafeMode)) {
+		log.Fatal("--yandex-lanes must be 1, or 2..8 with --transport=yandex --yandex-safe-mode=true")
 	}
 
 	switch *transportType {
@@ -108,10 +108,14 @@ func main() {
 			log.Printf("Yandex browser cookie seed imported")
 		}
 		if *yandexSafeMode {
+			*batchPackets = 1 // large aggregate fragments amplified loss in live cursor tests
 			yandexTransport.SetCursorSafety(2600, 100*time.Millisecond)
-			if *yandexLanes == 2 {
-				second := yandexTransport.NewParticipant()
-				striped, err := transport.NewStripedTransport([]transport.Transport{yandexTransport, second})
+			if *yandexLanes > 1 {
+				participants := []transport.Transport{yandexTransport}
+				for i := 1; i < *yandexLanes; i++ {
+					participants = append(participants, yandexTransport.NewParticipant())
+				}
+				striped, err := transport.NewStripedTransport(participants)
 				if err != nil {
 					log.Fatal(err)
 				}

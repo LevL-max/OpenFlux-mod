@@ -19,7 +19,7 @@ type stripeReplay struct {
 	last    time.Time
 }
 
-// StripedTransport distributes datagrams over two independent participants.
+// StripedTransport distributes datagrams over a bounded set of participants.
 // A document broadcasts to every participant, so receivers must discard echoes
 // and duplicates. TCP above this layer supplies ordering and retransmission.
 // Both endpoints must use the same wrapper; this is deliberately opt-in.
@@ -33,8 +33,8 @@ type StripedTransport struct {
 }
 
 func NewStripedTransport(lanes []Transport) (*StripedTransport, error) {
-	if len(lanes) != 2 {
-		return nil, errors.New("striping requires exactly two lanes")
+	if len(lanes) < 2 || len(lanes) > 8 {
+		return nil, errors.New("striping requires two to eight lanes")
 	}
 	s := &StripedTransport{lanes: append([]Transport(nil), lanes...), replay: make(map[[8]byte]*stripeReplay)}
 	if _, err := rand.Read(s.epoch[:]); err != nil {

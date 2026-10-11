@@ -3,6 +3,7 @@ package mailru
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -229,5 +230,39 @@ func TestTransportWaitsForEditorAuth(t *testing.T) {
 	}
 	if err := tr.Send(bytes.Repeat([]byte{7}, 1500)); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestStopCancelsHTTPBootstrap(t *testing.T) {
+	started := make(chan struct{})
+	canceled := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.Copy(io.Discard, r.Body)
+		close(started)
+		<-r.Context().Done()
+		close(canceled)
+	}))
+	defer srv.Close()
+	old := editAPI
+	editAPI = srv.URL
+	defer func() { editAPI = old }()
+	tr := NewMailruDocsTransport("test/doc", transport.DefaultConfig())
+	defer tr.Stop()
+	if err := tr.Start(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("bootstrap did not start")
+	}
+	tr.Stop()
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("HTTP bootstrap survived Stop")
+	}
+	if err := tr.Start(); err == nil {
+		t.Fatal("restarted a stopped transport")
 	}
 }

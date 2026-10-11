@@ -104,3 +104,34 @@ func TestStripesReplayWindowAndConcurrentBroadcast(t *testing.T) {
 		t.Fatal("malformed accepted")
 	}
 }
+
+func TestStripesFourAndEightParticipants(t *testing.T) {
+	for _, count := range []int{4, 8} {
+		lanes := make([]Transport, count)
+		for i := range lanes {
+			lane := &fragmentCapture{BaseTransport: NewBaseTransport(DefaultConfig())}
+			lane.SetConnected(true)
+			lanes[i] = lane
+		}
+		s, err := NewStripedTransport(lanes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := 0; i < count*3; i++ {
+			if err := s.Send([]byte{byte(i)}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, lane := range lanes {
+			if len(lane.(*fragmentCapture).frames) != 3 {
+				t.Fatal("unbalanced lane distribution")
+			}
+		}
+	}
+	if _, err := NewStripedTransport(make([]Transport, 9)); err == nil {
+		t.Fatal("unbounded lane count")
+	}
+	if _, err := NewStripedTransport(nil); err == nil {
+		t.Fatal("empty pool")
+	}
+}

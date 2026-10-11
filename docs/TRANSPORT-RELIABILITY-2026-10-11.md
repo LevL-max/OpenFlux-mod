@@ -18,11 +18,13 @@ WebSocket dialing, an in-progress authentication, timers and the writer. Readine
 queue drops, write failures and reconnects appear in `[M-PERF]` status lines.
 Document-changing fake editor activity remains off by default.
 
-Legacy has an opt-in `--yandex-safe-mode=true` profile. Enable it on **both peers**;
-also match `--compression` and `--batch-packets`. It limits complete serialized
+Legacy has an opt-in `--yandex-safe-mode=true` profile. Enable it on **both peers**
+with matching `--compression`. It forces single-packet batching, overriding
+`--batch-packets`, because the four-packet live trial stalled during upload.
+It limits complete serialized
 cursor messages to 2600 bytes and spaces all application WebSocket writes,
 including heartbeat/control replies, by at least 100 ms. Below compression, an
-`OFL1` fragment envelope splits large packets or batches into at most 1800-byte
+`OFL1` fragment envelope splits large packets into at most 1800-byte
 binary messages. This is necessary because Linux raw sockets can deliver packets
 larger than the nominal 1500-byte MTU. Reassembly is bounded to 64 partial packets,
 128 KiB per packet and a 30-second expiry; it handles out-of-order and duplicate
@@ -35,15 +37,16 @@ The flag defaults to false to avoid silently changing existing installations.
 Mail.ru's cursor wire format remains unchanged. Volga's implementation and frozen
 performance profile are unchanged.
 
-Experimental `--yandex-lanes=2` adds two independent Legacy participants on the
+Experimental `--yandex-lanes=2..8` adds independent Legacy participants on the
 same document. It requires safe mode and matching settings on both peers. An
 `OFP1` envelope carries a random sender epoch and sequence number: receivers drop
 their own broadcasts and duplicates seen on the other connection. Replay memory
 is bounded to eight epochs with 4096 sequence slots each. Sends alternate between
 ready participants and can use the remaining participant during a reconnect.
 This provides neither packet acknowledgments nor lossless replay; TCP still
-handles packet loss. Both participants share a serialized cookie store so they
+handles packet loss. All participants share a serialized cookie store so they
 cannot race its temporary-file/rename transaction. The default is one participant.
+The extra 20-byte stripe envelope still fits below the 2600-byte serialized cap.
 
 ## Why adding connections is a separate question
 
