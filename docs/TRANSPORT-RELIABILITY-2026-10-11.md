@@ -18,6 +18,16 @@ WebSocket dialing, an in-progress authentication, timers and the writer. Readine
 queue drops, write failures and reconnects appear in `[M-PERF]` status lines.
 Document-changing fake editor activity remains off by default.
 
+The live A/B transition exposed a second failure: the same public URL can give
+the peers different internal editor keys. Both sockets remain authorized but are
+in separate rooms, so no cursor data crosses. Closing only the old-key test socket
+made it fetch the current key and immediately restored verified traffic.
+Mail.ru now refreshes document metadata every 30 seconds and reconnects only if
+the key changed. An unchanged key or a metadata request failure preserves the
+healthy socket; a stale response cannot close a replacement session. `Stop`
+cancels the refresh request as well. This adds at most two metadata requests per
+minute per running connected endpoint, separate from cursor traffic.
+
 Legacy has an opt-in `--yandex-safe-mode=true` profile. Enable it on **both peers**
 with matching `--compression`. It forces single-packet batching, overriding
 `--batch-packets`, because the four-packet live trial stalled during upload.
@@ -40,7 +50,7 @@ performance profile are unchanged.
 Experimental `--yandex-lanes=N` (2 through 32) adds independent Legacy participants on the
 same document. It requires safe mode and matching settings on both peers. An
 `OFP1` envelope carries a random sender epoch and sequence number: receivers drop
-their own broadcasts and duplicates seen on the other connection. Replay memory
+their own broadcasts and duplicates seen on other connections. Replay memory
 is bounded to eight epochs with 4096 sequence slots each. Sends alternate between
 ready participants and can use the remaining participant during a reconnect.
 This provides neither packet acknowledgments nor lossless replay; TCP still
@@ -90,12 +100,129 @@ after the origin confirms the byte count and digest. A timeout after `send()` is
 not evidence that those bytes arrived. Short tests measure rate; rate-limited long
 tests exercise connection lifetime and must not be presented as maximum speed.
 
+### Legacy: measured application throughput on one document
+
+The setting is participants **per endpoint**: `--yandex-lanes=32` opens 32 on
+Mini PC2 and 32 on AWS, all using the same document URL. The number of independent
+HTTP transfers is a separate setting. No extra documents are needed.
+
+| Participants per endpoint | Download, Mbit/s | Upload, Mbit/s | File per direction |
+| ---: | ---: | ---: | ---: |
+| 1 | 0.063 | 0.055 | 1 MiB |
+| 2 | 0.112 | 0.107 | 1 MiB |
+| 4 | 0.241 | 0.211 | 1 MiB |
+| 8 | 0.704 | 0.265 | 1 MiB |
+| 16 | 1.171 | 0.414 | 1 MiB |
+| 32 | 1.070 | 0.368 | 1 MiB |
+| 32, warmed up | 1.426 | 0.405 | 8 MiB |
+| 32, four concurrent TCP files | 1.973 aggregate | 1.357 aggregate | 4 × 2 MiB |
+
+Every table entry passed end-to-end SHA-256. The short runs were sequential,
+not repeated randomized trials; warm-up and carrier conditions affect the
+comparison. The 16-to-32 result does not establish a hard provider limit.
+The 16/32-participant tests used runtime commit `af3677e` (SHA-256 `19817520...`).
+The later Mail.ru key-refresh change does not alter Legacy. Earlier runs used
+the intermediate hashes listed in the evidence.
+
+The parallel run passed all eight file hashes: four downloads followed by four
+uploads. It did not send both directions simultaneously. Aggregate rates use the
+wall time for the complete group, not a sum of each stream's individual rate.
+
+With 32 participants per endpoint, `curl --socks5-hostname` fetched the HTTPS HTML
+of example.com, www.wikipedia.org and www.python.org with status 200 and normal
+certificate verification. Total times were 1.018, 1.054 and 0.526 seconds.
+This is a page-body smoke test, not a rendered browser test including images,
+scripts and interactive applications. It supports trying this profile for light
+browsing; video and heavy sites were not tested.
+
+During load, the AWS test container used approximately 16% of one CPU with 16
+participants and 33% with 32. Those are point samples, not average/peak guarantees.
+At the latter sample its memory was about 15 MiB and Mini PC2's about 34 MiB.
+Duplicate document broadcasts consume network and decoding work on each receiver;
+physical transport counters therefore greatly exceed unique application bytes.
+Thousands of users across a service do not establish the capacity of one document
+with every participant continuously transmitting. This experiment bounds the
+setting at 32 and does not attempt unbounded connection creation.
+
+The four-packet batching trial stalled on upload and was stopped. Safe mode now
+forces one packet per batch. The initial 45-second single-lane upload timeout
+also failed; its bytes accepted by the local socket are not delivered throughput.
+Both failed attempts are retained in the evidence rather than counted as passes.
+
+### Mail.ru: baseline and final candidate
+
+| Build / test | Download, Mbit/s | Upload, Mbit/s | Integrity |
+| --- | ---: | ---: | --- |
+| Installed v4.2.0, 16 MiB per direction | 28.797 | 2.539 | Both pass |
+| Installed v4.2.0, 64 MiB capped at 512 KiB/s | 4.239 | 4.110 | Both pass despite reconnects |
+| Intermediate candidate after manual key recovery, 16 MiB | 27.701 | 42.763 | Both pass |
+| Final candidate with key refresh, uncapped 256 MiB | 21.787 | 6.092 | Both pass |
+
+The final 256 MiB download took 98.569 seconds and upload 352.508 seconds, on
+one TCP connection per file without retry/resume. No established Mail.ru socket
+closed during those transfers. Initial connection attempts retried twice before
+authorization; the counter therefore was not zero even though the established
+connections remained stable. The baseline repeated close 1005 at roughly
+62-second intervals on both peers. Its file hashes still passed, so the evidence
+does not imply that every old-version reconnect destroys the inner TCP session.
+
+The earlier 256 MiB attempt on the intermediate candidate failed with zero bytes
+received because the peers had different editor keys despite identical public
+URLs. Matching the keys restored transfer, and the final candidate adds periodic
+key refresh. The failed attempt remains in the evidence. The automatic key-change
+path is covered by a mock editor that changes rooms and verifies reauthorization;
+the live key-mismatch diagnosis used a manually forced socket reconnect.
+
+These are sequential, single-site observations, not randomized A/B trials.
+Short and long file sizes differ, so 42.763 Mbit/s must not be presented as
+sustained upload capacity or compared directly with the 256 MiB result.
+The long upload is usable but remains substantially slower than the download;
+this branch does not claim to restore a stable 18–29 Mbit/s upload rate.
+
+The final recovery test closed two TLS sockets in the isolated exit container,
+including the document WebSocket. The established document socket
+reconnected in 1.458 seconds. The original TCP download completed all 32 MiB in
+62.554 seconds with the expected SHA-256, with no HTTP retry/resume. The recorded
+fault timestamp falls inside the transfer. This tests a brief external socket
+failure, not an exit-process restart or an arbitrarily long network outage.
+
+After testing, AWS's original Mail.ru and Yandex exit services were active again,
+its Volga exit remained inactive, and all three installed Mini PC2 clients were
+inactive as initially observed. Both installed executable hashes were unchanged.
+No temporary test units/container/timers remained; both temporary directories,
+including copied cookies and private logs, were removed. Mini PC1 was not changed.
+
 Final measured results and machine restoration are recorded in the accompanying
-delta and JSON evidence. A close reported as 1005 means the Close frame carried
+[delta](deltas/OpenFlux_Delta_2026-10-11_transport-reliability.md) and
+[JSON evidence](evidence/transport-reliability-2026-10-11.json).
+A close reported as 1005 means the Close frame carried
 no status code; it does not identify the provider's reason or prove a fixed TTL.
 See [RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455#section-7.4.1).
 
 ## Reproduce and hand off
+
+The final Mail.ru runtime source is commit `72672c2ace08037c4a86bda0c00924db490ecfbd`.
+Subsequent evidence/probe documentation changes do not change that executable.
+The Linux amd64 candidate built without stripping has SHA-256
+`9bb08cb236703e632f631da1598f78f2fa309b4f14ead6aff4653e289dc632d4`.
+Legacy's live matrix used the otherwise identical Legacy code at `af3677e`, with
+executable SHA-256 `19817520cf612eaaa17ad72290844a6baf7739eb4dd76aed0c3b9065cbe12117`.
+Release/CI builds using different linker flags have different hashes.
+
+For the measured Legacy pool, add the following to the usual runtime invocation
+on **both** Mini PC2 and AWS, keeping their existing client/exit roles, URL and
+cookie-store configuration:
+
+```sh
+--transport=yandex --yandex-safe-mode=true --yandex-lanes=32 --compression=true
+```
+
+Use one active mini-PC. `--yandex-lanes=16` is a lower-resource trial option;
+its completed measurements are the short runs above. The router UI and generated
+units do not automatically enable these experimental flags. A permanent rollout
+must preserve them in both launch configurations; merging this branch alone does
+not enable the pool. Keep the current executables/configuration as rollback
+checkpoints and change both Legacy endpoints together.
 
 Build the normal executable with Go 1.26.8:
 
@@ -123,7 +250,17 @@ python3 scripts/transport_probe.py client --host PRIVATE_ORIGIN_IP --mib 16
 python3 scripts/transport_probe.py client --host PRIVATE_ORIGIN_IP --mib 64 --rate-kib 512
 # Legacy needs a timeout longer than a complete 1 MiB transfer at its low rate.
 python3 scripts/transport_probe.py client --host PRIVATE_ORIGIN_IP --mib 1 --timeout 600
+# Four simultaneous files through an already-running Legacy participant pool:
+python3 scripts/transport_probe.py client --host PRIVATE_ORIGIN_IP --mib 2 --connections 4 --timeout 120
 ```
+
+For the Mail.ru recovery case, transfer a 32 MiB download with `--rate-kib 512`
+and `--direction download`. During that transfer, record a Unix timestamp and
+close the TLS socket in the **isolated test exit container's** network namespace
+(`nsenter --target TEST_EXIT_PID --net ss -K dport = 443`). Record the number of
+sockets closed. The probe must complete on its original TCP connection with the
+correct digest, and the fault timestamp must fall between its start and finish.
+The experiment does not restart the exit process or its network namespace.
 
 For an isolated lane experiment, build `./cmd/legacy-lane-probe`, stop the other
 Legacy participants, and use the same future Unix `--start` on AWS (`--role 1`)
