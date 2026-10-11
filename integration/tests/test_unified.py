@@ -211,7 +211,7 @@ class ServerUpdaterTests(unittest.TestCase):
   self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup);root=self.root=pathlib.Path(self.temp.name)
   self.stack=contextlib.ExitStack();self.addCleanup(self.stack.close)
   self.state=root/'state';self.state.mkdir();self.lib=root/'lib';self.lib.mkdir();self.binary=root/'legacy';self.binary.write_bytes(b'legacy v4.1.0-rc3')
-  for obj,name,value in [(n,'STATE',self.state),(n,'HELPER',root/'helper'),(n,'VOLGA_BINARY',root/'opt'/'openflux-volga'),(n,'VOLGA_INSTALLED',root/'volga-state'/'installed.json'),
+  for obj,name,value in [(n,'UNIT_DIR',root/'units'),(n,'STATE',self.state),(n,'HELPER',root/'helper'),(n,'VOLGA_BINARY',root/'opt'/'openflux-volga'),(n,'VOLGA_INSTALLED',root/'volga-state'/'installed.json'),
                          (n,'VOLGA_CONFIG',root/'volga.json'),(r,'VOLGA_CONFIG',root/'volga.json'),(r,'VOLGA_BINARY',root/'opt'/'openflux-volga')]:
    self.stack.enter_context(patch.object(obj,name,value))
   (root/'volga.json').write_text('{}');(self.lib/'openflux_node.py').write_text('old updater')

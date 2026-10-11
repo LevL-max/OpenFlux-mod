@@ -44,7 +44,7 @@ func TestWriterCursorPrefixIsThePacketLength(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer tr.BaseTransport.Stop()
-	tr.session = &DocSession{Conn: conn, WriteQueue: make(chan []byte, 16)}
+	tr.session = &DocSession{Conn: conn, WriteQueue: make(chan queuedPacket, 16)}
 	tr.SetConnected(true)
 	go tr.writerLoop()
 

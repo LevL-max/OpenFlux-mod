@@ -1,0 +1,1291 @@
+{
+  "schema_version": 1,
+  "date_utc": "2026-10-11",
+  "base_commit": "8a5e21fd82a062bb9047423ae7d76550af08ac71",
+  "tested_mailru_runtime_source_commit": "72672c2ace08037c4a86bda0c00924db490ecfbd",
+  "tested_legacy_runtime_source_commit": "af3677e04a92b02db3a8a5e3d2b8f663c5279930",
+  "final_executable_sha256": "9bb08cb236703e632f631da1598f78f2fa309b4f14ead6aff4653e289dc632d4",
+  "installed_baseline_sha256": "7279771e182cc5103efc5b6531893f919749d1c793591bb3026fd2e722e6adda",
+  "build": {
+    "go": "1.26.8",
+    "GOOS": "linux",
+    "GOARCH": "amd64",
+    "CGO_ENABLED": "0",
+    "command": "go build -trimpath -buildvcs=false"
+  },
+  "topology": {
+    "client": "Mini PC2",
+    "exit": "existing AWS",
+    "mini_pc1": "not modified",
+    "same_document_url_per_protocol": true,
+    "installed_binaries_replaced": false,
+    "router_configuration_changed": false
+  },
+  "method": {
+    "file": "deterministic pseudorandom data, SHA-256 verified at receiver",
+    "tcp_connections_per_file": 1,
+    "http_retry_or_resume": false,
+    "upload_rate_valid_only_after_origin_digest": true,
+    "mbps": "decimal Mbit/s of verified application bytes",
+    "rate_limited_runs_are_not_maximum_speed": true,
+    "parallel_runs": "directions sequential; four simultaneous independent files within each direction",
+    "broadcast_duplicates_excluded_from_useful_rate": true
+  },
+  "legacy": {
+    "pool_final_executable_sha256": "19817520cf612eaaa17ad72290844a6baf7739eb4dd76aed0c3b9065cbe12117",
+    "short_runs": [
+      {
+        "case": "legacy-download",
+        "direction": "download",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791743084.1083465,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 134.344,
+        "mbps": 0.062,
+        "finished_at": 1791743218.4525862,
+        "participants_per_endpoint": 1,
+        "executable_sha256": "5ca7b204fd81e1add624d5a34fdffba8312f7cc93c3b375617c98e18a02eaec7",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-upload",
+        "direction": "upload",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791743218.45275,
+        "error": "TimeoutError: timed out",
+        "integrity": false,
+        "bytes": 1048576,
+        "seconds": 45.309,
+        "finished_at": 1791743263.7621534,
+        "participants_per_endpoint": 1,
+        "executable_sha256": "5ca7b204fd81e1add624d5a34fdffba8312f7cc93c3b375617c98e18a02eaec7",
+        "batch_packets": 1,
+        "invalid_socket_based_mbps": 0.185,
+        "mbps": null,
+        "note": "Historical probe counted local socket bytes. Delivery was not confirmed; this is a failed test."
+      },
+      {
+        "case": "legacy-download",
+        "direction": "download",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791743460.4228,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 132.503,
+        "mbps": 0.063,
+        "finished_at": 1791743592.9253001,
+        "participants_per_endpoint": 1,
+        "executable_sha256": "f84a01ecfdabcefccf1533f6a4f1e2f5c3ec375984bf40c675db8f29778a6328",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-upload",
+        "direction": "upload",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791743592.9254599,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 151.284,
+        "mbps": 0.055,
+        "finished_at": 1791743744.208975,
+        "participants_per_endpoint": 1,
+        "executable_sha256": "f84a01ecfdabcefccf1533f6a4f1e2f5c3ec375984bf40c675db8f29778a6328",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-download",
+        "direction": "download",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791744218.8529665,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 133.373,
+        "mbps": 0.063,
+        "finished_at": 1791744352.22612,
+        "participants_per_endpoint": 1,
+        "executable_sha256": "db3312f1ba5d81e09c238fed9b9900e5846750174fcd49a7a0f4e680b9287bdb",
+        "batch_packets": 4
+      },
+      {
+        "case": "legacy-download",
+        "direction": "download",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791744634.757303,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 74.952,
+        "mbps": 0.112,
+        "finished_at": 1791744709.7087948,
+        "participants_per_endpoint": 2,
+        "executable_sha256": "74eb131b6b3c6b7c86e0201d2c22d73da7057b5346de53950811f13341e6bc0a",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-upload",
+        "direction": "upload",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791744709.7089813,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 78.64,
+        "mbps": 0.107,
+        "finished_at": 1791744788.3493736,
+        "participants_per_endpoint": 2,
+        "executable_sha256": "74eb131b6b3c6b7c86e0201d2c22d73da7057b5346de53950811f13341e6bc0a",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-download",
+        "direction": "download",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791744849.7458942,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 34.835,
+        "mbps": 0.241,
+        "finished_at": 1791744884.5806026,
+        "participants_per_endpoint": 4,
+        "executable_sha256": "25cbfaf436d3e39377ff3bb29ed30e8d80d10472866e512339d82082e6103245",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-upload",
+        "direction": "upload",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791744884.5807474,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 39.832,
+        "mbps": 0.211,
+        "finished_at": 1791744924.4123983,
+        "participants_per_endpoint": 4,
+        "executable_sha256": "25cbfaf436d3e39377ff3bb29ed30e8d80d10472866e512339d82082e6103245",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-download",
+        "direction": "download",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791744985.89136,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 11.922,
+        "mbps": 0.704,
+        "finished_at": 1791744997.8136816,
+        "participants_per_endpoint": 8,
+        "executable_sha256": "25cbfaf436d3e39377ff3bb29ed30e8d80d10472866e512339d82082e6103245",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-upload",
+        "direction": "upload",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791744997.8138583,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 31.646,
+        "mbps": 0.265,
+        "finished_at": 1791745029.4600964,
+        "participants_per_endpoint": 8,
+        "executable_sha256": "25cbfaf436d3e39377ff3bb29ed30e8d80d10472866e512339d82082e6103245",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-download",
+        "direction": "download",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791745172.9407885,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 7.166,
+        "mbps": 1.171,
+        "finished_at": 1791745180.1068459,
+        "participants_per_endpoint": 16,
+        "executable_sha256": "19817520cf612eaaa17ad72290844a6baf7739eb4dd76aed0c3b9065cbe12117",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-upload",
+        "direction": "upload",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791745180.1070104,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 20.251,
+        "mbps": 0.414,
+        "finished_at": 1791745200.3582728,
+        "participants_per_endpoint": 16,
+        "executable_sha256": "19817520cf612eaaa17ad72290844a6baf7739eb4dd76aed0c3b9065cbe12117",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-download",
+        "direction": "download",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791745271.3804293,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 7.841,
+        "mbps": 1.07,
+        "finished_at": 1791745279.221043,
+        "participants_per_endpoint": 32,
+        "executable_sha256": "19817520cf612eaaa17ad72290844a6baf7739eb4dd76aed0c3b9065cbe12117",
+        "batch_packets": 1
+      },
+      {
+        "case": "legacy-upload",
+        "direction": "upload",
+        "requested": 1048576,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791745279.2211845,
+        "sha256": "863233e49dd4c50568b4924faebd9d7986a823674aca6d34660b241040f1ee55",
+        "integrity": true,
+        "bytes": 1048576,
+        "seconds": 22.825,
+        "mbps": 0.368,
+        "finished_at": 1791745302.0459397,
+        "participants_per_endpoint": 32,
+        "executable_sha256": "19817520cf612eaaa17ad72290844a6baf7739eb4dd76aed0c3b9065cbe12117",
+        "batch_packets": 1
+      }
+    ],
+    "batch_four_upload_aborted": {
+      "aborted": "legacy-batch-four-upload",
+      "at": 1791744624.3173144,
+      "reason": "stalled with no recent tunnel payload; stop this comparison and test two participants with single packets"
+    },
+    "carrier_probe_not_tcp": [
+      {
+        "server": {
+          "running": false,
+          "rows": [
+            {
+              "accepted": 359,
+              "drain_seconds": 5,
+              "invalid_hashes": 0,
+              "lanes_up": 2,
+              "measurement_start": 1791743892,
+              "phase": 0,
+              "received_mbps": 0,
+              "reconnects": 0,
+              "role": 1,
+              "seconds": 45,
+              "send_errors": 0,
+              "send_lanes": 1,
+              "sender_role": 1,
+              "unique_received": 0
+            },
+            {
+              "accepted": 685,
+              "drain_seconds": 5,
+              "invalid_hashes": 0,
+              "lanes_up": 2,
+              "measurement_start": 1791743942,
+              "phase": 1,
+              "received_mbps": 0,
+              "reconnects": 1,
+              "role": 1,
+              "seconds": 45,
+              "send_errors": 33,
+              "send_lanes": 2,
+              "sender_role": 1,
+              "unique_received": 0
+            },
+            {
+              "accepted": 0,
+              "drain_seconds": 5,
+              "invalid_hashes": 0,
+              "lanes_up": 2,
+              "measurement_start": 1791743992,
+              "phase": 2,
+              "received_mbps": 0.08576,
+              "reconnects": 0,
+              "role": 1,
+              "seconds": 45,
+              "send_errors": 0,
+              "send_lanes": 1,
+              "sender_role": 2,
+              "unique_received": 268
+            },
+            {
+              "accepted": 0,
+              "drain_seconds": 5,
+              "invalid_hashes": 0,
+              "lanes_up": 2,
+              "measurement_start": 1791744042,
+              "phase": 3,
+              "received_mbps": 0.17664,
+              "reconnects": 0,
+              "role": 1,
+              "seconds": 45,
+              "send_errors": 0,
+              "send_lanes": 2,
+              "sender_role": 2,
+              "unique_received": 552
+            }
+          ]
+        }
+      },
+      {
+        "client": {
+          "running": false,
+          "rows": [
+            {
+              "accepted": 0,
+              "drain_seconds": 5,
+              "invalid_hashes": 0,
+              "lanes_up": 2,
+              "measurement_start": 1791743892,
+              "phase": 0,
+              "received_mbps": 0.08704,
+              "reconnects": 0,
+              "role": 2,
+              "seconds": 45,
+              "send_errors": 0,
+              "send_lanes": 1,
+              "sender_role": 1,
+              "unique_received": 272
+            },
+            {
+              "accepted": 0,
+              "drain_seconds": 5,
+              "invalid_hashes": 0,
+              "lanes_up": 2,
+              "measurement_start": 1791743942,
+              "phase": 1,
+              "received_mbps": 0.1744,
+              "reconnects": 0,
+              "role": 2,
+              "seconds": 45,
+              "send_errors": 0,
+              "send_lanes": 2,
+              "sender_role": 1,
+              "unique_received": 545
+            },
+            {
+              "accepted": 359,
+              "drain_seconds": 5,
+              "invalid_hashes": 0,
+              "lanes_up": 2,
+              "measurement_start": 1791743992,
+              "phase": 2,
+              "received_mbps": 0,
+              "reconnects": 0,
+              "role": 2,
+              "seconds": 45,
+              "send_errors": 0,
+              "send_lanes": 1,
+              "sender_role": 2,
+              "unique_received": 0
+            },
+            {
+              "accepted": 699,
+              "drain_seconds": 5,
+              "invalid_hashes": 0,
+              "lanes_up": 2,
+              "measurement_start": 1791744042,
+              "phase": 3,
+              "received_mbps": 0,
+              "reconnects": 1,
+              "role": 2,
+              "seconds": 45,
+              "send_errors": 19,
+              "send_lanes": 2,
+              "sender_role": 2,
+              "unique_received": 0
+            }
+          ]
+        }
+      }
+    ],
+    "final_32_participant_single_tcp": [
+      {
+        "direction": "download",
+        "requested": 8388608,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791745328.1136718,
+        "integrity": true,
+        "sha256": "d6d3c6fe938d7fce66f00681f67acb0a0779fe481ef83837be94f1a305edb087",
+        "bytes": 8388608,
+        "socket_bytes": 8388608,
+        "seconds": 47.075,
+        "finished_at": 1791745375.1890068,
+        "mbps": 1.426
+      },
+      {
+        "direction": "upload",
+        "requested": 8388608,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791745375.1892288,
+        "integrity": true,
+        "sha256": "d6d3c6fe938d7fce66f00681f67acb0a0779fe481ef83837be94f1a305edb087",
+        "bytes": 8388608,
+        "socket_bytes": 8388608,
+        "seconds": 165.633,
+        "finished_at": 1791745540.821779,
+        "mbps": 0.405
+      }
+    ],
+    "final_32_participant_four_tcp": [
+      {
+        "direction": "download",
+        "requested": 2097152,
+        "rate_limit_Bps": 0,
+        "connection_index": 0,
+        "connections": 1,
+        "started_at": 1791745723.1025121,
+        "integrity": true,
+        "sha256": "0306d3cc675dd88f04467da6d9241931da770955036db129101c9fa044174b82",
+        "bytes": 2097152,
+        "socket_bytes": 2097152,
+        "seconds": 29.638,
+        "finished_at": 1791745752.740563,
+        "mbps": 0.566
+      },
+      {
+        "direction": "download",
+        "requested": 2097152,
+        "rate_limit_Bps": 0,
+        "connection_index": 1,
+        "connections": 1,
+        "started_at": 1791745723.102907,
+        "integrity": true,
+        "sha256": "0306d3cc675dd88f04467da6d9241931da770955036db129101c9fa044174b82",
+        "bytes": 2097152,
+        "socket_bytes": 2097152,
+        "seconds": 32.453,
+        "finished_at": 1791745755.555601,
+        "mbps": 0.517
+      },
+      {
+        "direction": "download",
+        "requested": 2097152,
+        "rate_limit_Bps": 0,
+        "connection_index": 2,
+        "connections": 1,
+        "started_at": 1791745723.1033182,
+        "integrity": true,
+        "sha256": "0306d3cc675dd88f04467da6d9241931da770955036db129101c9fa044174b82",
+        "bytes": 2097152,
+        "socket_bytes": 2097152,
+        "seconds": 33.179,
+        "finished_at": 1791745756.2822452,
+        "mbps": 0.506
+      },
+      {
+        "direction": "download",
+        "requested": 2097152,
+        "rate_limit_Bps": 0,
+        "connection_index": 3,
+        "connections": 1,
+        "started_at": 1791745723.1037235,
+        "integrity": true,
+        "sha256": "0306d3cc675dd88f04467da6d9241931da770955036db129101c9fa044174b82",
+        "bytes": 2097152,
+        "socket_bytes": 2097152,
+        "seconds": 34.015,
+        "finished_at": 1791745757.1192265,
+        "mbps": 0.493
+      },
+      {
+        "aggregate": true,
+        "direction": "download",
+        "connections": 4,
+        "integrity": true,
+        "bytes": 8388608,
+        "started_at": 1791745723.099827,
+        "finished_at": 1791745757.1196682,
+        "seconds": 34.02,
+        "mbps": 1.973
+      },
+      {
+        "direction": "upload",
+        "requested": 2097152,
+        "rate_limit_Bps": 0,
+        "connection_index": 0,
+        "connections": 1,
+        "started_at": 1791745757.1199899,
+        "integrity": true,
+        "sha256": "0306d3cc675dd88f04467da6d9241931da770955036db129101c9fa044174b82",
+        "bytes": 2097152,
+        "socket_bytes": 2097152,
+        "seconds": 39.31,
+        "finished_at": 1791745796.4303038,
+        "mbps": 0.427
+      },
+      {
+        "direction": "upload",
+        "requested": 2097152,
+        "rate_limit_Bps": 0,
+        "connection_index": 3,
+        "connections": 1,
+        "started_at": 1791745757.120995,
+        "integrity": true,
+        "sha256": "0306d3cc675dd88f04467da6d9241931da770955036db129101c9fa044174b82",
+        "bytes": 2097152,
+        "socket_bytes": 2097152,
+        "seconds": 44.202,
+        "finished_at": 1791745801.3230934,
+        "mbps": 0.38
+      },
+      {
+        "direction": "upload",
+        "requested": 2097152,
+        "rate_limit_Bps": 0,
+        "connection_index": 1,
+        "connections": 1,
+        "started_at": 1791745757.12028,
+        "integrity": true,
+        "sha256": "0306d3cc675dd88f04467da6d9241931da770955036db129101c9fa044174b82",
+        "bytes": 2097152,
+        "socket_bytes": 2097152,
+        "seconds": 48.555,
+        "finished_at": 1791745805.674798,
+        "mbps": 0.346
+      },
+      {
+        "direction": "upload",
+        "requested": 2097152,
+        "rate_limit_Bps": 0,
+        "connection_index": 2,
+        "connections": 1,
+        "started_at": 1791745757.120565,
+        "integrity": true,
+        "sha256": "0306d3cc675dd88f04467da6d9241931da770955036db129101c9fa044174b82",
+        "bytes": 2097152,
+        "socket_bytes": 2097152,
+        "seconds": 49.444,
+        "finished_at": 1791745806.5647573,
+        "mbps": 0.339
+      },
+      {
+        "aggregate": true,
+        "direction": "upload",
+        "connections": 4,
+        "integrity": true,
+        "bytes": 8388608,
+        "started_at": 1791745757.11973,
+        "finished_at": 1791745806.5651522,
+        "seconds": 49.445,
+        "mbps": 1.357
+      }
+    ],
+    "https_html_smoke": [
+      {
+        "url": "https://example.com/",
+        "exit_code": 0,
+        "http_code": 200,
+        "bytes": 577,
+        "first_byte_seconds": 1.018289,
+        "total_seconds": 1.018405,
+        "tls_verification": true
+      },
+      {
+        "url": "https://www.wikipedia.org/",
+        "exit_code": 0,
+        "http_code": 200,
+        "bytes": 122197,
+        "first_byte_seconds": 0.672182,
+        "total_seconds": 1.05396,
+        "tls_verification": true
+      },
+      {
+        "url": "https://www.python.org/",
+        "exit_code": 0,
+        "http_code": 200,
+        "bytes": 11150,
+        "first_byte_seconds": 0.525345,
+        "total_seconds": 0.525803,
+        "tls_verification": true
+      }
+    ],
+    "resources_16_under_load": [
+      {
+        "server": {
+          "role": "server",
+          "at": 1791745188.7379854,
+          "cpu_percent": "16.25%",
+          "memory": "11.41MiB / 512MiB",
+          "network_io": "47.5MB / 4.21MB",
+          "processes": "6"
+        }
+      },
+      {
+        "client": {
+          "role": "client",
+          "at": 1791745187.218323,
+          "cpu_ns": "2901204000",
+          "memory_bytes": "30351360",
+          "tasks": "5"
+        }
+      }
+    ],
+    "resources_32_under_load": [
+      {
+        "server": {
+          "role": "server",
+          "at": 1791745386.6816292,
+          "cpu_percent": "32.84%",
+          "memory": "14.54MiB / 512MiB",
+          "network_io": "686MB / 31.9MB",
+          "processes": "6"
+        }
+      },
+      {
+        "client": {
+          "role": "client",
+          "at": 1791745385.319893,
+          "cpu_ns": "30468549000",
+          "memory_bytes": "35762176",
+          "tasks": "5"
+        }
+      }
+    ],
+    "resource_caveat": "Point samples. CPU percent is relative to one core. Network I/O and client CPU ns are cumulative counters, not rates."
+  },
+  "mailru": {
+    "initial_candidate_sha256": "5ca7b204fd81e1add624d5a34fdffba8312f7cc93c3b375617c98e18a02eaec7",
+    "initial_candidate": [
+      {
+        "case": "download-fast",
+        "direction": "download",
+        "requested": 16777216,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "sha256": "5511fab7287dbef0812d34872d340424a53f44e71a6af609384db71a2a316022",
+        "integrity": true,
+        "bytes": 16777216,
+        "seconds": 7.501,
+        "mbps": 17.893
+      },
+      {
+        "case": "upload-fast",
+        "direction": "upload",
+        "requested": 16777216,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "sha256": "5511fab7287dbef0812d34872d340424a53f44e71a6af609384db71a2a316022",
+        "integrity": true,
+        "bytes": 16777216,
+        "seconds": 6.63,
+        "mbps": 20.243
+      },
+      {
+        "case": "download-long",
+        "direction": "download",
+        "requested": 67108864,
+        "rate_limit_Bps": 524288,
+        "connections": 1,
+        "sha256": "20f7cd2b8fe2def5aab69db65853858bcbb14fb78ab242ceb01c017259e5e776",
+        "integrity": true,
+        "bytes": 67108864,
+        "seconds": 126.484,
+        "mbps": 4.245
+      },
+      {
+        "case": "upload-long",
+        "direction": "upload",
+        "requested": 67108864,
+        "rate_limit_Bps": 524288,
+        "connections": 1,
+        "sha256": "20f7cd2b8fe2def5aab69db65853858bcbb14fb78ab242ceb01c017259e5e776",
+        "integrity": true,
+        "bytes": 67108864,
+        "seconds": 128.978,
+        "mbps": 4.162
+      }
+    ],
+    "initial_candidate_forced_reconnect": [
+      {
+        "case": "download-forced-reconnect",
+        "direction": "download",
+        "requested": 33554432,
+        "rate_limit_Bps": 524288,
+        "connections": 1,
+        "started_at": 1791742345.6165836,
+        "sha256": "d7c54ae8ddcb2c997c9e00d0919b4efd35ac08787691cc69ef12f89a8cc93c91",
+        "integrity": true,
+        "bytes": 33554432,
+        "seconds": 63.752,
+        "mbps": 4.211,
+        "finished_at": 1791742409.3683095
+      }
+    ],
+    "initial_fault": {
+      "at": 1791742364.0211272,
+      "socket_rows": 1
+    },
+    "baseline": [
+      {
+        "case": "download-fast",
+        "direction": "download",
+        "requested": 16777216,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791745895.1772113,
+        "sha256": "5511fab7287dbef0812d34872d340424a53f44e71a6af609384db71a2a316022",
+        "integrity": true,
+        "bytes": 16777216,
+        "seconds": 4.661,
+        "mbps": 28.797,
+        "finished_at": 1791745899.8379812
+      },
+      {
+        "case": "upload-fast",
+        "direction": "upload",
+        "requested": 16777216,
+        "rate_limit_Bps": 0,
+        "connections": 1,
+        "started_at": 1791745899.8381627,
+        "sha256": "5511fab7287dbef0812d34872d340424a53f44e71a6af609384db71a2a316022",
+        "integrity": true,
+        "bytes": 16777216,
+        "seconds": 52.854,
+        "mbps": 2.539,
+        "finished_at": 1791745952.6917894
+      },
+      {
+        "case": "download-long",
+        "direction": "download",
+        "requested": 67108864,
+        "rate_limit_Bps": 524288,
+        "connections": 1,
+        "started_at": 1791745952.6919713,
+        "sha256": "20f7cd2b8fe2def5aab69db65853858bcbb14fb78ab242ceb01c017259e5e776",
+        "integrity": true,
+        "bytes": 67108864,
+        "seconds": 126.662,
+        "mbps": 4.239,
+        "finished_at": 1791746079.353781
+      },
+      {
+        "case": "upload-long",
+        "direction": "upload",
+        "requested": 67108864,
+        "rate_limit_Bps": 524288,
+        "connections": 1,
+        "started_at": 1791746079.3539853,
+        "sha256": "20f7cd2b8fe2def5aab69db65853858bcbb14fb78ab242ceb01c017259e5e776",
+        "integrity": true,
+        "bytes": 67108864,
+        "seconds": 130.633,
+        "mbps": 4.11,
+        "finished_at": 1791746209.9866843
+      }
+    ],
+    "baseline_events": [
+      {
+        "server": {
+          "role": "server",
+          "protocol": "mailru",
+          "started_at": 1791745882.621334,
+          "events": [
+            {
+              "at": 1791745883.582865,
+              "event": "connected"
+            },
+            {
+              "at": 1791745914.043654,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791745914.986535,
+              "event": "connected"
+            },
+            {
+              "at": 1791745976.132837,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791745977.185396,
+              "event": "connected"
+            },
+            {
+              "at": 1791746038.12734,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746039.218098,
+              "event": "connected"
+            },
+            {
+              "at": 1791746100.402077,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746101.685121,
+              "event": "connected"
+            },
+            {
+              "at": 1791746162.844227,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746163.897349,
+              "event": "connected"
+            },
+            {
+              "at": 1791746225.117341,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746226.519825,
+              "event": "connected"
+            },
+            {
+              "at": 1791746287.375388,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746288.403492,
+              "event": "connected"
+            },
+            {
+              "at": 1791746349.337313,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746350.672528,
+              "event": "connected"
+            },
+            {
+              "at": 1791746411.636875,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746412.678569,
+              "event": "connected"
+            }
+          ],
+          "latest_perf": []
+        }
+      },
+      {
+        "client": {
+          "role": "client",
+          "protocol": "mailru",
+          "started_at": 1791745883.0,
+          "events": [
+            {
+              "at": 1791745883.70047,
+              "event": "connected"
+            },
+            {
+              "at": 1791745945.24792,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791745946.051104,
+              "event": "connected"
+            },
+            {
+              "at": 1791746007.312871,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746008.061727,
+              "event": "connected"
+            },
+            {
+              "at": 1791746069.31336,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746070.152857,
+              "event": "connected"
+            },
+            {
+              "at": 1791746131.946028,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746132.749635,
+              "event": "connected"
+            },
+            {
+              "at": 1791746194.12905,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746194.960134,
+              "event": "connected"
+            },
+            {
+              "at": 1791746256.572641,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746257.273544,
+              "event": "connected"
+            },
+            {
+              "at": 1791746318.472255,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746319.242787,
+              "event": "connected"
+            },
+            {
+              "at": 1791746380.721109,
+              "event": "read_error",
+              "websocket_close_code": 1005
+            },
+            {
+              "at": 1791746381.555,
+              "event": "connected"
+            }
+          ],
+          "latest_perf": []
+        }
+      }
+    ],
+    "key_mismatch": {
+      "same_public_url": true,
+      "document_keys_matched_before": false,
+      "document_keys_matched_after_reconnect": true,
+      "fault": {
+        "fault": "close-test-container-tls-sockets",
+        "at": 1791746686.6502783,
+        "socket_rows": 1
+      },
+      "note": "Only the isolated AWS WebSocket was closed. It fetched the current key; peers then matched and the 16 MiB smoke transfers passed. Fingerprints/URLs are intentionally omitted."
+    },
+    "key_mismatch_failed_attempt": {
+      "direction": "download",
+      "requested": 268435456,
+      "rate_limit_Bps": 0,
+      "connection_index": 0,
+      "connections": 1,
+      "started_at": 1791746443.2282343,
+      "integrity": false,
+      "error": "TimeoutError: timed out",
+      "socket_bytes": 0,
+      "seconds": 45.049,
+      "finished_at": 1791746488.2772434,
+      "mbps": null,
+      "executable_sha256": "19817520cf612eaaa17ad72290844a6baf7739eb4dd76aed0c3b9065cbe12117"
+    },
+    "manual_key_recovery_smoke": {
+      "executable_sha256": "19817520cf612eaaa17ad72290844a6baf7739eb4dd76aed0c3b9065cbe12117",
+      "rows": [
+        {
+          "direction": "download",
+          "requested": 16777216,
+          "rate_limit_Bps": 0,
+          "connection_index": 0,
+          "connections": 1,
+          "started_at": 1791746733.97912,
+          "integrity": true,
+          "sha256": "5511fab7287dbef0812d34872d340424a53f44e71a6af609384db71a2a316022",
+          "bytes": 16777216,
+          "socket_bytes": 16777216,
+          "seconds": 4.845,
+          "finished_at": 1791746738.8243182,
+          "mbps": 27.701
+        },
+        {
+          "direction": "upload",
+          "requested": 16777216,
+          "rate_limit_Bps": 0,
+          "connection_index": 0,
+          "connections": 1,
+          "started_at": 1791746738.8245425,
+          "integrity": true,
+          "sha256": "5511fab7287dbef0812d34872d340424a53f44e71a6af609384db71a2a316022",
+          "bytes": 16777216,
+          "socket_bytes": 16777216,
+          "seconds": 3.139,
+          "finished_at": 1791746741.9631925,
+          "mbps": 42.763
+        }
+      ]
+    },
+    "final_full_rate": [
+      {
+        "direction": "download",
+        "requested": 268435456,
+        "rate_limit_Bps": 0,
+        "connection_index": 0,
+        "connections": 1,
+        "started_at": 1791746928.2979834,
+        "integrity": true,
+        "sha256": "20e9979ffbb11700691e98af7d51c9d23f7697482bc8f8b982cbb824114c52f5",
+        "bytes": 268435456,
+        "socket_bytes": 268435456,
+        "seconds": 98.569,
+        "finished_at": 1791747026.866932,
+        "mbps": 21.787
+      },
+      {
+        "direction": "upload",
+        "requested": 268435456,
+        "rate_limit_Bps": 0,
+        "connection_index": 0,
+        "connections": 1,
+        "started_at": 1791747026.867157,
+        "integrity": true,
+        "sha256": "20e9979ffbb11700691e98af7d51c9d23f7697482bc8f8b982cbb824114c52f5",
+        "bytes": 268435456,
+        "socket_bytes": 268435456,
+        "seconds": 352.508,
+        "finished_at": 1791747379.3751192,
+        "mbps": 6.092
+      }
+    ],
+    "final_forced_reconnect": [
+      {
+        "direction": "download",
+        "requested": 33554432,
+        "rate_limit_Bps": 524288,
+        "connection_index": 0,
+        "connections": 1,
+        "started_at": 1791747415.9133434,
+        "integrity": true,
+        "sha256": "d7c54ae8ddcb2c997c9e00d0919b4efd35ac08787691cc69ef12f89a8cc93c91",
+        "bytes": 33554432,
+        "socket_bytes": 33554432,
+        "seconds": 62.554,
+        "finished_at": 1791747478.4671807,
+        "mbps": 4.291
+      }
+    ],
+    "final_fault": {
+      "fault": "close-test-container-tls-sockets",
+      "at": 1791747445.671622,
+      "socket_rows": 2
+    },
+    "final_events": [
+      {
+        "server": {
+          "role": "server",
+          "protocol": "mailru",
+          "started_at": 1791746913.002197,
+          "events": [
+            {
+              "at": 1791746916.820737,
+              "event": "connected"
+            },
+            {
+              "at": 1791747445.670575,
+              "event": "read_error",
+              "websocket_close_code": null
+            },
+            {
+              "at": 1791747447.128533,
+              "event": "connected"
+            }
+          ],
+          "latest_perf": [
+            {
+              "at": 1791747478.190212,
+              "metrics": "ready=true ws_msg_s=27.4 ws_mbps=6.757 queue_bytes=0 queue_drops=0 write_errors=0 reconnects=3"
+            }
+          ]
+        }
+      },
+      {
+        "client": {
+          "role": "client",
+          "protocol": "mailru",
+          "started_at": 1791746913.0,
+          "events": [
+            {
+              "at": 1791746916.768213,
+              "event": "connected"
+            }
+          ],
+          "latest_perf": [
+            {
+              "at": 1791747478.73135,
+              "metrics": "ready=true ws_msg_s=27.2 ws_mbps=0.029 queue_bytes=0 queue_drops=0 write_errors=0 reconnects=2"
+            }
+          ]
+        }
+      }
+    ]
+  },
+  "restoration": [
+    {
+      "server": {
+        "role": "server",
+        "installed_sha256": "7279771e182cc5103efc5b6531893f919749d1c793591bb3026fd2e722e6adda",
+        "installed_unchanged": true,
+        "services": {
+          "mailru": true,
+          "yandex": true,
+          "volga": false
+        },
+        "temporary_units_active": [],
+        "test_container_exists": false,
+        "cleanup_timer_active": false
+      }
+    },
+    {
+      "client": {
+        "role": "client",
+        "installed_sha256": "7279771e182cc5103efc5b6531893f919749d1c793591bb3026fd2e722e6adda",
+        "installed_unchanged": true,
+        "services": {
+          "mailru": false,
+          "yandex": false,
+          "volga": false
+        },
+        "temporary_units_active": [],
+        "test_container_exists": false,
+        "cleanup_timer_active": false
+      }
+    }
+  ],
+  "temporary_directories": [
+    {
+      "server": {
+        "role": "server",
+        "temporary_directory_removed": true
+      }
+    },
+    {
+      "client": {
+        "role": "client",
+        "temporary_directory_removed": true
+      }
+    }
+  ],
+  "validation": {
+    "legacy_runtime_commit": "af3677e04a92b02db3a8a5e3d2b8f663c5279930",
+    "legacy_github_checks": [
+      {
+        "name": "go-test-build",
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/LevL-max/OpenFlux-mod/actions/runs/38166283444/job/114549405909"
+      },
+      {
+        "name": "container-build",
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/LevL-max/OpenFlux-mod/actions/runs/38166283430/job/114549405748"
+      }
+    ],
+    "mailru_runtime_commit": "72672c2ace08037c4a86bda0c00924db490ecfbd",
+    "mailru_github_checks": [
+      {
+        "name": "container-build",
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/LevL-max/OpenFlux-mod/actions/runs/38168160953/job/114554960408"
+      },
+      {
+        "name": "go-test-build",
+        "status": "completed",
+        "conclusion": "success",
+        "html_url": "https://github.com/LevL-max/OpenFlux-mod/actions/runs/38168160956/job/114554960358"
+      }
+    ],
+    "linux_development_checks": {
+      "running": false,
+      "tail": [
+        "ok  \topenflux-volga-lab/internal/tunnel\t(cached)",
+        "----------------------------------------------------------------------",
+        "Ran 115 tests in 19.168s",
+        "",
+        "OK",
+        "ALL_CHECKS_PASSED",
+        "go version go1.26.8 linux/amd64",
+        "?   \tuniversal-bypass-tool\t[no test files]",
+        "?   \tuniversal-bypass-tool/cmd/legacy-lane-probe\t[no test files]",
+        "?   \tuniversal-bypass-tool/network\t[no test files]",
+        "?   \tuniversal-bypass-tool/socks5\t[no test files]",
+        "ok  \tuniversal-bypass-tool/transport\t0.008s",
+        "ok  \tuniversal-bypass-tool/transport/mailru\t(cached)",
+        "?   \tuniversal-bypass-tool/transport/oneme\t[no test files]",
+        "ok  \tuniversal-bypass-tool/transport/yandex\t(cached)",
+        "ok  \tuniversal-bypass-tool/tunnel\t(cached)",
+        "ok  \tuniversal-bypass-tool/utils\t(cached)",
+        "ok  \tuniversal-bypass-tool/transport/mailru\t(cached)",
+        "ok  \tuniversal-bypass-tool/transport/yandex\t(cached)",
+        "ok  \tuniversal-bypass-tool/transport\t1.030s",
+        "ok  \tuniversal-bypass-tool/transport/yandex\t(cached)",
+        "ok  \topenflux-volga-lab/cmd/openflux-volga-lab\t(cached)",
+        "?   \topenflux-volga-lab/cmd/volga-lab-check\t[no test files]",
+        "ok  \topenflux-volga-lab/internal/recordconn\t(cached)",
+        "ok  \topenflux-volga-lab/internal/tunnel\t(cached)",
+        "----------------------------------------------------------------------",
+        "Ran 115 tests in 20.709s",
+        "",
+        "OK",
+        "ALL_CHECKS_PASSED"
+      ]
+    },
+    "note": "GitHub checks apply to each tested runtime commit and include full Go race tests, Volga variants, 115 Python integration tests, Linux builds and container smoke tests. Linux host transcript is additional development validation; installed executables were not replaced."
+  },
+  "limitations": [
+    "Sequential A/B, not randomized or repeated; provider and path conditions may vary.",
+    "No simultaneous-direction full-rate soak or overnight run.",
+    "Legacy requires the opt-in profile on both peers. CLI flags are not automatically enabled by the router UI or generated units.",
+    "Transport outage test covers a brief forced exit-side socket closure, not arbitrary long outages or process restarts.",
+    "Legacy does not guarantee UDP delivery and retains TCP retransmission as its loss recovery.",
+    "HTML smoke requests do not measure complete rendered pages with scripts and images."
+  ]
+}
