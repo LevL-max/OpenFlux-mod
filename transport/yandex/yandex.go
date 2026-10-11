@@ -45,6 +45,8 @@ type DocSession struct {
 	WriteQueue chan []byte
 	UserID     string
 	writeMu    sync.Mutex
+	writeEvery time.Duration
+	lastWrite  time.Time
 }
 
 // docWriteTimeout bounds one WebSocket write to the document. A write into a
@@ -55,6 +57,10 @@ var docWriteTimeout = 20 * time.Second
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	if delay := time.Until(s.lastWrite.Add(s.writeEvery)); s.writeEvery > 0 && delay > 0 {
+		time.Sleep(delay)
+	}
+	s.lastWrite = time.Now()
 	if docWriteTimeout > 0 {
 		_ = s.Conn.SetWriteDeadline(time.Now().Add(docWriteTimeout))
 	}
@@ -83,6 +89,8 @@ type YandexDocsTransport struct {
 	perfWSBytes     atomic.Uint64
 	perfWriteErrors atomic.Uint64
 	perfQueuePeak   atomic.Int64
+	cursorMaxBytes  int
+	writeEvery      time.Duration
 }
 
 var (
@@ -302,6 +310,9 @@ func (t *YandexDocsTransport) Start() error {
 }
 
 func (t *YandexDocsTransport) Send(data []byte) error {
+	if t.cursorMaxBytes > 0 && cursorWireSize(len(data)) > t.cursorMaxBytes {
+		return fmt.Errorf("cursor message exceeds %d byte limit", t.cursorMaxBytes)
+	}
 	if !t.IsConnected() {
 		return fmt.Errorf("transport not connected")
 	}
@@ -406,6 +417,7 @@ func (t *YandexDocsTransport) connectToDoc(attempt int) {
 			Conn:       conn,
 			WriteQueue: writeQueue,
 			UserID:     userID,
+			writeEvery: t.writeEvery,
 		}
 
 		if err := authenticateDoc(session, 30*time.Second); err != nil {
@@ -502,6 +514,10 @@ func (t *YandexDocsTransport) writerLoop() {
 			time.Sleep(10 * time.Millisecond)
 		}
 
+		if t.cursorMaxBytes > 0 && cursorWireSize(len(packet)) > t.cursorMaxBytes {
+			t.perfWriteErrors.Add(1)
+			continue
+		}
 		payload := base64.StdEncoding.EncodeToString(packet)
 		// The cursor's numeric prefix must be the packet's real length before
 		// Base64. Since OnlyOffice build 2026.2.1-3364 (seen 2026-10-09) Yandex
@@ -642,10 +658,6 @@ func (t *YandexDocsTransport) dropConnection(session *DocSession) {
 func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
 	text := string(data)
 
-	if strings.Contains(text, "---KA---") {
-		return
-	}
-
 	// Socket.IO ping - respond with pong (use safeWrite)
 	if text == "2" {
 		if session != nil && session.Conn != nil {
@@ -657,7 +669,21 @@ func (t *YandexDocsTransport) handleMessage(session *DocSession, data []byte) {
 		return
 	}
 
-	if strings.Contains(text, "saveChanges") || strings.Contains(text, "cursor") {
+	if strings.Contains(text, "cursor") {
+		for _, match := range cursorPayloadRe.FindAllStringSubmatch(text, -1) {
+			if match[1] == "---KA---" {
+				continue
+			}
+			decoded, err := base64.StdEncoding.DecodeString(match[1])
+			if err != nil {
+				continue
+			}
+			t.RecordReceive(len(decoded))
+			t.CallReceive(decoded)
+		}
+		return
+	}
+	if strings.Contains(text, "saveChanges") {
 		base64Str := t.extractBase64String(text)
 		if base64Str == "" {
 			return

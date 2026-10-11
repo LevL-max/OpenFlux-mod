@@ -12,6 +12,7 @@ package mailru
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -59,12 +60,21 @@ type MailruDocsInfo struct {
 }
 
 type DocSession struct {
-	Info       MailruDocsInfo
-	Conn       *websocket.Conn
-	WriteQueue chan []byte
-	UserID     string
-	writeMu    sync.Mutex
+	Info             MailruDocsInfo
+	Conn             *websocket.Conn
+	WriteQueue       chan queuedPacket
+	UserID           string
+	writeMu          sync.Mutex
+	heartbeatTimeout time.Duration
 }
+
+type queuedPacket struct {
+	data []byte
+	at   time.Time
+}
+
+const maxQueuedBytes = 8 << 20
+const maxQueuedAge = 3 * time.Second
 
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
 	s.writeMu.Lock()
@@ -118,7 +128,19 @@ func waitMailruSocketIO(session *DocSession, token string) error {
 	}
 
 	// Engine.IO open: 0{"sid":"...", ...}
-	if err := waitFor(func(text string) bool { return strings.HasPrefix(text, "0{") }); err != nil {
+	if err := waitFor(func(text string) bool {
+		if !strings.HasPrefix(text, "0{") {
+			return false
+		}
+		var hello struct {
+			PingInterval int `json:"pingInterval"`
+			PingTimeout  int `json:"pingTimeout"`
+		}
+		if json.Unmarshal([]byte(text[1:]), &hello) == nil && hello.PingInterval > 0 && hello.PingTimeout > 0 {
+			session.heartbeatTimeout = time.Duration(hello.PingInterval+hello.PingTimeout)*time.Millisecond + 5*time.Second
+		}
+		return true
+	}); err != nil {
 		return fmt.Errorf("mailru: wait for Engine.IO open: %w", err)
 	}
 	utils.Debugf("[M-DOCS] Engine.IO open")
@@ -139,6 +161,9 @@ type MailruDocsTransport struct {
 
 	weblink string
 	session *DocSession
+	opening *DocSession
+	ctx     context.Context
+	cancel  context.CancelFunc
 
 	userCounter atomic.Int32
 	baseUserID  string
@@ -156,20 +181,31 @@ type MailruDocsTransport struct {
 	// the peer into the document (an HTTP error from its API or WebSocket).
 	refusals atomic.Int32
 
-	statusMu   sync.Mutex
-	statusLast map[string]time.Time
+	statusMu    sync.Mutex
+	statusLast  map[string]time.Time
+	done        chan struct{}
+	stopOnce    sync.Once
+	queuedBytes atomic.Int64
+	queueDrops  atomic.Uint64
+	writeErrors atomic.Uint64
+	wsWrites    atomic.Uint64
+	wsBytes     atomic.Uint64
 }
 
 // NewMailruDocsTransport accepts either a bare weblink ("AbCd/EfGh") or a full
 // public URL ("https://cloud.mail.ru/public/AbCd/EfGh").
 func NewMailruDocsTransport(weblink string, config transport.TransportConfig) *MailruDocsTransport {
 	jar, _ := cookiejar.New(nil)
+	ctx, cancel := context.WithCancel(context.Background())
 	return &MailruDocsTransport{
 		BaseTransport: transport.NewBaseTransport(config),
 		weblink:       normalizeWeblink(weblink),
 		baseUserID:    randUserID(),
 		cookieJar:     jar,
 		statusLast:    map[string]time.Time{},
+		done:          make(chan struct{}),
+		ctx:           ctx,
+		cancel:        cancel,
 	}
 }
 
@@ -205,11 +241,17 @@ func (t *MailruDocsTransport) statusThrottled(key string, every time.Duration, f
 }
 
 func (t *MailruDocsTransport) Start() error {
+	select {
+	case <-t.done:
+		return fmt.Errorf("transport already stopped")
+	default:
+	}
 	if err := t.BaseTransport.Start(); err != nil {
 		return err
 	}
 	t.baseUserID = randUserID()
 	utils.SafeGo("mailru.keepAlive", t.keepAliveLoop)
+	utils.SafeGo("mailru.stats", t.perfStatsLoop)
 	if t.editorActivity {
 		utils.SafeGo("mailru.editorActivity", t.editorActivityLoop)
 	}
@@ -218,8 +260,8 @@ func (t *MailruDocsTransport) Start() error {
 }
 
 func (t *MailruDocsTransport) Send(data []byte) error {
-	if !t.IsConnected() {
-		return fmt.Errorf("transport not connected")
+	if !t.IsRunning() {
+		return fmt.Errorf("transport stopped")
 	}
 	t.Mu.RLock()
 	session := t.session
@@ -227,11 +269,19 @@ func (t *MailruDocsTransport) Send(data []byte) error {
 	if session == nil {
 		return fmt.Errorf("no active session")
 	}
+	if t.queuedBytes.Add(int64(len(data))) > maxQueuedBytes {
+		t.queuedBytes.Add(-int64(len(data)))
+		t.queueDrops.Add(1)
+		return fmt.Errorf("write queue byte limit")
+	}
+	packet := queuedPacket{data: append([]byte(nil), data...), at: time.Now()}
 	select {
-	case session.WriteQueue <- data:
+	case session.WriteQueue <- packet:
 		t.RecordSend(len(data))
 		return nil
 	default:
+		t.queuedBytes.Add(-int64(len(data)))
+		t.queueDrops.Add(1)
 		return fmt.Errorf("write queue full")
 	}
 }
@@ -284,7 +334,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		headers.Set("Origin", "https://docs.datacloudmail.ru")
 
 		utils.Debugf("[M-DOCS] WebSocket dial %s", info.WsURL)
-		conn, resp, err := dialer.Dial(info.WsURL, headers)
+		conn, resp, err := dialer.DialContext(t.ctx, info.WsURL, headers)
 		if err != nil {
 			status := 0
 			if resp != nil {
@@ -301,11 +351,26 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			return
 		}
 
-		writeQueue := make(chan []byte, t.GetConfig().MaxQueueSize)
+		writeQueue := make(chan queuedPacket, t.GetConfig().MaxQueueSize)
 		if existingSession != nil {
 			writeQueue = existingSession.WriteQueue
 		}
 		session := &DocSession{Info: info, Conn: conn, WriteQueue: writeQueue, UserID: userID}
+		t.Mu.Lock()
+		if !t.IsRunning() {
+			t.Mu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		t.opening = session
+		t.Mu.Unlock()
+		defer func() {
+			t.Mu.Lock()
+			if t.opening == session {
+				t.opening = nil
+			}
+			t.Mu.Unlock()
+		}()
 
 		if err := waitMailruSocketIO(session, info.Token); err != nil {
 			utils.Debugf("[M-DOCS] Socket.IO handshake failed: %v", err)
@@ -313,15 +378,6 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			_ = conn.Close()
 			t.scheduleReconnect(attempt)
 			return
-		}
-
-		t.Mu.Lock()
-		t.session = session
-		t.SetConnected(true)
-		t.Mu.Unlock()
-		t.refusals.Store(0)
-		if existingSession == nil {
-			utils.SafeGo("mailru.writer", t.writerLoop)
 		}
 
 		authMsg := map[string]interface{}{
@@ -362,7 +418,36 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			"supportAuthChangesAck": true,
 		}
 		messagePart, _ := json.Marshal([]interface{}{"message", authMsg})
-		_ = session.safeWrite(websocket.TextMessage, []byte("42"+string(messagePart)))
+		if err := session.safeWrite(websocket.TextMessage, []byte("42"+string(messagePart))); err == nil {
+			err = waitMailruEditorAuth(session)
+			if err != nil {
+				_ = conn.Close()
+				if errors.Is(err, errEditorAuthRejected) {
+					t.refusals.Add(1)
+				}
+				t.statusThrottled("auth", time.Minute, "[M-DOCS] document authorization failed; retrying")
+				t.scheduleReconnect(attempt)
+				return
+			}
+		} else {
+			_ = conn.Close()
+			t.scheduleReconnect(attempt)
+			return
+		}
+		t.Mu.Lock()
+		if !t.IsRunning() {
+			t.Mu.Unlock()
+			_ = conn.Close()
+			return
+		}
+		t.session = session
+		t.opening = nil
+		t.SetConnected(true)
+		t.Mu.Unlock()
+		t.refusals.Store(0)
+		if existingSession == nil {
+			utils.SafeGo("mailru.writer", t.writerLoop)
+		}
 		utils.Statusf("[M-DOCS] connected to the document")
 
 		connectedAt := time.Now()
@@ -371,8 +456,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			if err != nil {
 				utils.Debugf("[M-DOCS] Read error: %v", err)
 				t.statusThrottled("drop", time.Minute, "[M-DOCS] connection to the document dropped: %v; reconnecting", err)
-				t.SetConnected(false)
-				conn.Close()
+				t.dropConnection(session)
 				next := attempt
 				if time.Since(connectedAt) > 15*time.Second {
 					next = -1
@@ -386,7 +470,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 }
 
 func (t *MailruDocsTransport) writerLoop() {
-	var queue chan []byte
+	var queue chan queuedPacket
 	for t.IsRunning() && queue == nil {
 		t.Mu.Lock()
 		if t.session != nil {
@@ -401,14 +485,28 @@ func (t *MailruDocsTransport) writerLoop() {
 		return
 	}
 
-	var pending []byte
+	var pending *queuedPacket
+	defer func() {
+		if pending != nil {
+			t.queuedBytes.Add(-int64(len(pending.data)))
+		}
+	}()
 	for t.IsRunning() {
 		if pending == nil {
-			packet, ok := <-queue
-			if !ok {
+			select {
+			case packet := <-queue:
+				pending = &packet
+			case <-t.done:
 				return
+			case <-time.After(100 * time.Millisecond):
+				continue
 			}
-			pending = packet
+		}
+		if time.Since(pending.at) > maxQueuedAge {
+			t.queuedBytes.Add(-int64(len(pending.data)))
+			t.queueDrops.Add(1)
+			pending = nil
+			continue
 		}
 		t.Mu.RLock()
 		session := t.session
@@ -419,12 +517,16 @@ func (t *MailruDocsTransport) writerLoop() {
 		}
 		// The cursor declares the packet's real length before Base64, as the
 		// web editor does.
-		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"%d;%s"}]`, len(pending), base64.StdEncoding.EncodeToString(pending))
+		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"%d;%s"}]`, len(pending.data), base64.StdEncoding.EncodeToString(pending.data))
 		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
+			t.writeErrors.Add(1)
 			utils.Debugf("[M-DOCS] Write error: %v", err)
-			time.Sleep(15 * time.Millisecond)
+			t.dropConnection(session)
 			continue
 		}
+		t.wsWrites.Add(1)
+		t.wsBytes.Add(uint64(len(msg)))
+		t.queuedBytes.Add(-int64(len(pending.data)))
 		pending = nil
 	}
 }
@@ -434,15 +536,18 @@ func (t *MailruDocsTransport) keepAliveLoop() {
 	defer ticker.Stop()
 	keepAliveMsg := `42["message",{"type":"cursor","cursor":"18;---KA---"}]`
 	for t.IsRunning() {
-		<-ticker.C
+		select {
+		case <-ticker.C:
+		case <-t.done:
+			return
+		}
 		t.Mu.Lock()
 		session := t.session
 		t.Mu.Unlock()
 		if session != nil && session.Conn != nil {
 			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
 				utils.Debugf("[M-DOCS] Keep-alive failed, closing the connection to reconnect: %v", err)
-				t.SetConnected(false)
-				_ = session.Conn.Close()
+				t.dropConnection(session)
 			}
 		}
 	}
@@ -456,7 +561,11 @@ func (t *MailruDocsTransport) editorActivityLoop() {
 		maxDelay = 5 * time.Second
 	)
 	for t.IsRunning() {
-		time.Sleep(minDelay + time.Duration(rand.Int63n(int64(maxDelay-minDelay)+1)))
+		select {
+		case <-time.After(minDelay + time.Duration(rand.Int63n(int64(maxDelay-minDelay)+1))):
+		case <-t.done:
+			return
+		}
 		t.Mu.RLock()
 		session := t.session
 		t.Mu.RUnlock()
@@ -495,9 +604,9 @@ func buildSaveChanges(session *DocSession) []byte {
 
 func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	text := string(data)
-	if text == "2" {
-		if session != nil && session.Conn != nil {
-			_ = session.safeWrite(websocket.TextMessage, []byte("3"))
+	if handled, err := handleMailruControl(session, data); handled {
+		if err != nil {
+			t.dropConnection(session)
 		}
 		return
 	}
@@ -547,7 +656,11 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 		d = r
 	}
 	utils.Debugf("[M-DOCS] reconnecting in %v (attempt %d)", d, next)
-	time.Sleep(d)
+	select {
+	case <-time.After(d):
+	case <-t.done:
+		return
+	}
 	t.reconnecting.Store(false) // a failed connect schedules the next one itself
 	if !t.IsRunning() {
 		return
@@ -622,7 +735,10 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 		"public":   "/" + weblink,
 		"platform": "desktop_web",
 	})
-	req, _ := http.NewRequest("POST", editAPI, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(t.ctx, "POST", editAPI, bytes.NewBuffer(jsonData))
+	if err != nil {
+		return MailruDocsInfo{}, err
+	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
