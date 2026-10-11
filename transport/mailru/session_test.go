@@ -62,6 +62,34 @@ func TestControlReplies(t *testing.T) {
 	}
 }
 
+func TestDataMessagesSkipControlParsing(t *testing.T) {
+	for _, tc := range []struct {
+		in   string
+		want bool
+	}{
+		{`42["message",{"type":"cursor","cursor":"3;YWJj"}]`, false},
+		{`42["message",{"type":"cursor","messages":[{"cursor":"3;YWJj"},{"cursor":"18;---KA---"}]}]`, false},
+		{`42["message",{"type":"authChanges"}]`, true},
+		{`42["message", {"type": "connectState", "waitAuth": true}]`, true},
+	} {
+		if got := isEditorControl([]byte(tc.in)); got != tc.want {
+			t.Fatalf("%s: control=%t", tc.in, got)
+		}
+	}
+	s, received := controlPeer(t)
+	if ok, err := handleMailruControl(s, []byte(`42["message", {"type": "connectState", "waitAuth": true}]`)); !ok || err != nil {
+		t.Fatalf("spaced control: handled=%t error=%v", ok, err)
+	}
+	select {
+	case got := <-received:
+		if !strings.Contains(got, "unLockDocument") {
+			t.Fatalf("got %s", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("missing control reply")
+	}
+}
+
 func TestSendDuringReconnectAndBoundedQueue(t *testing.T) {
 	tr := NewMailruDocsTransport("test/doc", transport.DefaultConfig())
 	tr.BaseTransport.Start()

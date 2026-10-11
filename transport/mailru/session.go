@@ -1,6 +1,7 @@
 package mailru
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"strings"
@@ -31,6 +32,20 @@ func parseEditorEvent(data []byte) (editorEvent, bool) {
 	return event, true
 }
 
+// Quoted names cannot occur inside a Base64 cursor payload, so a data message
+// never matches. Parsing every data message as JSON cost about as much as the
+// cursor decode itself and lowered downloads on the mini-PC by about a quarter.
+var editorControlTypes = [][]byte{[]byte(`"authChanges"`), []byte(`"connectState"`)}
+
+func isEditorControl(data []byte) bool {
+	for _, name := range editorControlTypes {
+		if bytes.Contains(data, name) {
+			return true
+		}
+	}
+	return false
+}
+
 func handleMailruControl(session *DocSession, data []byte) (bool, error) {
 	var response string
 	if string(data) == "2" {
@@ -38,6 +53,8 @@ func handleMailruControl(session *DocSession, data []byte) (bool, error) {
 		if session.heartbeatTimeout > 0 {
 			_ = session.Conn.SetReadDeadline(time.Now().Add(session.heartbeatTimeout))
 		}
+	} else if !isEditorControl(data) {
+		return false, nil
 	} else if event, ok := parseEditorEvent(data); ok {
 		switch {
 		case event.Type == "authChanges":
