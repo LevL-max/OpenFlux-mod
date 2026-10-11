@@ -111,6 +111,7 @@ class OpenFluxConfigs:
             'openflux-runtime':'Transport, compression, buffers and batching. Restart OpenFlux after changing.'}
         extra={
             'openflux-volga-config':('/etc/openflux-volga/config.json','Volga configuration','Volga document links and shared key. Separate from Legacy; the measured performance profile is fixed. Restart Volga after changing.'),
+            'openflux-mailru':(MAILRU_ENV,'Mail.ru document','Public Mail.ru Cloud document link, MAILRU_DOCUMENT=https://cloud.mail.ru/public/…; no cookies. The server’s Mail.ru exit must use the same link. Apply Mail.ru again (or restart OPENFLUX) after changing.'),
             'openflux-node':('/etc/openflux/node.json','Node and Disk settings','Document URL, Disk recovery path and release channel. Managed service paths stay unchanged.'),
             'openflux-updater':('/etc/router/updater/settings.json','Update settings','Allow prereleases and expected exit IP. Settings of other components stay unchanged.'),
             'openflux-disk-token':('/etc/openflux-recovery/disk-token','Disk OAuth token','Secret API token for cookies and status. Applied on the next Disk request; no restart.'),
@@ -152,6 +153,8 @@ class OpenFluxConfigs:
             writes[self.path('/etc/openflux-client/yandex.env')]=('YANDEX_URL='+shlex.quote(value)+'\n').encode()
         if target=='openflux-volga-config':
             node=json.loads(read(node_path));validate_volga_config(json.loads(text),node['role'])
+        elif target=='openflux-mailru':
+            writes[path]=('MAILRU_DOCUMENT='+mailru_env(text)+'\n').encode()
         elif target=='openflux-node':
             old=json.loads(read(node_path));node=json.loads(text)
             if not isinstance(node,dict) or set(node)!=set(old):raise ValueError('Keep all existing profile fields')
@@ -209,7 +212,7 @@ class OpenFluxConfigs:
         import base64,json,os,tempfile,stat,time,uuid,fcntl,sys
         from pathlib import Path
         target=body.get('target');rows=self.registry()
-        custom={'openflux-url','openflux-node','openflux-updater','openflux-disk-token','openflux-server-key','openflux-client-key','openflux-client-public','openflux-cookies','openflux-volga-config'}
+        custom={'openflux-url','openflux-node','openflux-updater','openflux-disk-token','openflux-server-key','openflux-client-key','openflux-client-public','openflux-cookies','openflux-volga-config','openflux-mailru'}
         if target not in custom:return self.original_upload(body)
         if target not in rows or body.get('confirm') is not True:raise ValueError('Unknown config or missing replacement confirmation')
         data=base64.b64decode(body.get('data',''),validate=True)
@@ -258,6 +261,7 @@ class OpenFluxConfigs:
             if self.path('/etc/openflux-client/yandex.env') in changes:message+=' Restart OpenFlux to use the new document; profile URL is synchronized.'
             elif target=='openflux-client-key':message+=' Matching public key updated; register it on the server if identity changed.'
             elif target=='openflux-cookies':message+=' A blocked client will reload changed cookies automatically.'
+            elif target=='openflux-mailru':message+=' Apply Mail.ru again (or restart OPENFLUX) to use the new document.'
             else:message+=' Used by the next recovery/update operation.'
             result={'ok':True,'changed':True,'target':target,'message':message,'backup':str(backup),'saved_at':int(time.time())}
             from xray_control import atomic
@@ -282,6 +286,57 @@ VOLGA_UNIT = 'openflux-volga-client.service'
 VOLGA_CONTAINER = 'openflux-volga'
 VOLGA_IMAGE_REPOSITORY = 'ghcr.io/levl-max/openflux-mod-volga'
 CONFIG_BACKUPS = 3
+
+# Mail.ru: one public Mail.ru Cloud document opened as an anonymous visitor and
+# carried by the Legacy binary (--transport mailru). No cookies, no Disk
+# recovery. A client runs it as its own unit on the router SOCKS port; a server
+# runs its exit as a systemd-managed container beside the Legacy exit.
+MAILRU_ENV = '/etc/openflux-mailru/mailru.env'
+MAILRU_DATA = '/var/lib/openflux-mailru'
+MAILRU_UNIT = 'openflux-mailru-client.service'
+MAILRU_EXIT_UNIT = 'openflux-mailru-exit.service'
+MAILRU_CONTAINER = 'openflux-mailru'
+# The Legacy profile it was measured with (2026-10-11, PC2 through the AWS exit):
+# fixed, like Volga's.
+MAILRU_PROFILE = ('--compression=true','--yandex-queue-size=1024','--tcp-buffer-default=1048576',
+                  '--tcp-buffer-max=4194304','--batch-packets=4','--batch-delay-us=1000')
+# The exit forwards with raw sockets; its own kernel must not reset those flows.
+# The rule lives in the container's network namespace only.
+MAILRU_EXIT_SCRIPT = ('#!/bin/sh\nset -eu\niptables -C OUTPUT -p tcp --tcp-flags RST RST -j DROP 2>/dev/null || '
+                      'iptables -A OUTPUT -p tcp --tcp-flags RST RST -j DROP\nexec /usr/local/bin/openflux "$@"\n')
+
+def mailru_document(value):
+    import re
+    from urllib.parse import urlsplit
+    if not isinstance(value,str) or len(value)>512 or any(c.isspace() for c in value):raise ValueError('Invalid Mail.ru document link')
+    u=urlsplit(value)
+    if (u.scheme!='https' or u.hostname!='cloud.mail.ru' or u.username or u.password or u.port not in (None,443) or u.query or u.fragment
+            or not re.fullmatch(r'/public/[A-Za-z0-9_-]{2,64}/[A-Za-z0-9_-]{2,64}/?',u.path)):
+        raise ValueError('Expected a public https://cloud.mail.ru/public/… document link')
+    return value.rstrip('/')
+
+def mailru_env(text):
+    """The document link in mailru.env: exactly one MAILRU_DOCUMENT line."""
+    values={}
+    for line in text.splitlines():
+        line=line.strip()
+        if not line or line.startswith('#'):continue
+        key,sep,value=line.partition('=')
+        if not sep or key in values:raise ValueError('Expected one MAILRU_DOCUMENT=<public link> line')
+        values[key]=value
+    if set(values)!={'MAILRU_DOCUMENT'}:raise ValueError('Expected one MAILRU_DOCUMENT=<public link> line')
+    return mailru_document(values['MAILRU_DOCUMENT'])
+
+def mailru_exit_settings(value):
+    """Container image and Docker network of a server's Mail.ru exit."""
+    import re
+    if not isinstance(value,dict) or set(value)!={'image','network'}:raise ValueError('The Mail.ru exit needs an image and a network')
+    if not isinstance(value['image'],str) or not re.fullmatch(r'[a-z0-9][a-z0-9._/-]{0,199}(?::[A-Za-z0-9._-]{1,128})?(?:@sha256:[0-9a-f]{64})?',value['image']):
+        raise ValueError('Invalid Mail.ru exit image')
+    # Host networking would put the exit's RST rule on the host itself.
+    if not isinstance(value['network'],str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,63}',value['network']) or value['network'] in ('host','none'):
+        raise ValueError('The Mail.ru exit needs a bridge network of its own, not host or none')
+    return value
 
 def validate_volga_manifest(value, version, digest):
     import re
@@ -329,7 +384,10 @@ def openflux_runtime_unit():
     import json,pathlib
     try:node=json.loads(pathlib.Path('/etc/openflux/node.json').read_text())
     except (FileNotFoundError,ValueError):return 'openflux-yandex-client.service'
-    return VOLGA_UNIT if node.get('active_transport','yandex')=='volga' else node.get('service','openflux-yandex-client.service')
+    selected=node.get('active_transport','yandex')
+    if selected=='volga':return VOLGA_UNIT
+    if selected=='mailru':return MAILRU_UNIT
+    return node.get('service','openflux-yandex-client.service')
 
 class VolgaRuntime:
     """Opt-in runtime; Legacy paths and state are never used for Volga updates."""
@@ -754,7 +812,9 @@ class VolgaRuntime:
         record={'kind':kind,'node':self.node(),'installed':self.read(self.state/'installed.json',{}),
                 'active':self.active(),'legacy_active':self.legacy_active() if self.node()['role']=='client' else False,
                 'binary_present':self.binary.is_file(),'backup':str(backup),'watchdog':'openflux-volga-return-'+ident}
-        if self.node()['role']=='client':record['bridge_active']=self.run(['systemctl','is-active','--quiet','sing-box-openflux.service'],check=False).returncode==0
+        if self.node()['role']=='client':
+            record['bridge_active']=self.run(['systemctl','is-active','--quiet','sing-box-openflux.service'],check=False).returncode==0
+            record['mailru_active']=self.run(['systemctl','is-active','--quiet',MAILRU_UNIT],check=False).returncode==0
         if record['binary_present']:
             shutil.copy2(self.binary,backup/'binary');record['binary_sha256']=node.sha(backup/'binary')
         unit=self.path('/etc/systemd/system')/VOLGA_UNIT
@@ -784,7 +844,9 @@ class VolgaRuntime:
         record=record or self.read(self.state/'transaction.json') or self.read(self.state/'rollback.json')
         if not record:raise ValueError('No Volga rollback checkpoint')
         self.action('stop') if self.active() else None
-        if record['node']['role']=='client':self.run(['systemctl','stop',record['node'].get('service','openflux-yandex-client.service')],check=False)
+        if record['node']['role']=='client':
+            self.run(['systemctl','stop',record['node'].get('service','openflux-yandex-client.service')],check=False)
+            self.run(['systemctl','stop',MAILRU_UNIT],check=False)
         if record['kind']=='update':
             # Validate every backup before restoring any support file.
             for item in record.get('support_files',[]):
@@ -824,6 +886,7 @@ class VolgaRuntime:
         self.save(self.node_path,record['node'])
         if record['active']:self.action('start')
         if record['legacy_active']:self.run(['systemctl','start',record['node'].get('service','openflux-yandex-client.service')])
+        if record.get('mailru_active'):self.run(['systemctl','start',MAILRU_UNIT])
         if record.get('bridge_active'):self.run(['systemctl','start','sing-box-openflux.service'])
         self.run(['systemctl','stop',record['watchdog']+'.timer'],check=False)
         (self.state/'transaction.json').unlink(missing_ok=True)
@@ -869,19 +932,26 @@ class VolgaRuntime:
             if repository==VOLGA_IMAGE_REPOSITORY and image not in used:self.run(['docker','image','rm',image],check=False)
 
     def select(self,transport):
-        if transport not in ('yandex','volga'):raise ValueError('This protocol is not installed or supported')
+        if transport not in ('yandex','volga','mailru'):raise ValueError('This protocol is not installed or supported')
         profile=self.node()
         if profile['role']!='client':raise ValueError('Server transports run independently; there is no server protocol switch')
         if transport=='yandex' and profile.get('active_transport','yandex')=='yandex' and not self.binary.is_file():return {'ok':True,'transport':'yandex','message':'Legacy is already selected.'}
+        mailru=MailruRuntime(self.root)
         if transport=='volga':
             self.configuration()
             if not self.read(self.state/'installed.json'):raise ValueError('Install the verified Volga release first')
+        if transport=='mailru':
+            if not mailru.document() or not mailru.installed():raise ValueError('Set up Mail.ru first')
+            # The router helpers must accept the Mail.ru unit (idempotent).
+            self.install_router_hooks()
         previous=self.begin_transaction('switch')
         try:
             self.run(['systemctl','stop',profile.get('service','openflux-yandex-client.service')])
             if self.active():self.action('stop')
+            if previous.get('mailru_active'):self.run(['systemctl','stop',MAILRU_UNIT])
             changed=dict(profile,active_transport=transport);self.save(self.node_path,changed)
             if transport=='volga':self.action('start');self.health()
+            elif transport=='mailru':mailru.action('start');mailru.health()
             else:
                 self.run(['systemctl','start',profile.get('service','openflux-yandex-client.service')])
                 import openflux_node
@@ -889,8 +959,10 @@ class VolgaRuntime:
             if previous.get('bridge_active'):self.run(['systemctl','start','sing-box-openflux.service'])
             # Selecting a protocol does not change the router's traffic mode.
             mode=self.path('/etc/router/mode')
-            if mode.exists() and mode.read_text().strip()!='openflux' and not previous['active'] and not previous['legacy_active']:
-                self.action('stop') if transport=='volga' else self.run(['systemctl','stop',profile.get('service','openflux-yandex-client.service')])
+            if mode.exists() and mode.read_text().strip()!='openflux' and not previous['active'] and not previous['legacy_active'] and not previous.get('mailru_active'):
+                if transport=='volga':self.action('stop')
+                elif transport=='mailru':mailru.action('stop')
+                else:self.run(['systemctl','stop',profile.get('service','openflux-yandex-client.service')])
             self.run(['systemctl','stop',previous['watchdog']+'.timer'])
             (self.state/'transaction.json').unlink()
             return {'ok':True,'transport':transport,'message':'Protocol selected; SOCKS and exit-IP checks passed.'}
@@ -931,21 +1003,275 @@ class VolgaRuntime:
             node.atomic_file(source,path,mode);source.unlink()
         return [str(path) for path,old,new,mode in plans]
 
+class MailruRuntime:
+    """Mail.ru beside Legacy and Volga: the Legacy binary with --transport mailru,
+    in its own client unit or, on a server, in an exit container. No cookies."""
+    # Status lines of transport/mailru; the newest one decides. Fixed texts only.
+    EVENTS=(
+        ('connected to the document','connected','Connected to the Mail.ru document.'),
+        ('connection to the document dropped','connecting','The connection to the Mail.ru document dropped; reconnecting.'),
+        ('cannot open the document','connecting','Mail.ru did not open the document; retrying. If this persists, check the link and that the document can be edited by link.'),
+        ('document server refused the connection','connecting','Mail.ru refused the document connection; retrying.'),
+        ('cannot reach the document server','connecting','Mail.ru is unreachable; retrying.'),
+        ('did not finish the handshake','connecting','Mail.ru did not finish the document handshake; retrying.'))
+
+    def __init__(self, root='/'):
+        import pathlib
+        self.root=pathlib.Path(root)
+        self.env_path=self.path(MAILRU_ENV)
+        self.data=self.path(MAILRU_DATA)
+        self.node_path=self.path('/etc/openflux/node.json')
+        self.units=self.path('/etc/systemd/system')
+
+    def path(self,name):return self.root/name.lstrip('/')
+    read=staticmethod(VolgaRuntime.read)
+    save=staticmethod(VolgaRuntime.save)
+
+    @staticmethod
+    def run(argv,check=True,timeout=30):
+        import subprocess
+        p=subprocess.run(argv,capture_output=True,text=True,timeout=timeout)
+        if check and p.returncode:raise RuntimeError('Mail.ru operation failed: '+argv[0]+'; inspect the service log')
+        return p
+
+    def node(self):
+        node=self.read(self.node_path,{})
+        if node.get('role') not in ('client','server'):raise ValueError('Adopt the existing OpenFlux node first')
+        return node
+
+    def unit(self):return MAILRU_UNIT if self.node()['role']=='client' else MAILRU_EXIT_UNIT
+
+    def document(self):
+        """The configured document link; None before Mail.ru is set up."""
+        try:return mailru_env(self.env_path.read_text())
+        except FileNotFoundError:return None
+
+    def installed(self):return (self.units/self.unit()).is_file()
+
+    def active(self):return self.run(['systemctl','is-active','--quiet',self.unit()],check=False).returncode==0
+
+    def binary(self):
+        import re
+        binary=self.node().get('binary','')
+        if not isinstance(binary,str) or not re.fullmatch(r'/[A-Za-z0-9_./-]+',binary) or '..' in binary.split('/'):raise ValueError('Invalid OpenFlux binary path')
+        return binary
+
+    def unit_text(self):
+        import re
+        node=self.node();account=node.get('cookie_user','openflux');legacy=node.get('service','openflux-yandex-client.service')
+        if not re.fullmatch(r'[a-z_][a-z0-9_-]*',account) or not re.fullmatch(r'[A-Za-z0-9_.@-]+',legacy):raise ValueError('Invalid service identity')
+        # The hardening of the Legacy client unit, which runs the same binary.
+        return ('[Unit]\nDescription=OpenFlux Mail.ru client\nAfter=network-online.target\nWants=network-online.target\n'
+            'Conflicts='+legacy+' '+VOLGA_UNIT+'\nPartOf=sing-box-openflux.service\n[Service]\nType=simple\nUser='+account+'\nGroup='+account+'\n'
+            'EnvironmentFile='+MAILRU_ENV+'\nExecStart='+self.binary()+' --client --transport mailru --url ${MAILRU_DOCUMENT} --socks5 127.0.0.1:11080 '+' '.join(MAILRU_PROFILE)+'\n'
+            'Restart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\nPrivateDevices=yes\nProtectSystem=strict\nProtectHome=yes\n'
+            'ProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nLockPersonality=yes\n'
+            'CapabilityBoundingSet=\nAmbientCapabilities=\n[Install]\nWantedBy=multi-user.target\n')
+
+    def exit_unit_text(self):
+        settings=mailru_exit_settings(self.node().get('mailru_exit'))
+        # Like the Legacy exit: the release binary in a container with raw-socket
+        # rights only, its output in this unit's journal. Images come from the
+        # host only, and the container log is bounded.
+        return ('[Unit]\nDescription=OpenFlux Mail.ru exit\nAfter=docker.service network-online.target\nRequires=docker.service\nWants=network-online.target\n'
+            '[Service]\nType=simple\nEnvironmentFile='+MAILRU_ENV+'\nExecStartPre=-/usr/bin/docker rm -f '+MAILRU_CONTAINER+'\n'
+            'ExecStart=/usr/bin/docker run --rm --pull=never --name '+MAILRU_CONTAINER+' --label io.openflux.managed=mailru --network='+settings['network']+' '
+            '--cap-drop=ALL --cap-add=NET_RAW --cap-add=NET_ADMIN --security-opt=no-new-privileges --pids-limit=256 --memory=512m --memory-swap=512m '
+            '--log-driver=json-file --log-opt=max-size=10m --log-opt=max-file=2 '
+            '--mount=type=bind,src='+self.binary()+',dst=/usr/local/bin/openflux,readonly --mount=type=bind,src='+MAILRU_DATA+'/run.sh,dst=/run/openflux-mailru/run.sh,readonly '
+            '--entrypoint=/bin/sh '+settings['image']+' /run/openflux-mailru/run.sh --exit-node --transport mailru --url ${MAILRU_DOCUMENT} '+' '.join(MAILRU_PROFILE)+'\n'
+            'ExecStop=/usr/bin/docker stop --time 10 '+MAILRU_CONTAINER+'\n'
+            # A Go program running as PID 1 exits with status 2 on SIGTERM.
+            'SuccessExitStatus=2 143\nRestart=always\nRestartSec=5\nTimeoutStartSec=120\nTimeoutStopSec=30\n[Install]\nWantedBy=multi-user.target\n')
+
+    def legacy_exit_settings(self):
+        """The Legacy exit container's image and network: the Mail.ru exit's default."""
+        import json
+        p=self.run(['docker','inspect',self.node().get('container','')],check=False)
+        if p.returncode:return None
+        try:
+            info=json.loads(p.stdout)[0];networks=list((info.get('NetworkSettings') or {}).get('Networks') or {})
+            value={'image':(info.get('Config') or {}).get('Image'),'network':networks[0] if len(networks)==1 else None}
+            return mailru_exit_settings(value)
+        except (ValueError,IndexError,KeyError,TypeError,AttributeError):return None
+
+    @staticmethod
+    def write(path,data,mode):
+        import os,tempfile
+        path.parent.mkdir(parents=True,exist_ok=True,mode=0o700)
+        fd,tmp=tempfile.mkstemp(prefix='.mailru-',dir=path.parent)
+        try:
+            with os.fdopen(fd,'wb') as f:f.write(data);f.flush();os.fsync(f.fileno())
+            os.chmod(tmp,mode);os.replace(tmp,path)
+        finally:
+            if os.path.exists(tmp):os.unlink(tmp)
+
+    def write_units(self):
+        """Write this node's Mail.ru unit (and a server's exit script) for the
+        current release; True when anything changed. Callers reload systemd."""
+        server=self.node()['role']=='server'
+        files=[(self.units/self.unit(),(self.exit_unit_text() if server else self.unit_text()).encode(),0o644)]
+        if server:files.append((self.data/'run.sh',MAILRU_EXIT_SCRIPT.encode(),0o755))
+        changed=False
+        for path,data,mode in files:
+            if not path.exists() or path.read_bytes()!=data:self.write(path,data,mode);changed=True
+        return changed
+
+    def configure(self,document,exit_settings=None):
+        """Save the document link and write the unit. A server's exit then starts
+        and must connect; any failure restores the previous files and state."""
+        document=mailru_document(document);node=self.node();server=node['role']=='server'
+        if server:exit_settings=mailru_exit_settings(exit_settings or node.get('mailru_exit') or self.legacy_exit_settings())
+        usage=self.run([self.binary(),'--help'],check=False)
+        if 'mailru-editor-activity' not in usage.stdout+usage.stderr:raise ValueError('The installed OpenFlux binary has no Mail.ru transport; update OpenFlux first')
+        unit=self.units/self.unit()
+        paths=[self.env_path,unit,self.node_path]+([self.data/'run.sh'] if server else [])
+        before={p:(p.read_bytes(),p.stat().st_mode&0o777) if p.exists() else None for p in paths}
+        existed=before[unit] is not None;was_active=existed and self.active()
+        env=('MAILRU_DOCUMENT='+document+'\n').encode();changed=before[self.env_path] is None or before[self.env_path][0]!=env
+        try:
+            self.write(self.env_path,env,0o600)
+            if server and node.get('mailru_exit')!=exit_settings:self.save(self.node_path,dict(node,mailru_exit=exit_settings))
+            units_changed=self.write_units()
+            self.run(['systemctl','daemon-reload'])
+            if not server:
+                # The router helpers must accept the Mail.ru unit before it is selected.
+                VolgaRuntime(self.root).install_router_hooks()
+                if was_active and changed:return {'ok':True,'changed':True,'message':'Mail.ru link saved. Apply the Mail.ru protocol again (or restart OPENFLUX) to use the new document.'}
+                return {'ok':True,'changed':changed,'message':'Mail.ru link saved. Select Mail.ru as the protocol to use it; the server’s Mail.ru exit must use the same document.'}
+            self.run(['systemctl','enable',MAILRU_EXIT_UNIT])
+            if changed or units_changed or not was_active:self.run(['systemctl','restart',MAILRU_EXIT_UNIT],timeout=150)
+            self.health()
+            return {'ok':True,'changed':changed or units_changed,'message':'Mail.ru exit is running and connected to the document.'}
+        except BaseException:
+            if server:
+                self.run(['systemctl','stop',MAILRU_EXIT_UNIT],check=False,timeout=60)
+                if not existed:self.run(['systemctl','disable',MAILRU_EXIT_UNIT],check=False)
+            for path,saved in before.items():
+                if saved is None:path.unlink(missing_ok=True)
+                elif not path.exists() or path.read_bytes()!=saved[0]:self.write(path,*saved)
+            self.run(['systemctl','daemon-reload'],check=False)
+            if server and was_active:self.run(['systemctl','start',MAILRU_EXIT_UNIT],check=False,timeout=150)
+            raise
+
+    def action(self,action):
+        if action not in ('start','stop','restart'):raise ValueError('Invalid runtime action')
+        if not self.installed():raise ValueError('Set up Mail.ru first')
+        return self.run(['systemctl',action,self.unit()],timeout=150)
+
+    @classmethod
+    def classify(cls,message):
+        import re
+        for needle,state,reason in cls.EVENTS:
+            if needle in message:
+                code=re.search(r'(?:status|http) ([1-5]\d\d)\b',message)
+                if code and state!='connected':reason=reason.replace(';',' (HTTP '+code[1]+');',1)
+                return state,reason
+        return None
+
+    def status(self):
+        import fcntl,json,re,time
+        unit=self.unit()
+        out={'transport':'mailru','state':'stopped','active':False,'installed':(self.units/unit).is_file(),'configured':False,'reason':'Mail.ru is stopped.'}
+        try:
+            document=self.document()
+            if document:out.update(configured=True,documents=[document])
+        except ValueError:out['reason']='Mail.ru configuration needs attention.'
+        p=self.run(['systemctl','show',unit,'-p','ActiveState','-p','InvocationID'],check=False)
+        d=dict(line.split('=',1) for line in p.stdout.splitlines() if '=' in line)
+        if d.get('ActiveState')!='active':return out
+        out.update(active=True,state='connecting',reason='Mail.ru is connecting.')
+        invocation=d.get('InvocationID','')
+        if not re.fullmatch('[0-9a-f]{32}',invocation):return out
+        # The client logs a stats line every 5 s: read only what is new since the
+        # last look, never the whole run again.
+        self.data.mkdir(parents=True,exist_ok=True,mode=0o700)
+        with open(self.data/'.status.lock','a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            saved=self.read(self.data/'status.json',{}) or {}
+            if saved.get('invocation')!=invocation:saved={'invocation':invocation}
+            argv=['journalctl','--no-pager','-o','json','_SYSTEMD_INVOCATION_ID='+invocation,'--grep','|'.join(re.escape(e[0]) for e in self.EVENTS)]
+            if saved.get('scanned_at'):argv+=['--since','@%d'%int(saved['scanned_at']-2)]
+            started=time.time();p=self.run(argv,check=False,timeout=20)
+            for line in p.stdout.splitlines():
+                try:e=json.loads(line);ts=int(e['__REALTIME_TIMESTAMP'])/1e6;message=e.get('MESSAGE')
+                except (ValueError,KeyError,TypeError):continue
+                if not isinstance(message,str) or ts<=saved.get('event_at',0):continue
+                event=self.classify(message)
+                if not event:continue
+                saved.update(state=event[0],reason=event[1],event_at=ts)
+                if event[0]=='connected':saved['connected_at']=ts
+            if p.returncode in (0,1):saved['scanned_at']=started
+            self.save(self.data/'status.json',saved)
+        if saved.get('state'):out.update(state=saved['state'],reason=saved['reason'])
+        if saved.get('connected_at'):out['connected_at']=int(saved['connected_at'])
+        out['checked_at']=int(time.time())
+        return out
+
+    def health(self,seconds=90):
+        import time
+        deadline=time.monotonic()+seconds;client=self.node()['role']=='client'
+        while time.monotonic()<deadline:
+            s=self.status()
+            if not s['active']:raise RuntimeError('Mail.ru stopped during health check')
+            # A server is ready once it holds the document; a client also proves
+            # the exit through its SOCKS port.
+            if s['state']=='connected' and (not client or VolgaRuntime(self.root).exit_ok()):return
+            time.sleep(1)
+        raise RuntimeError('Mail.ru did not pass connection and exit-IP checks')
+
+def run_mailru_cli(args):
+    import contextlib,fcntl,pathlib
+    runtime=MailruRuntime();action=args.action
+    if action in ('check','download','update','rollback'):raise ValueError('Mail.ru is updated together with OpenFlux: run this without --transport')
+    with contextlib.ExitStack() as stack:
+        locks=['/run/openflux-volga.lock']
+        if action=='setup-mailru':locks=['/run/router-updater.lock','/run/lock/router-mode.lock','/run/openflux-update.lock']+locks
+        for name in locks:
+            pathlib.Path(name).parent.mkdir(parents=True,exist_ok=True)
+            lock=stack.enter_context(open(name,'a'))
+            try:fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
+            except BlockingIOError:raise ValueError('Another router/Volga operation is running; retry shortly') from None
+        if action=='status':return runtime.status()
+        if action=='setup-mailru':
+            settings=None
+            if runtime.node()['role']=='server' and (getattr(args,'image',None) or getattr(args,'network',None)):
+                current=runtime.node().get('mailru_exit') or runtime.legacy_exit_settings() or {}
+                settings={'image':args.image or current.get('image'),'network':args.network or current.get('network')}
+            return runtime.configure(args.document_url,settings)
+        if action in ('start','stop','restart'):
+            node=runtime.node()
+            if node['role']=='client' and action in ('start','restart') and node.get('active_transport','yandex')!='mailru':raise ValueError('Use select-protocol mailru to switch clients safely')
+            runtime.action(action);return {'ok':True,'action':action}
+        if action=='health':runtime.health(max(1,min(args.seconds,150)));return {'ok':True,'health':'passed'}
+        raise ValueError('Unsupported Mail.ru action')
+
+# The router helpers accept only the units of known protocols (v4.2.0: Mail.ru).
+SELECTOR_CASE_V1='case "$OPENFLUX_SELECTED_UNIT" in openflux-yandex-client.service|openflux-volga-client.service) ;; *) echo "Invalid OpenFlux protocol unit" >&2; exit 1;; esac\n'
+SELECTOR_CASE=SELECTOR_CASE_V1.replace('|openflux-volga-client.service)','|openflux-volga-client.service|'+MAILRU_UNIT+')')
+# router-core's health helper names the selected protocol in its messages.
+HEALTH_NAMES_V1="def protocol():\n    return 'Volga' if UNIT=='openflux-volga-client.service' else 'Legacy'\n"
+HEALTH_NAMES="def protocol():\n    return {'openflux-volga-client.service':'Volga','"+MAILRU_UNIT+"':'Mail.ru'}.get(UNIT,'Legacy')\n"
+
 def patch_runtime_selector(text,python=False):
     import re
     marker='# openflux-protocol-selector-v1'
-    if marker in text:return text
+    if marker in text:
+        # Helpers patched before v4.2.0 learn the Mail.ru unit; nothing else changes.
+        old,new=(HEALTH_NAMES_V1,HEALTH_NAMES) if python else (SELECTOR_CASE_V1,SELECTOR_CASE)
+        return text.replace(old,new) if text.count(old)==1 else text
     if python:
         old="UNIT='openflux-yandex-client.service'"
         if text.count(old)!=1:raise ValueError('Unknown router health unit declaration')
         new=marker+"\nimport sys\nsys.path.insert(0, '/usr/local/lib/router-updater')\ntry:\n    from router_integration import openflux_runtime_unit\n    UNIT=openflux_runtime_unit()\nexcept ImportError:\n    UNIT='openflux-yandex-client.service'"
-        return text.replace(old,new)
+        text=text.replace(old,new)
+        return text.replace(HEALTH_NAMES_V1,HEALTH_NAMES) if text.count(HEALTH_NAMES_V1)==1 else text
     if not text.startswith('#!/usr/bin/env bash') or 'set -Eeuo pipefail' not in text:raise ValueError('Unknown router shell layout')
     refs=[line for line in text.splitlines() if 'openflux-yandex-client.service' in line]
     if not refs or any('systemctl' not in line and not re.fullmatch(r'(UNIT|CLIENT_UNIT|UNIT_CLIENT)="openflux-yandex-client.service"',line) for line in refs):raise ValueError('Unknown router unit reference')
     text=re.sub(r'(UNIT|CLIENT_UNIT|UNIT_CLIENT)="openflux-yandex-client.service"',r'\1="$OPENFLUX_SELECTED_UNIT"',text)
     text=text.replace('openflux-yandex-client.service','"$OPENFLUX_SELECTED_UNIT"')
-    hook=marker+'\nOPENFLUX_SELECTED_UNIT="$(/usr/local/sbin/openfluxctl runtime-unit 2>/dev/null || echo openflux-yandex-client.service)"\ncase "$OPENFLUX_SELECTED_UNIT" in openflux-yandex-client.service|openflux-volga-client.service) ;; *) echo "Invalid OpenFlux protocol unit" >&2; exit 1;; esac\n'
+    hook=marker+'\nOPENFLUX_SELECTED_UNIT="$(/usr/local/sbin/openfluxctl runtime-unit 2>/dev/null || echo openflux-yandex-client.service)"\n'+SELECTOR_CASE
     return text.replace('set -Eeuo pipefail\n','set -Eeuo pipefail\n'+hook,1)
 
 def run_volga_cli(args):
@@ -1200,6 +1526,45 @@ VOLGA_HOOK=(VOLGA_HOOK_V6
 for _old in ("  const cookieServer=(p,names)=>","client==='refused'","clientBadge(legacyAuth),","clientBadge(vp),","checkText(vp.client_check,'Volga')"):
     assert _old in VOLGA_HOOK,_old
 
+# v8: Mail.ru is the third protocol. It has an option in the selector and a
+# section of its own: its document link, this mini-PC's state and a field to set
+# the link. The one-mini-PC note covers it, and the OPENFLUX card's cookie
+# warning belongs to the Yandex protocols only.
+VOLGA_HTML_V7,VOLGA_JS_V7,VOLGA_HOOK_V7=VOLGA_HTML,VOLGA_JS,VOLGA_HOOK
+MAILRU_HTML='''
+  <details id="mailruSettings" style="margin-top:12px">
+   <summary style="cursor:pointer">Mail.ru document<span class="small" id="mailruBadge"></span></summary>
+   <div id="mailruDocLinks" style="margin-top:8px"></div>
+   <div class="small" id="mailruClientState" style="margin-top:4px"></div>
+   <p class="small">Mail.ru opens one public Mail.ru Cloud document as an anonymous visitor: no cookies and no login. The server&#39;s Mail.ru exit must use the same document. Paste the document&#39;s public link, or upload a Mail.ru config file, to set Mail.ru up or to change the document.</p>
+   <div class="row"><input id="mailruDocument" type="url" autocomplete="off" spellcheck="false" placeholder="https://cloud.mail.ru/public/…" style="flex:1;min-width:16em"><button id="mailruSave">Save link</button></div>
+   <div class="row" style="margin-top:8px"><button id="mailruConfigDownload">Download Mail.ru config</button><label>Upload Mail.ru config <input id="mailruConfigUpload" type="file" accept=".env,.txt"></label></div>
+   <p class="small" id="mailruResult" role="status"></p>
+   <p class="small">The config file (mailru.env, one line MAILRU_DOCUMENT=…) is also under Configuration as OpenFlux · Mail.ru document.</p>
+  </details>'''
+MAILRU_JS='''$('#mailruSave').onclick=async()=>{const b=$('#mailruSave'),r=$('#mailruResult');b.disabled=true;r.textContent='Saving the Mail.ru link…';try{const d=await volgaPost('mailru/config',{document:$('#mailruDocument').value.trim()});$('#mailruDocument').value='';r.textContent=d.message;refresh();}catch(e){r.textContent=e.message;}finally{b.disabled=false;}};
+$('#mailruConfigDownload').onclick=async()=>{const r=$('#mailruResult');try{const d=await volgaPost('mailru/config',{operation:'download'});const u=URL.createObjectURL(new Blob([d.config],{type:'text/plain'})),a=document.createElement('a');a.href=u;a.download=d.filename;a.click();setTimeout(()=>URL.revokeObjectURL(u),1000);}catch(e){r.textContent=e.message;}};
+$('#mailruConfigUpload').onchange=async(e)=>{const f=e.target.files[0],r=$('#mailruResult');if(!f)return;r.textContent='Saving the Mail.ru config…';try{if(f.size>4096)throw Error('The Mail.ru config must be at most 4 KiB');const d=await volgaPost('mailru/config',{operation:'upload',config:await f.text()});r.textContent=d.message;refresh();}catch(error){r.textContent=error.message;}finally{e.target.value='';}};
+'''
+MAILRU_HOOK='''  const mp=of.protocols?.mailru||{};
+  $('#mailruConfigDownload').disabled=!mp.configured;
+  cookieLinks($('#mailruDocLinks'),mp.documents||[]);
+  $('#mailruBadge').textContent=(selected==='mailru'?' · selected':'')+' · '+(!mp.configured?'not set up':({connected:'connected',connecting:'connecting',stopped:'stopped'})[mp.state]||'unknown');
+  $('#mailruClientState').textContent='This mini-PC: '+(!mp.configured?'Mail.ru is not set up yet':({connected:'Connected',connecting:'Connecting',stopped:'Stopped'})[mp.state]||'Unknown')+(mp.active&&mp.state!=='connected'&&mp.reason?' · '+mp.reason:'');
+'''
+VOLGA_HTML=(VOLGA_HTML_V7.replace('data-volga-panel="7"','data-volga-panel="8"')
+    .replace('<option value="volga">Volga</option></select>','<option value="volga">Volga</option><option value="mailru">Mail.ru</option></select>')
+    .replace('<b>Volga: one mini-PC at a time.</b> Stop OpenFlux/Volga on the other mini-PC before selecting Volga here.',
+             '<b>Volga and Mail.ru: one mini-PC at a time.</b> Stop OpenFlux on the other mini-PC before selecting Volga or Mail.ru here.')
+    +MAILRU_HTML)
+VOLGA_JS=VOLGA_JS_V7.replace("if($('#openfluxProtocol').value==='volga'&&!confirm('Volga works on one mini-PC at a time. Is OpenFlux/Volga stopped on the other mini-PC?'))return;",
+    "if(['volga','mailru'].includes($('#openfluxProtocol').value)&&!confirm('Volga and Mail.ru work on one mini-PC at a time. Is OpenFlux stopped on the other mini-PC?'))return;")+MAILRU_JS
+VOLGA_HOOK=VOLGA_HOOK_V7.replace("  if(of.state==='stopped'&&refused((selected==='volga'?vp:legacyAuth).client_check))",
+    "  if(of.state==='stopped'&&selected!=='mailru'&&refused((selected==='volga'?vp:legacyAuth).client_check))")+MAILRU_HOOK
+for _new in ('data-volga-panel="8"','<option value="mailru">Mail.ru</option>','<b>Volga and Mail.ru: one mini-PC at a time.</b>'):
+    assert VOLGA_HTML.count(_new)==1,_new
+assert "['volga','mailru'].includes(" in VOLGA_JS and "selected!=='mailru'&&refused(" in VOLGA_HOOK
+
 # The mode buttons show why a mode did not start: the last line of the mode
 # controller, e.g. "OPENFLUX was not started: AUTH_BLOCKED… AWG kept serving
 # the LAN." Both router panel layouts get the same answer and timeout.
@@ -1239,14 +1604,20 @@ def patch_legacy_check(text):
 
 def patch_volga_panel(text):
     if 'const CFG_GROUPS=' in text:
-        old="'openflux-updater'],modes:['openflux']"
-        new="'openflux-updater','openflux-volga-config'],modes:['openflux']"
-        if new not in text:text=replace(text,old,new)
-        old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);"
-        new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
-        if new not in text:text=replace(text,old,new)
-    if 'data-volga-panel="7"' in text:return text
-    if 'data-volga-panel="6"' in text:
+        # Grouped configuration cards: the Volga and Mail.ru files join OpenFlux.
+        new="'openflux-updater','openflux-volga-config','openflux-mailru'],modes:['openflux']"
+        if new not in text:
+            old="'openflux-updater','openflux-volga-config'],modes:['openflux']"
+            text=replace(text,old if old in text else "'openflux-updater'],modes:['openflux']",new)
+        new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config','openflux-mailru']);"
+        if new not in text:
+            old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
+            text=replace(text,old if old in text else "const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);",new)
+    if 'data-volga-panel="8"' in text:return text
+    if 'data-volga-panel="7"' in text:
+        # A v4.1.10/v4.1.11 panel: Mail.ru joins the selector and gets its section.
+        text=replace(replace(replace(text,VOLGA_HTML_V7,VOLGA_HTML),VOLGA_JS_V7,VOLGA_JS),VOLGA_HOOK_V7,VOLGA_HOOK)
+    elif 'data-volga-panel="6"' in text:
         # A v4.1.8/v4.1.9 panel: the last cookie check of this mini-PC stays visible.
         text=replace(replace(replace(text,VOLGA_HTML_V6,VOLGA_HTML),VOLGA_JS_V6,VOLGA_JS),VOLGA_HOOK_V6,VOLGA_HOOK)
     elif 'data-volga-panel="5"' in text:
@@ -1293,8 +1664,26 @@ PROTOCOL_ERRORS=(
     ('OpenFlux stopped during its health check','The Legacy client stopped during its check; see openflux-clientctl logs on this mini-PC.'),
     ('Volga stopped during health check','The Volga client stopped during its check; see journalctl -u openflux-volga-client on this mini-PC.'),
     ('Install the verified Volga release first','Install the verified Volga release in Router Updater first.'),
+    ('Mail.ru did not pass connection and exit-IP checks','Mail.ru did not connect within 90 s, or its exit IP was wrong. Check that the server’s Mail.ru exit runs with the same document link.'),
+    ('Mail.ru stopped during health check','The Mail.ru client stopped during its check; see journalctl -u openflux-mailru-client on this mini-PC.'),
+    ('Set up Mail.ru first','Mail.ru is not set up on this mini-PC: save the Mail.ru document link in the Mail.ru section first.'),
     ('This protocol is not installed or supported','This protocol is not installed or supported.'))
 BUSY_ERROR='Another router or Volga operation is running; retry shortly.'
+# What a failed Mail.ru link save tells the browser: fixed texts only.
+MAILRU_SETUP_ERRORS=(
+    ('MAILRU_DOCUMENT=<public link>','Upload a Mail.ru config file with one line: MAILRU_DOCUMENT=https://cloud.mail.ru/public/…'),
+    ('Set up Mail.ru first','Mail.ru is not set up on this mini-PC yet: save its document link first.'),
+    ('cloud.mail.ru/public/','Paste the public link of a Mail.ru Cloud document: https://cloud.mail.ru/public/… with nothing after it.'),
+    ('Invalid Mail.ru document link','Paste the public link of a Mail.ru Cloud document: https://cloud.mail.ru/public/…'),
+    ('has no Mail.ru transport','This mini-PC’s OpenFlux has no Mail.ru transport yet: install the current OpenFlux release in Router Updater first.'),
+    ('Unknown router','The router helpers on this mini-PC have an unexpected layout; Mail.ru was not set up.'))
+
+def mailru_setup_error(exc):
+    text=str(exc)
+    if 'Another router/Volga operation is running' in text or isinstance(exc,BlockingIOError):return BUSY_ERROR
+    for needle,message in MAILRU_SETUP_ERRORS:
+        if needle in text:return message
+    return 'Mail.ru setup failed; the previous Mail.ru settings are kept. Check the link and the installed OpenFlux release.'
 
 def protocol_error(exc):
     text=str(exc)
@@ -1305,7 +1694,7 @@ def protocol_error(exc):
 
 def volga_panel_post(handler):
     import json,types,contextlib,fcntl
-    paths=('/api/openflux/protocol','/api/openflux/volga/config','/api/openflux/volga/cookies','/api/openflux/volga/recovery','/api/openflux/volga/update')
+    paths=('/api/openflux/protocol','/api/openflux/volga/config','/api/openflux/volga/cookies','/api/openflux/volga/recovery','/api/openflux/volga/update','/api/openflux/mailru/config')
     if handler.path not in paths:return False
     if not handler.allowed() or not handler.authorized():handler.j({'ok':False,'error':'Request rejected'},403);return True
     if handler.path.endswith('/update'):
@@ -1316,10 +1705,22 @@ def volga_panel_post(handler):
         if not 1<=length<=140000 or 'application/json' not in handler.headers.get('Content-Type',''):raise ValueError('Invalid request')
         body=json.loads(handler.rfile.read(length));runtime=VolgaRuntime()
         if not isinstance(body,dict):raise ValueError('JSON object required')
-        if handler.path.endswith('/config') and body.get('operation')=='upload' and runtime.config_path.is_file():
+        if handler.path=='/api/openflux/volga/config' and body.get('operation')=='upload' and runtime.config_path.is_file():
             handler.j({'ok':False,'error':'Volga is configured. Replace its file under Configuration.'},400);return True
         if handler.path.endswith('/protocol'):
             result=run_volga_cli(types.SimpleNamespace(action='select-protocol',protocol=body.get('protocol')))
+        elif handler.path=='/api/openflux/mailru/config':
+            # The link field, or the config file (download and upload) beside it.
+            operation=body.get('operation','link')
+            if operation=='download':
+                document=MailruRuntime().document()
+                if not document:raise ValueError('Set up Mail.ru first')
+                result={'ok':True,'config':'MAILRU_DOCUMENT='+document+'\n','filename':'mailru.env'}
+            elif operation in ('link','upload'):
+                if operation=='upload' and (not isinstance(body.get('config'),str) or len(body['config'])>4096):raise ValueError('Expected one MAILRU_DOCUMENT=<public link> line')
+                document=mailru_env(body['config']) if operation=='upload' else body.get('document')
+                result=run_mailru_cli(types.SimpleNamespace(action='setup-mailru',document_url=document,image=None,network=None))
+            else:raise ValueError('Invalid Mail.ru config operation')
         else:
             with open('/run/openflux-volga.lock','a') as lock:
                 fcntl.flock(lock,fcntl.LOCK_EX|fcntl.LOCK_NB)
@@ -1335,6 +1736,7 @@ def volga_panel_post(handler):
         # No browser text, credential, raw subprocess output or key path is
         # reflected to a remote browser on an exception: fixed texts only.
         if handler.path.endswith('/protocol'):error=protocol_error(exc)
+        elif handler.path=='/api/openflux/mailru/config':error=mailru_setup_error(exc)
         elif isinstance(exc,BlockingIOError):error=BUSY_ERROR
         else:error='Volga operation failed. Check configuration, release availability and cookie pairing. Any runtime switch/update is restored on failure.'
         handler.j({'ok':False,'error':error},400)

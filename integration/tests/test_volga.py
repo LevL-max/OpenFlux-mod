@@ -249,9 +249,9 @@ class VolgaTests(unittest.TestCase):
  def test_fresh_panel_gets_one_cookie_section_per_protocol(self):
   changed=router_integration.patch_panel(BASE_PANEL);compile(changed,'router-panel','exec')
   self.assertEqual(router_integration.patch_panel(changed),changed)
-  self.assertIn("'openflux-updater','openflux-volga-config'],modes:['openflux']",changed)
-  self.assertIn("'openflux-cookies','openflux-volga-config']);",changed)
-  self.assertIn('data-volga-panel="7"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
+  self.assertIn("'openflux-updater','openflux-volga-config','openflux-mailru'],modes:['openflux']",changed)
+  self.assertIn("'openflux-cookies','openflux-volga-config','openflux-mailru']);",changed)
+  self.assertIn('data-volga-panel="8"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
   # One browser login per place: no button puts one session on both, and a refused Disk token is shown.
   self.assertNotIn('CookieBoth',changed);self.assertNotIn('cookiesBoth',changed)
   self.assertEqual(changed.count(router_integration.SEPARATE_LOGINS),2)
@@ -259,11 +259,11 @@ class VolgaTests(unittest.TestCase):
   for element in ('id="openfluxDiskToken"','id="volgaDiskToken"','legacyAuth.disk_token_rejected'):self.assertEqual(changed.count(element),1)
   # An idle Volga server is "connecting"; its heading says what that means.
   self.assertIn("connecting:'waiting for a client'",changed);self.assertIn("['auth_blocked','stopped']",changed)
-  for summary in ('>Legacy browser cookies<','>Volga browser cookies<'):self.assertEqual(changed.count(summary),1)
+  for summary in ('>Legacy browser cookies<','>Volga browser cookies<','>Mail.ru document<'):self.assertEqual(changed.count(summary),1)
   for retired in ('Update Yandex cookies','Server cookies via Yandex Disk',"hidden=selected==='volga'"):self.assertNotIn(retired,changed)
   ids=re.findall(r'\bid="([^"]+)"',changed);self.assertEqual(len(ids),len(set(ids)))
   # The one-mini-PC limitation stays visible next to the selector and is confirmed on Apply.
-  self.assertEqual(changed.count('id="volgaOneDevice"'),1);self.assertIn("confirm('Volga works on one mini-PC at a time.",changed)
+  self.assertEqual(changed.count('id="volgaOneDevice"'),1);self.assertIn("confirm('Volga and Mail.ru work on one mini-PC at a time.",changed)
   # Both sections stay visible, so Legacy lines read Legacy's own status even while Volga is selected.
   self.assertNotRegex(changed,r'\bof\.(last_failure|recovery_sender_ready|recovery_upload_ready|server_authentication)\b')
   self.assertLess(changed.index('const legacyAuth=of.protocols?.yandex||of'),changed.index('legacyAuth.client_check'))
@@ -360,18 +360,25 @@ class VolgaTests(unittest.TestCase):
   value=module.generate(self.root,'v4.1.0-rc1','a'*40,'ghcr.io/levl-max/openflux-mod-volga@sha256:'+'b'*64,'sha256:'+'c'*64)
   digest=hashlib.sha256((self.root/'openflux-volga-linux-amd64').read_bytes()).hexdigest()
   self.assertEqual(validate_volga_manifest(value,'v4.1.0-rc1',digest)['image_id'],'sha256:'+'c'*64)
+  # Mail.ru is listed with the Legacy binary that carries it.
+  mailru=[row for row in value['protocols'] if row['id']=='mailru']
+  self.assertEqual(mailru,[{'id':'mailru','label':'Mail.ru','binary':{'name':'openflux-linux-amd64','sha256':hashlib.sha256(b'openflux-linux-amd64').hexdigest()},'transport':'mailru'}])
 
  def fake_services(self):
-  flags={'legacy':True,'volga':False};commands=[]
+  # The three protocol units conflict: starting one stops the others.
+  flags={'legacy':True,'volga':False,'mailru':False};commands=[]
+  units={VOLGA_UNIT:'volga',self.node['service']:'legacy',router_integration.MAILRU_UNIT:'mailru'}
   def run(argv,check=True,timeout=30):
    commands.append(argv);rc=0
    if argv[:2]==['systemctl','is-active']:
-    unit=argv[-1];rc=0 if flags['volga' if unit==VOLGA_UNIT else 'legacy'] and unit!='sing-box-openflux.service' else 3
+    unit=argv[-1];rc=0 if unit in units and flags[units[unit]] else 3
    elif argv[:2] in (['systemctl','start'],['systemctl','stop']):
     for unit in argv[2:]:
-     if unit not in (VOLGA_UNIT,self.node['service']):continue
-     which='volga' if unit==VOLGA_UNIT else 'legacy';flags[which]=argv[1]=='start'
-     if flags[which]:flags['legacy' if which=='volga' else 'volga']=False
+     if unit not in units:continue
+     which=units[unit];flags[which]=argv[1]=='start'
+     if flags[which]:
+      for other in flags:
+       if other!=which:flags[other]=False
    return types.SimpleNamespace(returncode=rc,stdout='',stderr='')
   return flags,commands,run
 
@@ -380,7 +387,7 @@ class VolgaTests(unittest.TestCase):
   flags,commands,run=self.fake_services()
   with patch.object(self.runtime,'run',side_effect=run),patch.object(self.runtime,'health',side_effect=RuntimeError('test health failure')):
    with self.assertRaisesRegex(RuntimeError,'test health'):self.runtime.select('volga')
-  self.assertEqual(self.runtime.node(),self.node);self.assertEqual(flags,{'legacy':True,'volga':False})
+  self.assertEqual(self.runtime.node(),self.node);self.assertEqual(flags,{'legacy':True,'volga':False,'mailru':False})
   self.assertFalse((self.runtime.state/'transaction.json').exists())
 
  def test_server_container_restore_never_deletes_the_original(self):

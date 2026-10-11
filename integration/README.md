@@ -400,3 +400,52 @@ installs Legacy and the new support code only. The Router Updater then shows
 OpenFlux as not current; Download and Install once more to bring Volga to the same
 release (`sudo openfluxctl update` twice on the server). The separate rc Volga
 updater's checkpoints are removed by that update.
+
+## Mail.ru (opt-in)
+
+Mail.ru is the third protocol. It runs the same Legacy binary with `--transport mailru`
+and carries packets through one public Mail.ru Cloud document opened as an anonymous
+visitor: no cookies, no login and no Disk recovery. Create a document in Mail.ru Cloud,
+share it by link with editing allowed, and use its public link
+`https://cloud.mail.ru/public/XXXX/YYYYYYYY` on the server and on the clients. As with
+Legacy, anyone who has the link can open the document.
+
+Server, beside the Legacy exit (the image and Docker network default to those of the
+Legacy exit container):
+
+```sh
+sudo openfluxctl setup-mailru --document-url 'https://cloud.mail.ru/public/XXXX/YYYYYYYY'
+sudo openfluxctl status --transport mailru
+```
+
+The exit runs as `openflux-mailru-exit.service`, a `docker run --rm` container
+`openflux-mailru` with only NET_RAW and NET_ADMIN, its own network namespace (the TCP RST
+rule stays inside it), 512 MiB of memory, a bounded container log and the host's Legacy
+binary mounted read-only. Setup restores the previous state unless the exit connects to
+the document within 90 s. `--image` and `--network` choose another image or bridge
+network; host networking is refused.
+
+Mini-PC: the **Mail.ru document** section of the OpenFlux card takes the link, or a
+Mail.ru config file uploaded beside it (`mailru.env`, one line `MAILRU_DOCUMENT=…`), and
+downloads that file. Once set up, the file is also under Configuration as
+**OpenFlux · Mail.ru document**. Then choose **Mail.ru** in the protocol list and Apply:
+the switch checks the document session and the exit IP through SOCKS and returns to the
+previous protocol on failure. On the command line:
+
+```sh
+sudo openfluxctl setup-mailru --document-url 'https://cloud.mail.ru/public/XXXX/YYYYYYYY'
+sudo openfluxctl select-protocol mailru
+```
+
+The client unit `openflux-mailru-client.service` listens on the router SOCKS port and
+conflicts with the Legacy and Volga units. OPENFLUX mode, its watchdog and the automatic
+return to the previous mode work with it as with Volga; the router helpers learn its unit
+with this release. Like Volga, one mini-PC uses a document at a time.
+
+Updates: Mail.ru travels inside the Legacy binary of every release. An update rewrites
+the Mail.ru unit for the release's flags and tests Mail.ru when it is the selected
+protocol and already running. On a server it restarts a running Mail.ru exit onto a new
+binary and requires it to connect again. A failed check restores everything, as for the
+other protocols. When Mail.ru answers but refuses the document (an HTTP error), the
+transport retries three times quickly, then every 30 s doubling to 10 min; network
+failures keep quick retries.
