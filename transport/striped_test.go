@@ -105,8 +105,8 @@ func TestStripesReplayWindowAndConcurrentBroadcast(t *testing.T) {
 	}
 }
 
-func TestStripesFourAndEightParticipants(t *testing.T) {
-	for _, count := range []int{4, 8} {
+func TestStripesParticipantCounts(t *testing.T) {
+	for _, count := range []int{4, 8, 16, 32} {
 		lanes := make([]Transport, count)
 		for i := range lanes {
 			lane := &fragmentCapture{BaseTransport: NewBaseTransport(DefaultConfig())}
@@ -128,7 +128,7 @@ func TestStripesFourAndEightParticipants(t *testing.T) {
 			}
 		}
 	}
-	if _, err := NewStripedTransport(make([]Transport, 9)); err == nil {
+	if _, err := NewStripedTransport(make([]Transport, 33)); err == nil {
 		t.Fatal("unbounded lane count")
 	}
 	if _, err := NewStripedTransport(nil); err == nil {

@@ -37,7 +37,7 @@ The flag defaults to false to avoid silently changing existing installations.
 Mail.ru's cursor wire format remains unchanged. Volga's implementation and frozen
 performance profile are unchanged.
 
-Experimental `--yandex-lanes=2..8` adds independent Legacy participants on the
+Experimental `--yandex-lanes=N` (2 through 32) adds independent Legacy participants on the
 same document. It requires safe mode and matching settings on both peers. An
 `OFP1` envelope carries a random sender epoch and sequence number: receivers drop
 their own broadcasts and duplicates seen on the other connection. Replay memory
@@ -47,6 +47,10 @@ This provides neither packet acknowledgments nor lossless replay; TCP still
 handles packet loss. All participants share a serialized cookie store so they
 cannot race its temporary-file/rename transaction. The default is one participant.
 The extra 20-byte stripe envelope still fits below the 2600-byte serialized cap.
+`[YDOCS-POOL] lanes_ready` reports how many authenticated participants are usable.
+The count is a bounded experimental setting, not a claim that the provider allows
+arbitrarily many participants. Broadcast traffic grows faster than useful payload;
+choose a count from file-integrity, throughput and resource measurements.
 
 ## Why adding connections is a separate question
 

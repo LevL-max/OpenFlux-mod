@@ -8,6 +8,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"universal-bypass-tool/utils"
 )
 
 const stripeHeader = 20
@@ -30,13 +32,15 @@ type StripedTransport struct {
 	next     atomic.Uint64
 	mu       sync.Mutex
 	replay   map[[8]byte]*stripeReplay
+	done     chan struct{}
+	stopOnce sync.Once
 }
 
 func NewStripedTransport(lanes []Transport) (*StripedTransport, error) {
-	if len(lanes) < 2 || len(lanes) > 8 {
-		return nil, errors.New("striping requires two to eight lanes")
+	if len(lanes) < 2 || len(lanes) > 32 {
+		return nil, errors.New("striping requires two to 32 lanes")
 	}
-	s := &StripedTransport{lanes: append([]Transport(nil), lanes...), replay: make(map[[8]byte]*stripeReplay)}
+	s := &StripedTransport{lanes: append([]Transport(nil), lanes...), replay: make(map[[8]byte]*stripeReplay), done: make(chan struct{})}
 	if _, err := rand.Read(s.epoch[:]); err != nil {
 		return nil, err
 	}
@@ -44,6 +48,11 @@ func NewStripedTransport(lanes []Transport) (*StripedTransport, error) {
 }
 
 func (s *StripedTransport) Start() error {
+	select {
+	case <-s.done:
+		return errors.New("stripe transport stopped")
+	default:
+	}
 	for i, lane := range s.lanes {
 		if err := lane.Start(); err != nil {
 			for _, started := range s.lanes[:i] {
@@ -52,15 +61,36 @@ func (s *StripedTransport) Start() error {
 			return err
 		}
 	}
+	go s.statusLoop()
 	return nil
 }
 
 func (s *StripedTransport) Stop() error {
+	s.stopOnce.Do(func() { close(s.done) })
 	var result error
 	for _, lane := range s.lanes {
 		result = errors.Join(result, lane.Stop())
 	}
 	return result
+}
+
+func (s *StripedTransport) statusLoop() {
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+			ready := 0
+			for _, lane := range s.lanes {
+				if lane.IsConnected() {
+					ready++
+				}
+			}
+			utils.Statusf("[YDOCS-POOL] lanes_ready=%d/%d", ready, len(s.lanes))
+		}
+	}
 }
 
 func (s *StripedTransport) IsConnected() bool {
