@@ -16,6 +16,9 @@ SERVER_ARCHIVE = 'openflux-container-linux-amd64.tar.gz'
 VOLGA_BINARY = pathlib.Path('/opt/openflux-volga/openflux-volga')
 VOLGA_CONFIG = pathlib.Path('/etc/openflux-volga/config.json')
 VOLGA_INSTALLED = pathlib.Path('/var/lib/openflux-volga-updater/installed.json')
+# A server's Mail.ru exit: the Legacy binary in a container, run by this unit.
+MAILRU_EXIT_UNIT = 'openflux-mailru-exit.service'
+MAILRU_SCRIPT = pathlib.Path('/var/lib/openflux-mailru/run.sh')
 
 def read(path, default=None):
     try: return json.loads(pathlib.Path(path).read_text())
@@ -194,6 +197,8 @@ def checkpoint(c, volga=False):
     paths += [pathlib.Path(c['library'])/'openflux_node.py',HELPER]
     # Volga shares the checkpoint: one rollback restores one release.
     if volga: paths += [VOLGA_BINARY,VOLGA_INSTALLED,VOLGA_CONFIG]
+    # So does a Mail.ru exit set up here: its unit and script follow the release.
+    paths += [p for p in (UNIT_DIR/MAILRU_EXIT_UNIT,MAILRU_SCRIPT) if p.exists()]
     records = []
     for i,p in enumerate(paths):
         item = {'path':str(p),'present':p.exists(),'copy':str(i)}
@@ -218,6 +223,10 @@ def restore(data):
         runtime = VolgaRuntime(); runtime.restore_server_container(volga)
         if volga.get('active'): runtime.action('start')
     if legacy and data['active']: runtime_action(c,'start')
+    if data.get('mailru'):
+        # The restored unit and binary take effect on a fresh start of the exit.
+        run(['systemctl','daemon-reload'],check=False)
+        if data['mailru'].get('active'): run(['systemctl','restart',MAILRU_EXIT_UNIT],check=False,timeout=150)
     save(STATE/'installed.json',data['installed']); (STATE/'transaction.json').unlink(missing_ok=True)
     if data.get('watchdog'): run(['systemctl','stop',data['watchdog']+'.timer'],check=False)
 
@@ -235,14 +244,16 @@ def install_staged(c):
     for name,digest in data['assets'].items():
         if sha(directory/name)!=digest: raise ValueError('Staged release changed')
     mod = support(c); mod.extract_bundle(directory/'openflux-integration-linux.tar.gz',directory/'integration')
-    integration = mod.bundle_integration(directory) if data.get('volga') else None
-    volga = integration and integration.VolgaRuntime()
+    mailru = c['role']=='server' and (UNIT_DIR/MAILRU_EXIT_UNIT).exists()
+    integration = mod.bundle_integration(directory) if data.get('volga') or mailru else None
+    volga = data.get('volga') and integration.VolgaRuntime()
     # The Legacy exit restarts only when its binary changes; its clients keep their sessions otherwise.
     legacy = sha(directory/'openflux-linux-amd64')!=sha(c['binary'])
     prior = checkpoint(c, volga=bool(volga))
     watchdog = 'openflux-update-return-'+str(int(time.time()))
     prior.update(watchdog=watchdog, legacy_changed=legacy)
     if volga: prior['volga'] = {'active':volga.active(),'existed':volga.owned_container(integration.VOLGA_CONTAINER)}
+    if mailru: prior['mailru'] = {'active':run(['systemctl','is-active','--quiet',MAILRU_EXIT_UNIT],check=False).returncode==0}
     def keep(_record=None): save(pathlib.Path(prior['directory'])/'checkpoint.json',prior); save(STATE/'transaction.json',prior)
     keep()
     guard=next(x for x in prior['files'] if x['path']==str(pathlib.Path(c['library'])/'openflux_node.py'))
@@ -274,13 +285,20 @@ def install_staged(c):
                 volga.action('start'); volga.health(require_session=False)
             volga.save(VOLGA_INSTALLED,{'version':data['version'],'sha256':sha(VOLGA_BINARY),'image':data['image']})
             volga.install_recovery_timer()
+        if mailru:
+            # The Mail.ru exit runs the Legacy binary in a container: its unit takes
+            # this release's flags, and a running exit restarts onto a new binary.
+            exit_node = integration.MailruRuntime(); changed = exit_node.write_units()
+            if changed: run(['systemctl','daemon-reload'])
+            if prior['mailru']['active'] and (legacy or changed):
+                run(['systemctl','restart',MAILRU_EXIT_UNIT],timeout=150); exit_node.health()
         run(['systemctl','stop',watchdog+'.timer'])
         save(STATE/'rollback.json',prior)
         save(STATE/'installed.json',{'version':data['version'],'sha256':sha(c['binary'])})
         (STATE/'transaction.json').unlink(); (STATE/'staged.json').unlink()
         if volga: volga.prune_server_containers(prior['volga'].get('old_container')); mod.retire_volga_updater()
         prune_checkpoints()
-        return {'installed':data['version'],'health':'passed','previous_active_state_restored':True,'legacy_restarted':legacy,'volga':bool(volga)}
+        return {'installed':data['version'],'health':'passed','previous_active_state_restored':True,'legacy_restarted':legacy,'volga':bool(volga),'mailru':bool(mailru)}
     except BaseException:
         restore(prior); run(['systemctl','stop',watchdog+'.timer'],check=False); raise
 
@@ -401,12 +419,14 @@ def main():
         p.add_argument('--transport',default='yandex'); p.add_argument('--socks',default='127.0.0.1:1080')
         p.add_argument('--channel',choices=('stable','prerelease'),default='stable'); p.add_argument('--router-updater',action='store_true')
     for command in ('status','check','download','update','rollback','start','stop','restart','run','menu','health'):
-        p=sub.add_parser(command);p.add_argument('--transport',choices=('yandex','volga'));p.add_argument('--seconds',type=int,default=90)
+        p=sub.add_parser(command);p.add_argument('--transport',choices=('yandex','volga','mailru'));p.add_argument('--seconds',type=int,default=90)
     p=sub.add_parser('configure'); p.add_argument('--channel',choices=('stable','prerelease')); p.add_argument('--args-file'); p.add_argument('--transport'); p.add_argument('--document-url');p.add_argument('--config-file')
     p=sub.add_parser('cookies'); p.add_argument('operation',choices=('import','package','send')); p.add_argument('--file',default='-'); p.add_argument('--output');p.add_argument('--transport',choices=('yandex','volga'));p.add_argument('--document-url')
     p=sub.add_parser('recovery'); p.add_argument('--server-public-key'); p.add_argument('--sender-public-key'); p.add_argument('--disk-token-file'); p.add_argument('--disk-path');p.add_argument('--transport',choices=('yandex','volga'))
     p=sub.add_parser('setup-volga');p.add_argument('--config-file',required=True);p.add_argument('--memory-mib',type=int,default=256);p.add_argument('--cpu-percent',type=int,default=50)
-    p=sub.add_parser('select-protocol');p.add_argument('protocol',choices=('yandex','volga'))
+    # Mail.ru: the public document link; a server's exit defaults to the Legacy exit's image and network.
+    p=sub.add_parser('setup-mailru');p.add_argument('--document-url',required=True);p.add_argument('--image');p.add_argument('--network')
+    p=sub.add_parser('select-protocol');p.add_argument('protocol',choices=('yandex','volga','mailru'))
     for command in ('runtime-unit','recover-volga','poll-volga-recovery'):sub.add_parser(command)
     p=sub.add_parser('recover'); p.add_argument('--checkpoint',required=True)
     a=parser.parse_args()
@@ -414,8 +434,11 @@ def main():
     if a.action=='runtime-unit':
         from router_integration import openflux_runtime_unit
         print(openflux_runtime_unit());return
-    # One release, one updater: Volga follows every OpenFlux check/update/rollback.
-    if getattr(a,'transport',None)=='volga' and a.action in ('check','download','update','rollback'): a.transport=None
+    # One release, one updater: Volga and Mail.ru follow every OpenFlux check/update/rollback.
+    if getattr(a,'transport',None) in ('volga','mailru') and a.action in ('check','download','update','rollback'): a.transport=None
+    if getattr(a,'transport',None)=='mailru' or a.action=='setup-mailru':
+        from router_integration import run_mailru_cli
+        result=run_mailru_cli(a);print(json.dumps(result,indent=2));return
     if getattr(a,'transport',None)=='volga' or a.action in ('setup-volga','select-protocol','recover-volga','poll-volga-recovery'):
         from router_integration import run_volga_cli
         result=run_volga_cli(a);print(json.dumps(result,indent=2));return

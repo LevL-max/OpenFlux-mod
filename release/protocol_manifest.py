@@ -16,7 +16,9 @@ def generate(directory, version, commit, image, image_id):
         {'id': 'volga', 'label': 'Volga', 'binary': asset('openflux-volga-linux-amd64'),
          'container_archive': asset('openflux-volga-container-linux-amd64.tar.gz'), 'image': image, 'image_id': image_id,
          'config_protocol': 'volga-stream-v1', 'max_streams': 64,
-         'performance_profile': json.loads((pathlib.Path(__file__).resolve().parents[1]/'docs/FROZEN-PERFORMANCE-PROFILE.json').read_text())}]}
+         'performance_profile': json.loads((pathlib.Path(__file__).resolve().parents[1]/'docs/FROZEN-PERFORMANCE-PROFILE.json').read_text())},
+        # Mail.ru travels inside the Legacy binary (--transport mailru).
+        {'id': 'mailru', 'label': 'Mail.ru', 'binary': asset('openflux-linux-amd64'), 'transport': 'mailru'}]}
 
 if __name__ == '__main__':
     directory=pathlib.Path(sys.argv[1])

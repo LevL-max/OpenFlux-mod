@@ -18,12 +18,12 @@ def volga_line(t,event,data=None):
 class PanelTest(unittest.TestCase):
     def test_v6_panel_keeps_the_last_client_check_visible(self):
         fresh=r.patch_panel(BASE_PANEL)
-        self.assertIn('data-volga-panel="7"',fresh);compile(fresh,'router-panel','exec')
+        self.assertIn('data-volga-panel="8"',fresh);compile(fresh,'router-panel','exec')
         for piece in ('clientBadge(legacyAuth)','clientBadge(vp)',"checkText(vp.client_check,'Volga')","checkText(lc,'Legacy')","'this mini-PC: cookies refused'"):
             self.assertEqual(fresh.count(piece),1,piece)
         # The Legacy line no longer shows a refusal that a later success answered.
         self.assertNotIn("'Last client authentication issue: '+new Date(legacyAuth",fresh)
-        v6=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V6).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V6).replace(r.LEGACY_CHECK_V7[1],r.LEGACY_CHECK_V7[0])
+        v6=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V6).replace(r.VOLGA_JS,r.VOLGA_JS_V6).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V6).replace(r.LEGACY_CHECK_V7[1],r.LEGACY_CHECK_V7[0])
         self.assertIn('data-volga-panel="6"',v6);self.assertNotIn('client_check',v6)
         self.assertEqual(r.patch_panel(v6),fresh);self.assertEqual(r.patch_panel(fresh),fresh)
         # The panel embeds the script in a Python string: no backslashes or template literals.

@@ -182,7 +182,13 @@ def snapshot():
             volga=runtime.status();selected=runtime.node().get('active_transport','yandex')
         except Exception:
             volga={'state':'unknown','configured':False,'installed':False};selected='yandex'
-        return {**(volga if selected=='volga' else legacy),'active_transport':selected,'protocols':{'yandex':legacy,'volga':volga},'router_event':router_event()}
+        try:
+            from router_integration import MailruRuntime
+            mailru=MailruRuntime().status()
+        except Exception:
+            mailru={'state':'unknown','configured':False,'installed':False,'transport':'mailru'}
+        current={'volga':volga,'mailru':mailru}.get(selected,legacy)
+        return {**current,'active_transport':selected,'protocols':{'yandex':legacy,'volga':volga,'mailru':mailru},'router_event':router_event()}
     except Exception:return {'state':'unknown','reason':'Authentication status unavailable. Check the status helper.'}
 
 def _status():

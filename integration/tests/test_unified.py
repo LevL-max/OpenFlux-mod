@@ -153,6 +153,37 @@ class RouterUpdaterTests(unittest.TestCase):
   self.assertEqual(calls,['hooks','timer']);self.assertEqual(json.loads(self.paths['VOLGA_INSTALLED'].read_text())['version'],'v4.1.0-rc3')
   with self.assertRaisesRegex(ValueError,'checksum'):r.install_volga(core,directory/'binary',{'version':'x','volga_sha256':'0'*64},types.SimpleNamespace(VolgaRuntime=lambda:runtime))
 
+ def test_mailru_unit_is_checkpointed_once_it_is_set_up(self):
+  core=types.SimpleNamespace(sha=sha);checkpoint=self.root/'cp';checkpoint.mkdir()
+  # Not set up: a rollback to this checkpoint must not delete a later setup.
+  self.assertNotIn('mailru-unit',r.backup_files(core,checkpoint));self.assertIn('volga-unit',r.backup_files(core,checkpoint))
+  unit=self.paths['UNIT_DIR']/r.MAILRU_UNIT;unit.parent.mkdir(parents=True);unit.write_text('[Unit]\nold\n')
+  self.assertEqual(r.backup_files(core,checkpoint)['mailru-unit']['present'],True)
+
+ def test_running_selected_mailru_is_tested_and_the_others_are_left_alone(self):
+  core,runs,new,meta=self.replace_core(active=(r.MAILRU_UNIT,))
+  self.paths['NODE_PROFILE'].write_text(json.dumps({'active_transport':'mailru'}))
+  checked=[];fake=types.SimpleNamespace(MailruRuntime=lambda:types.SimpleNamespace(health=lambda:checked.append(True)))
+  with patch.object(r,'install_support'),patch.object(r,'health') as legacy_health,patch.object(r,'load_integration',return_value=fake):
+   r.replace(core,new,meta)
+  self.assertIn(['systemctl','stop',r.UNIT,r.MAILRU_UNIT],runs);self.assertIn(['systemctl','start',r.MAILRU_UNIT],runs)
+  self.assertEqual(checked,[True]);legacy_health.assert_not_called()
+
+ def test_selected_but_stopped_mailru_is_not_started_to_be_tested(self):
+  core,runs,new,meta=self.replace_core()
+  self.paths['NODE_PROFILE'].write_text(json.dumps({'active_transport':'mailru'}))
+  with patch.object(r,'install_support'),patch.object(r,'health') as health,patch.object(r,'load_integration') as load:
+   r.replace(core,new,meta)
+  self.assertFalse(any(argv[:2]==['systemctl','start'] for argv in runs));health.assert_not_called();load.assert_not_called()
+
+ def test_install_mailru_rewrites_its_unit_and_router_hooks_without_starting_it(self):
+  calls=[];changed=[True,False]
+  integration=types.SimpleNamespace(MailruRuntime=lambda:types.SimpleNamespace(write_units=lambda:changed.pop(0)),
+                                    VolgaRuntime=lambda:types.SimpleNamespace(install_router_hooks=lambda:calls.append('hooks')))
+  core=types.SimpleNamespace(run=lambda argv,**kwargs:calls.append(argv))
+  r.install_mailru(core,integration);r.install_mailru(core,integration)
+  self.assertEqual(calls,[['systemctl','daemon-reload'],'hooks','hooks'])
+
  def test_first_unified_install_retires_the_separate_volga_updater(self):
   state=self.paths['VOLGA_STATE']
   for name in ('backup-1','candidate-1'):(state/name).mkdir(parents=True)
@@ -237,5 +268,45 @@ class ServerUpdaterTests(unittest.TestCase):
   self.assertEqual((self.lib/'openflux_auth.py').read_text(),'old status')
   self.assertIn(('restore','openflux-volga-backup-1'),volga.calls);self.assertEqual(volga.calls[-1],('action','start'))
   self.assertEqual(actions,['stop','start','stop','start']);self.assertFalse((self.state/'transaction.json').exists())
+
+ def mailru_server(self,health_error=None):
+  # A Mail.ru exit set up on this server, running; Volga stopped.
+  units=self.root/'units';units.mkdir();(units/n.MAILRU_EXIT_UNIT).write_text('[Unit]\nold exit\n')
+  script=self.root/'mailru'/'run.sh';script.parent.mkdir();script.write_text('old script')
+  self.stack.enter_context(patch.object(n,'UNIT_DIR',units));self.stack.enter_context(patch.object(n,'MAILRU_SCRIPT',script))
+  calls=[]
+  def health():
+   calls.append('health')
+   if health_error:raise RuntimeError(health_error)
+  def write_units():
+   (units/n.MAILRU_EXIT_UNIT).write_text('[Unit]\nnew exit\n');calls.append('units');return True
+  mailru=types.SimpleNamespace(write_units=write_units,health=health);volga=FakeServerVolga(active=False,existed=True)
+  module=types.SimpleNamespace(MODULES=('openflux_auth.py',),extract_bundle=lambda *args:None,retire_volga_updater=lambda:None,
+                               bundle_integration=lambda directory:types.SimpleNamespace(VOLGA_CONTAINER='openflux-volga',VolgaRuntime=lambda:volga,MailruRuntime=lambda:mailru))
+  for name,value in [('support',module),('active',True),('identify',{'version':'v4.1.0-rc2','sha256':n.sha(self.binary)})]:
+   self.stack.enter_context(patch.object(n,name,return_value=value))
+  self.stack.enter_context(patch.object(n,'runtime_action'));self.stack.enter_context(patch.object(n,'health'))
+  run=self.stack.enter_context(patch.object(n,'run',return_value=types.SimpleNamespace(returncode=0,stdout='',stderr='')))
+  self.stack.enter_context(patch.object(router_integration,'VolgaRuntime',return_value=volga))
+  return units,calls,run
+
+ def test_running_mailru_exit_moves_to_the_new_binary_and_must_connect(self):
+  units,calls,run=self.mailru_server()
+  self.staged_release(b'legacy v4.1.0-rc4')
+  result=n.install_staged(self.c)
+  self.assertTrue(result['mailru']);self.assertEqual(calls,['units','health'])
+  commands=[c.args[0] for c in run.call_args_list]
+  self.assertIn(['systemctl','daemon-reload'],commands);self.assertIn(['systemctl','restart',n.MAILRU_EXIT_UNIT],commands)
+  self.assertEqual((units/n.MAILRU_EXIT_UNIT).read_text(),'[Unit]\nnew exit\n');self.assertFalse((self.state/'transaction.json').exists())
+
+ def test_failed_mailru_exit_restores_its_unit_the_binary_and_restarts_it(self):
+  units,calls,run=self.mailru_server(health_error='Mail.ru did not pass connection and exit-IP checks')
+  self.staged_release(b'legacy v4.1.0-rc4')
+  with self.assertRaisesRegex(RuntimeError,'did not pass'):n.install_staged(self.c)
+  self.assertEqual(self.binary.read_bytes(),b'legacy v4.1.0-rc3');self.assertEqual((units/n.MAILRU_EXIT_UNIT).read_text(),'[Unit]\nold exit\n')
+  # The restored unit is reloaded, then the exit restarts onto the restored binary.
+  commands=[c.args[0] for c in run.call_args_list];last=max(i for i,c in enumerate(commands) if c==['systemctl','daemon-reload'])
+  self.assertEqual(commands[last+1],['systemctl','restart',n.MAILRU_EXIT_UNIT])
+  self.assertFalse((self.state/'transaction.json').exists())
 
 if __name__=='__main__':unittest.main()

@@ -11,6 +11,7 @@ import (
 	_ "github.com/wlynxg/anet"
 	"universal-bypass-tool/socks5"
 	"universal-bypass-tool/transport"
+	"universal-bypass-tool/transport/mailru"
 	"universal-bypass-tool/transport/oneme"
 	"universal-bypass-tool/transport/yandex"
 	"universal-bypass-tool/tunnel"
@@ -33,7 +34,8 @@ func main() {
 	tracePackets := flag.Bool("trace-packets", false, "With --debug, also log every tunnel packet")
 	statusEvents := flag.Bool("status-events", true, "Emit safe authentication and connection status events")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
-	transportType := flag.String("transport", "yandex", "Transport type (yandex, google, custom)")
+	transportType := flag.String("transport", "yandex", "Transport type (yandex, mailru, oneme)")
+	mailruEditorActivity := flag.Bool("mailru-editor-activity", false, "Mail.ru: send fake saveChanges edits like a live editor (changes the document)")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
 	yandexCookieFile := flag.String("yandex-cookie-file", "", "Optional one-time raw browser Cookie header seed")
 	yandexCookieStore := flag.String("yandex-cookie-store", "", "Persistent Yandex cookie store JSON path")
@@ -106,6 +108,16 @@ func main() {
 		}
 		log.Printf("Yandex queue size: %d", config.MaxQueueSize)
 		log.Printf("Compression: %t", *compressionEnabled)
+	case "mailru":
+		mailruTransport := mailru.NewMailruDocsTransport(globalDocUrl, config)
+		mailruTransport.SetEditorActivity(*mailruEditorActivity)
+		if *compressionEnabled {
+			trans = transport.NewCompressedTransport(mailruTransport)
+		} else {
+			trans = mailruTransport
+		}
+		log.Printf("Mail.ru queue size: %d | editor activity: %t", config.MaxQueueSize, *mailruEditorActivity)
+		log.Printf("Compression: %t", *compressionEnabled)
 	case "oneme":
 		uidint, _ := strconv.ParseInt(maxUid, 10, 64)
 		trans = transport.NewCompressedTransport(oneme.NewOneMeTransport(*exitNode, maxToken, uidint, config))
@@ -113,7 +125,7 @@ func main() {
 		log.Fatalf("Unknown transport type: %s", *transportType)
 	}
 
-	if *transportType == "yandex" && *batchPackets > 1 {
+	if (*transportType == "yandex" || *transportType == "mailru") && *batchPackets > 1 {
 		trans = transport.NewBatchingTransport(
 			trans,
 			*batchPackets,

@@ -22,6 +22,9 @@ VOLGA_BINARY=pathlib.Path('/opt/openflux-volga/openflux-volga')
 VOLGA_CONFIG=pathlib.Path('/etc/openflux-volga/config.json')
 VOLGA_STATE=pathlib.Path('/var/lib/openflux-volga-updater')
 VOLGA_INSTALLED=VOLGA_STATE/'installed.json'
+# Mail.ru runs the Legacy binary in its own unit once its document is set up.
+MAILRU_UNIT='openflux-mailru-client.service'
+MAILRU_ENV=pathlib.Path('/etc/openflux-mailru/mailru.env')
 ROUTER_HOOKS=('/usr/local/sbin/openflux-routerctl','/usr/local/sbin/openflux-clientctl','/usr/local/sbin/router-restore-runtime',
               '/usr/local/sbin/router-runtime-ensure','/usr/local/lib/router-wan/openflux_health.py','/usr/local/lib/router-xray/openflux_health.py')
 
@@ -170,14 +173,19 @@ def support_paths():
     paths=[('runner',RUNNER),('helper',HELPER),('cookie-dropin',DROPIN),('node-control',LIBDIR/'openflux_node.py'),('router-panel',PANEL)]+[('integration-'+name,LIBDIR/name) for name in MODULES]
     # Volga and the router hooks share this checkpoint: one rollback restores one release.
     paths+=[('volga-binary',VOLGA_BINARY),('volga-unit',UNIT_DIR/VOLGA_UNIT),('volga-installed',VOLGA_INSTALLED),
-            ('volga-recovery-service',UNIT_DIR/'openflux-volga-recovery.service'),('volga-recovery-timer',UNIT_DIR/'openflux-volga-recovery.timer')]
+            ('volga-recovery-service',UNIT_DIR/'openflux-volga-recovery.service'),('volga-recovery-timer',UNIT_DIR/'openflux-volga-recovery.timer'),
+            ('mailru-unit',UNIT_DIR/MAILRU_UNIT)]
     return paths+[('hook-'+pathlib.Path(p).parent.name+'-'+pathlib.Path(p).name,pathlib.Path(p)) for p in ROUTER_HOOKS]
+
+# Set up by the user, not by a release: a rollback to a checkpoint taken before
+# that keeps it rather than deleting it.
+USER_SETUP=('mailru-unit',)
 
 def backup_files(core,checkpoint):
     records={}
     for name,path in support_paths():
         if path.exists():shutil.copy2(path,checkpoint/name);records[name]={'present':True,'sha256':core.sha(checkpoint/name),'mode':path.stat().st_mode&0o777}
-        else:records[name]={'present':False}
+        elif name not in USER_SETUP:records[name]={'present':False}
     return records
 
 def restore_files(core,checkpoint,records):
@@ -233,6 +241,7 @@ def install_support(core,source,metadata):
             staged=source.parent/'panel-new';staged.write_text(patched)
             core.atomic_binary(staged,PANEL);os.chmod(PANEL,0o644)
         if metadata.get('volga'):install_volga(core,source,metadata,integration)
+        if MAILRU_ENV.exists():install_mailru(core,integration)
         core.run(['systemctl','try-restart','router-panel.service'],record=False)
 
 def install_volga(core,source,metadata,integration):
@@ -247,6 +256,13 @@ def install_volga(core,source,metadata,integration):
     runtime.install_router_hooks()
     runtime.install_recovery_timer()
     runtime.save(VOLGA_INSTALLED,{'version':metadata['version'],'sha256':metadata['volga_sha256']})
+
+def install_mailru(core,integration):
+    # Mail.ru runs the Legacy binary just installed: its unit takes this release's
+    # flags and the router helpers accept it. Verified offline; never started here.
+    runtime=integration.MailruRuntime()
+    if runtime.write_units():core.run(['systemctl','daemon-reload'],record=False)
+    integration.VolgaRuntime().install_router_hooks()
 
 def retire_volga_updater():
     # The separate Volga updater is gone; its checkpoints would restore mismatched support code.
@@ -282,17 +298,23 @@ def health(core,seconds=100):
     raise RuntimeError('OpenFlux did not pass authentication and AWS exit-IP health checks; inspect authentication status.')
 
 def stop_runtimes(core,active,check=True):
-    # Legacy always; Volga only where it runs, so a node without Volga needs no unit.
-    core.run(['systemctl','stop',UNIT]+[unit for unit in active if unit==VOLGA_UNIT],timeout=30,record=False,check=check)
+    # Legacy always; Volga and Mail.ru only where they run, so a node without them needs no unit.
+    core.run(['systemctl','stop',UNIT]+[unit for unit in active if unit in (VOLGA_UNIT,MAILRU_UNIT)],timeout=30,record=False,check=check)
 
 def test_selected(core,selected,active,rollback):
-    # Test the protocol this router uses. Volga is started only where it already
-    # runs: starting it elsewhere would take the shared document pair.
+    # Test the protocol this router uses. Volga and Mail.ru are started only where
+    # they already run: starting them elsewhere would take the shared document.
     if selected=='volga':
         if VOLGA_UNIT in active:
             core.run(['systemctl','start',VOLGA_UNIT],timeout=30,record=False)
             load_integration(LIBDIR/'router_integration.py','openflux_installed_integration').VolgaRuntime().health()
         else:core.progress('Volga is selected but stopped; its executable was verified without starting it.')
+        return
+    if selected=='mailru':
+        if MAILRU_UNIT in active:
+            core.run(['systemctl','start',MAILRU_UNIT],timeout=30,record=False)
+            load_integration(LIBDIR/'router_integration.py','openflux_installed_integration').MailruRuntime().health()
+        else:core.progress('Mail.ru is selected but stopped; the Legacy binary it runs was verified without starting it.')
         return
     # An explicit rollback to a stopped historical version restores its original stopped state.
     if not rollback or UNIT in active:
@@ -305,7 +327,7 @@ def replace(core,source,metadata):
     if (VOLGA_STATE/'transaction.json').exists():raise ValueError('Recover the interrupted Volga operation first: sudo openfluxctl recover-volga')
     binary=pathlib.Path(core.COMPONENTS['openflux']['binary']);mode=core.MODE.read_text().strip()
     selected=selected_protocol()
-    active=[unit for unit in (UNIT,VOLGA_UNIT) if core.service_active(unit)]
+    active=[unit for unit in (UNIT,VOLGA_UNIT,MAILRU_UNIT) if core.service_active(unit)]
     panel=core.service_active('router-panel.service')
     if not rollback and metadata.get('bundle_schema')!=1:raise ValueError('Download the complete verified OpenFlux release first')
     if rollback and 'support_files' not in metadata:raise ValueError('Legacy binary-only rollback lacks its runner backup; use a complete checkpoint')
@@ -317,7 +339,7 @@ def replace(core,source,metadata):
     core.write_json(checkpoint/'metadata.json',record)
     # Publish a recoverable checkpoint before the first replacement, including on an interrupted install.
     core.write_json(directory/'transaction.json',dict(record,target_version=metadata['version']))
-    core.progress('Complete checkpoint saved (Legacy, Volga and router support). Testing the selected protocol without changing the router mode.')
+    core.progress('Complete checkpoint saved (Legacy, Volga, Mail.ru and router support). Testing the selected protocol without changing the router mode.')
     with contextlib.ExitStack() as locks:
         locks.enter_context(core.exclusive(pathlib.Path('/run/watchdog-rotator.lock')))
         locks.enter_context(core.exclusive(pathlib.Path('/run/tun-rotator.lock')))
@@ -344,5 +366,6 @@ def replace(core,source,metadata):
     core.write_json(directory/'installed.json',{'version':metadata['version'],'sha256':core.sha(binary)})
     (directory/'transaction.json').unlink(missing_ok=True)
     if not rollback:retire_volga_updater()
-    tested={'volga':'Volga session + SOCKS + configured exit verified.' if VOLGA_UNIT in active else 'Volga stays stopped; its executable was verified.'}
+    tested={'volga':'Volga session + SOCKS + configured exit verified.' if VOLGA_UNIT in active else 'Volga stays stopped; its executable was verified.',
+            'mailru':'Mail.ru document + SOCKS + configured exit verified.' if MAILRU_UNIT in active else 'Mail.ru stays stopped; the Legacy binary it runs was verified.'}
     core.progress('Installed '+metadata['version']+'. '+('Previous stopped runtime restored.' if rollback and not active else tested.get(selected,'Authentication + SOCKS + configured exit verified.'))+' Router mode remains '+mode.upper()+'.')

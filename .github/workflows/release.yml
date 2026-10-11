@@ -208,6 +208,9 @@ jobs:
           - Built with Go 1.26.8, which carries the security fixes of Go 1.26.5 to 1.26.8 for TLS, HTTP, URL parsing and networking.
           - Router Panel keeps this mini-PC's last check of its own cookies after the client stops. When Yandex refused them (captcha or login), the protocol's cookie section, its badge and the OPENFLUX card say so until fresh cookies are saved or a later check passes; Legacy's old "last issue" line no longer outlives later successes.
           - Legacy carries traffic again on Yandex's current document editor: each packet declares its real length, which Yandex now checks, instead of a fixed value it stopped relaying. Exit and clients both need this release.
+          - Mail.ru is a third protocol beside Legacy and Volga. The same binary with --transport mailru carries packets through one public Mail.ru Cloud document opened as an anonymous visitor, so no cookies are needed. A server runs its exit as openflux-mailru-exit.service (openfluxctl setup-mailru); a mini-PC selects Mail.ru in Router Panel, whose Mail.ru section takes the document link and downloads or uploads its config file.
+          - When Mail.ru answers but refuses the document, retries slow down after three quick tries, from 30 s up to 10 min; network failures keep quick retries.
+          - Updates and rollbacks include Mail.ru: its unit follows the release, a running Mail.ru client or exit is tested, and a failed check restores everything. Like Volga, one mini-PC uses a Mail.ru document at a time.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart running installations.
