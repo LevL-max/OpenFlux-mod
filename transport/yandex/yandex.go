@@ -503,7 +503,11 @@ func (t *YandexDocsTransport) writerLoop() {
 		}
 
 		payload := base64.StdEncoding.EncodeToString(packet)
-		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, payload)
+		// The cursor's numeric prefix must be the packet's real length before
+		// Base64. Since OnlyOffice build 2026.2.1-3364 (seen 2026-10-09) Yandex
+		// does not relay a cursor whose declared length does not match, and the
+		// old fixed "18" dropped every packet. Upstream 4a17023 (issue #165).
+		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"%d;%s"}]`, len(packet), payload)
 
 		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
 			t.perfWriteErrors.Add(1)

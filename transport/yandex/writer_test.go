@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"sort"
+	"strconv"
 	"testing"
 	"time"
 
@@ -41,7 +43,7 @@ func writerPeer(t testing.TB) (*YandexDocsTransport, <-chan string) {
 }
 
 func cursorMessage(packet []byte) string {
-	return fmt.Sprintf(`42["message",{"type":"cursor","cursor":"18;%s"}]`, base64.StdEncoding.EncodeToString(packet))
+	return fmt.Sprintf(`42["message",{"type":"cursor","cursor":"%d;%s"}]`, len(packet), base64.StdEncoding.EncodeToString(packet))
 }
 
 func expectMessage(t *testing.T, received <-chan string, want string) {
@@ -65,6 +67,33 @@ func TestWriterSendsQueuedPacketsInOrder(t *testing.T) {
 	}
 	for i := 0; i < 50; i++ {
 		expectMessage(t, received, cursorMessage([]byte{byte(i), 1, 2, 3}))
+	}
+}
+
+// Yandex relays a cursor only when its prefix is the packet's real length.
+func TestWriterCursorPrefixIsThePacketLength(t *testing.T) {
+	tr, received := writerPeer(t)
+	for _, size := range []int{1, 18, 1200, 32 << 10} {
+		packet := bytes.Repeat([]byte{byte(size)}, size)
+		if err := tr.Send(packet); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case got := <-received:
+			m := regexp.MustCompile(`"cursor":"(\d+);([^"]+)"`).FindStringSubmatch(got)
+			if m == nil {
+				t.Fatalf("size %d: no cursor in %.80q", size, got)
+			}
+			decoded, err := base64.StdEncoding.DecodeString(m[2])
+			if err != nil {
+				t.Fatalf("size %d: %v", size, err)
+			}
+			if m[1] != strconv.Itoa(len(decoded)) || len(decoded) != size {
+				t.Fatalf("size %d: prefix %s, payload %d bytes", size, m[1], len(decoded))
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("size %d: timed out", size)
+		}
 	}
 }
 
