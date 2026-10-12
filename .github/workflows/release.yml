@@ -211,6 +211,8 @@ jobs:
           - Mail.ru is a third protocol beside Legacy and Volga. The same binary with --transport mailru carries packets through one public Mail.ru Cloud document opened as an anonymous visitor, so no cookies are needed. A server runs its exit as openflux-mailru-exit.service (openfluxctl setup-mailru); a mini-PC selects Mail.ru in Router Panel, whose Mail.ru section takes the document link and downloads or uploads its config file.
           - When Mail.ru answers but refuses the document, retries slow down after three quick tries, from 30 s up to 10 min; network failures keep quick retries.
           - Updates and rollbacks include Mail.ru: its unit follows the release, a running Mail.ru client or exit is tested, and a failed check restores everything. Like Volga, one mini-PC uses a Mail.ru document at a time.
+          - The server's Mail.ru exit publishes its signed status through Yandex Disk like Legacy and Volga, and Router Panel shows it in the Mail.ru section ("Mail.ru server: connected / reconnecting with the reason / stopped"); the section badge warns while the exit is not connected.
+          - When Yandex presents its first-tier challenge and refuses the answer, or presents one that cannot be read, Legacy and Volga treat it like SmartCaptcha: AUTH_BLOCKED until fresh browser cookies are saved, and the panel says so. Network errors while answering are still retried.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart running installations.
