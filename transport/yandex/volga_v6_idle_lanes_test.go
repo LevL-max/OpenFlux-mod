@@ -175,8 +175,67 @@ func TestVolgaV6QuietFactoryHoldsOtherLanesDown(t *testing.T) {
 	if p := experimentalPool(t, VolgaV6ExperimentalOptions{Documents: docs, Quiet: true}, 1); !reflect.DeepEqual(p.idle, []int{0, 1}) {
 		t.Fatalf("server idle lanes %v, want [0 1]", p.idle)
 	}
-	if p := experimentalPool(t, VolgaV6ExperimentalOptions{Documents: docs}, 1); p.idle != nil {
-		t.Fatalf("client idle lanes %v, want every lane", p.idle)
+	// A client starts the same way; its other lanes follow once the server answers.
+	if p := experimentalPool(t, VolgaV6ExperimentalOptions{Documents: docs}, 1); !reflect.DeepEqual(p.idle, []int{0, 1}) || p.startTimeout != volgaV6LaneStartTimeout {
+		t.Fatalf("client start lanes %v timeout %v, want [0 1] and one lane timeout each", p.idle, p.startTimeout)
+	}
+	tr, err := NewVolgaV6Experimental(VolgaV6ExperimentalOptions{Documents: docs})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := tr.config.Runtime.CarrierStartTimeout; got != 2*volgaV6LaneStartTimeout {
+		t.Fatalf("generation start budget %v, want one lane timeout per start lane", got)
+	}
+}
+
+func TestVolgaV6StartLanes(t *testing.T) {
+	a, b := "https://disk.yandex.ru/i/a", "https://disk.yandex.ru/i/b"
+	for _, c := range []struct {
+		docs  []string
+		idle  []int
+		count int
+	}{
+		{[]string{a, b, a, b}, []int{0, 1}, 2},
+		{[]string{a, a, a, a}, []int{0}, 1},
+		{[]string{a, b}, nil, 2},
+		{[]string{a}, nil, 1},
+	} {
+		if idle, count := volgaV6StartLanes(c.docs); !reflect.DeepEqual(idle, c.idle) || count != c.count {
+			t.Fatalf("%v: idle %v count %d, want %v %d", c.docs, idle, count, c.idle, c.count)
+		}
+	}
+}
+
+// Start brings lanes up one after another, each within its own timeout: slow
+// lanes that together exceed one lane timeout still start, and a lane that
+// never answers fails after its own timeout without a deadline from outside.
+func TestVolgaV6PoolStartGivesEachLaneItsOwnTimeout(t *testing.T) {
+	slow := func(d time.Duration) *fakePoolLane {
+		block := make(chan struct{})
+		time.AfterFunc(d, func() { close(block) })
+		return &fakePoolLane{block: block}
+	}
+	lanes := newFakeLanes()
+	lanes.queue(0, slow(120*time.Millisecond))
+	lanes.queue(1, slow(240*time.Millisecond)) // its timer runs while lane 0 starts
+	p := newExperimentalV6Pool(1, 4, []int{0, 1}, 200*time.Millisecond, lanes.make)
+	if err := p.Start(context.Background()); err != nil {
+		t.Fatalf("lanes within their own timeouts must start: %v", err)
+	}
+	_ = p.Stop()
+
+	lanes = newFakeLanes()
+	lanes.queue(0, &fakePoolLane{block: make(chan struct{})}) // never answers
+	p = newExperimentalV6Pool(1, 4, []int{0, 1}, 50*time.Millisecond, lanes.make)
+	started := time.Now()
+	if err := p.Start(context.Background()); err == nil {
+		t.Fatal("a lane that never answers must fail the start")
+	}
+	if waited := time.Since(started); waited > 2*time.Second {
+		t.Fatalf("Start waited %v for a dead lane", waited)
+	}
+	if starts, _, _ := lanes.instances(1)[0].state(); starts != 0 {
+		t.Fatal("the next lane must not start before the previous one is up")
 	}
 }
 
