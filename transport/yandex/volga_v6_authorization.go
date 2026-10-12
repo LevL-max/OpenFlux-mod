@@ -371,6 +371,11 @@ func (p *volgaV6AuthProvider) fetchBootstrap(ctx context.Context, c *http.Client
 			}
 			solved = true
 			if err = volgaV6SolveBlink(ctx, c, current, body); err != nil {
+				if errors.Is(err, errVolgaBlinkRefused) {
+					// Yandex asked for the challenge and refused the answer:
+					// only fresh browser cookies help, as with SmartCaptcha.
+					return volgaV6Bootstrap{}, fmt.Errorf("%w (%v)", ErrCaptchaRequired, err)
+				}
 				return volgaV6Bootstrap{}, err
 			}
 			current = entry
@@ -412,6 +417,11 @@ func (p *volgaV6AuthProvider) fetchBootstrap(ctx context.Context, c *http.Client
 	return volgaV6Bootstrap{}, errors.New("volga refresh: redirect limit")
 }
 
+// errVolgaBlinkRefused marks a first-tier challenge that Yandex refused the
+// answer to, or one this solver cannot read or answer safely. A network error
+// or the local computation limit stays a transient failure.
+var errVolgaBlinkRefused = errors.New("volga blink: challenge not accepted")
+
 // Reuse the reviewed Legacy parser/fingerprint, adding a bounded and cancellable
 // PoW loop and endpoint validation. Interactive SmartCaptcha stays AUTH_BLOCKED.
 func volgaV6SolveBlink(ctx context.Context, c *http.Client, raw string, body []byte) error {
@@ -421,7 +431,7 @@ func volgaV6SolveBlink(ctx context.Context, c *http.Client, raw string, body []b
 	}
 	ssr, action, err := parseCaptchaHTML(string(body))
 	if err != nil {
-		return errors.New("volga blink: unsupported challenge")
+		return fmt.Errorf("%w: unsupported challenge", errVolgaBlinkRefused)
 	}
 	u, _ := url.Parse(raw)
 	// Legacy's parser resolves relative forms against docs.yandex.ru. Volga
@@ -431,14 +441,14 @@ func volgaV6SolveBlink(ctx context.Context, c *http.Client, raw string, body []b
 	}
 	a, err := url.Parse(action)
 	if err != nil {
-		return errors.New("volga blink: invalid action")
+		return fmt.Errorf("%w: invalid action", errVolgaBlinkRefused)
 	}
 	action = u.ResolveReference(a).String()
 	if !volgaV6AllowedURL(action, true) {
-		return errors.New("volga blink: unexpected action")
+		return fmt.Errorf("%w: unexpected action", errVolgaBlinkRefused)
 	}
 	if ssr.Pow.Complexity < 0 || ssr.Pow.Complexity > 24 {
-		return errors.New("volga blink: excessive complexity")
+		return fmt.Errorf("%w: excessive complexity", errVolgaBlinkRefused)
 	}
 	prefix, err := hexDecode(ssr.Pow.Prefix)
 	if err != nil || len(prefix) == 0 {
@@ -485,7 +495,7 @@ func volgaV6SolveBlink(ctx context.Context, c *http.Client, raw string, body []b
 	defer resp.Body.Close()
 	io.Copy(io.Discard, io.LimitReader(resp.Body, 65536))
 	if resp.StatusCode < 300 || resp.StatusCode >= 400 {
-		return fmt.Errorf("volga blink: challenge rejected (HTTP %d)", resp.StatusCode)
+		return fmt.Errorf("%w: answer status %d", errVolgaBlinkRefused, resp.StatusCode)
 	}
 	return nil
 }

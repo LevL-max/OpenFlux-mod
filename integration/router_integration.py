@@ -1041,6 +1041,67 @@ class MailruRuntime:
 
     def unit(self):return MAILRU_UNIT if self.node()['role']=='client' else MAILRU_EXIT_UNIT
 
+    def role(self):
+        try:return self.node()['role']
+        except ValueError:return None
+
+    def disk_path(self):
+        """The Yandex Disk file of the server's Mail.ru status, beside Legacy's and Volga's."""
+        base=self.node().get('recovery_path','disk:/OpenFlux Recovery/server-recovery.json')
+        path=(base[:-5] if base.endswith('.json') else base)+'-mailru.json'
+        if not isinstance(path,str) or not path.startswith(('disk:/','app:/')) or '..' in path.split('/') or any(ord(c)<32 for c in path):raise ValueError('Invalid Mail.ru status path')
+        return path
+
+    # A server that reconnected within this long still counts as connected, so a
+    # routine reconnect neither alarms the clients nor costs a Disk upload.
+    RECONNECT_GRACE=120
+
+    def status_exchange(self):
+        """Mail.ru's server status on Yandex Disk, signed like Legacy's and Volga's:
+        a server publishes its exit's state on a change and at least hourly, a
+        client fetches it while someone looks at its panel. Mail.ru has no cookies,
+        so there is no inbox. Runs from the Volga recovery timer."""
+        import time
+        from cryptography.hazmat.primitives import serialization
+        import openflux_auth,recovery_crypto,recovery_inbox
+        try:
+            if not self.installed() or not self.document():return
+        except ValueError:return
+        keys=self.path('/etc/openflux-recovery')
+        try:token=(keys/'disk-token').read_text().strip()
+        except FileNotFoundError:return
+        if not token or openflux_auth.disk_token_rejected(token):return
+        path=self.disk_path()+'.status.json';now=int(time.time())
+        def refused(error):
+            if recovery_inbox.refused(error):openflux_auth.reject_disk_token(token)
+        if self.role()=='client':
+            previous=self.read(self.data/'peer-status.json',{}) or {}
+            if not recovery_inbox.client_poll_due(previous.get('checked_at'),now):return
+            try:
+                public=serialization.load_pem_public_key((keys/'server-public.pem').read_bytes())
+                peer=recovery_crypto.verify_status(recovery_inbox.download(path,token,16000),public,protocol='mailru')
+                if peer['reported_at']<previous.get('reported_at',0):raise ValueError('Older Mail.ru status')
+                peer.update(checked_at=now,fetch_failed=False)
+            except Exception as e:
+                refused(e)
+                peer=previous or {'state':'unknown','reported_at':0}
+                peer.update(checked_at=now,fetch_failed=True,stale=True)
+            self.save(self.data/'peer-status.json',peer);return
+        state=self.read(self.data/'recovery.json',{}) or {}
+        try:
+            private=serialization.load_pem_private_key((keys/'server-private.pem').read_bytes(),password=None)
+            status=self.status()
+            if status.get('state')=='connecting' and now-int(status.get('connected_at') or 0)<self.RECONNECT_GRACE:
+                status=dict(status,state='connected',reason='Connected to the Mail.ru document.')
+            view={k:status.get(k) for k in ('state','reason','active')}
+            signature=recovery_inbox.status_signature(view,tuple(view))
+            if recovery_inbox.publish_due(state,signature,now):
+                recovery_inbox.upload(path,recovery_crypto.sign_status(status,private,protocol='mailru'),token)
+                state.update(status_published_at=now,status_signature=signature);state.pop('status_publish_error',None)
+        except Exception as e:
+            state['status_publish_error']='Mail.ru status upload unavailable';refused(e)
+        self.save(self.data/'recovery.json',state)
+
     def document(self):
         """The configured document link; None before Mail.ru is set up."""
         try:return mailru_env(self.env_path.read_text())
@@ -1177,6 +1238,12 @@ class MailruRuntime:
             document=self.document()
             if document:out.update(configured=True,documents=[document])
         except ValueError:out['reason']='Mail.ru configuration needs attention.'
+        # The server's signed status, fetched from Yandex Disk (status_exchange).
+        peer=self.read(self.data/'peer-status.json') if self.role()=='client' else None
+        if peer:
+            import openflux_auth
+            peer['stale']=bool(peer.get('fetch_failed')) or time.time()-peer.get('reported_at',0)>openflux_auth.STATUS_STALE_AFTER
+            out['server_authentication']=peer
         p=self.run(['systemctl','show',unit,'-p','ActiveState','-p','InvocationID'],check=False)
         d=dict(line.split('=',1) for line in p.stdout.splitlines() if '=' in line)
         if d.get('ActiveState')!='active':return out
@@ -1309,7 +1376,11 @@ def run_volga_cli(args):
             record=runtime.read(runtime.state/'transaction.json')
             return runtime.restore_transaction(record) if record else {'ok':True,'message':'No interrupted Volga operation.'}
         if action=='select-protocol':return runtime.select(args.protocol)
-        if action=='poll-volga-recovery':runtime.recovery_poll();return {'ok':True}
+        if action=='poll-volga-recovery':
+            # The same timer carries Mail.ru's status: Mail.ru has no inbox of its own.
+            try:MailruRuntime().status_exchange()
+            except Exception as e:print('Mail.ru status exchange failed: '+type(e).__name__,file=sys.stderr)
+            runtime.recovery_poll();return {'ok':True}
         if action in ('start','stop','restart'):
             if runtime.node()['role']=='client' and action in ('start','restart') and runtime.node().get('active_transport','yandex')!='volga':raise ValueError('Use select-protocol volga to switch clients safely')
             runtime.action(action);return {'ok':True,'action':action}
@@ -1565,6 +1636,23 @@ for _new in ('data-volga-panel="8"','<option value="mailru">Mail.ru</option>','<
     assert VOLGA_HTML.count(_new)==1,_new
 assert "['volga','mailru'].includes(" in VOLGA_JS and "selected!=='mailru'&&refused(" in VOLGA_HOOK
 
+# v9: the Mail.ru section shows the server's Mail.ru exit from its signed
+# status on Yandex Disk, like the Volga server, and its badge warns while the
+# exit is not connected to the document.
+VOLGA_HTML_V8,VOLGA_JS_V8,VOLGA_HOOK_V8=VOLGA_HTML,VOLGA_JS,VOLGA_HOOK
+VOLGA_HTML=(VOLGA_HTML_V8.replace('data-volga-panel="8"','data-volga-panel="9"')
+    .replace('<div class="small" id="mailruClientState" style="margin-top:4px"></div>',
+             '<div class="small" id="mailruClientState" style="margin-top:4px"></div>\n   <div class="small" id="mailruServerState" style="margin-top:4px">Mail.ru server: checking…</div>'))
+VOLGA_JS=VOLGA_JS_V8
+MAILRU_SERVER_HOOK='''  const ms=mp.server_authentication||{}, msWarn=!!mp.configured&&!!ms.state&&!ms.stale&&ms.state!=='connected';
+  $('#mailruServerState').textContent='Mail.ru server: '+(!mp.configured?'shown once Mail.ru is set up on this mini-PC':!ms.state||ms.stale?'Unknown — no fresh verified response':({connected:'Connected to the document',connecting:'Reconnecting'+(ms.status&&ms.status.reason?' — '+ms.status.reason:''),stopped:'Stopped'})[ms.state]||'Unknown')+(mp.configured&&ms.reported_at?' · Last response: '+new Date(ms.reported_at*1000).toLocaleString():'');
+  $('#mailruServerState').style.color=msWarn?'#d97706':'';$('#mailruServerState').style.fontWeight=msWarn?'600':'';
+  if(msWarn)$('#mailruBadge').textContent+=' · server: '+(({connecting:'reconnecting',stopped:'stopped'})[ms.state]||ms.state);
+  $('#mailruBadge').style.color=msWarn?'#d97706':'';$('#mailruBadge').style.fontWeight=msWarn?'600':'';
+'''
+VOLGA_HOOK=VOLGA_HOOK_V8+MAILRU_SERVER_HOOK
+assert VOLGA_HTML.count('id="mailruServerState"')==1 and VOLGA_HTML.count('data-volga-panel="9"')==1
+
 # The mode buttons show why a mode did not start: the last line of the mode
 # controller, e.g. "OPENFLUX was not started: AUTH_BLOCKED… AWG kept serving
 # the LAN." Both router panel layouts get the same answer and timeout.
@@ -1613,8 +1701,11 @@ def patch_volga_panel(text):
         if new not in text:
             old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
             text=replace(text,old if old in text else "const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);",new)
-    if 'data-volga-panel="8"' in text:return text
-    if 'data-volga-panel="7"' in text:
+    if 'data-volga-panel="9"' in text:return text
+    if 'data-volga-panel="8"' in text:
+        # A v4.2.0/v4.2.1 panel: the Mail.ru section shows the server's exit.
+        text=replace(replace(replace(text,VOLGA_HTML_V8,VOLGA_HTML),VOLGA_JS_V8,VOLGA_JS),VOLGA_HOOK_V8,VOLGA_HOOK)
+    elif 'data-volga-panel="7"' in text:
         # A v4.1.10/v4.1.11 panel: Mail.ru joins the selector and gets its section.
         text=replace(replace(replace(text,VOLGA_HTML_V7,VOLGA_HTML),VOLGA_JS_V7,VOLGA_JS),VOLGA_HOOK_V7,VOLGA_HOOK)
     elif 'data-volga-panel="6"' in text:

@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand"
@@ -17,6 +18,11 @@ import (
 
 	"universal-bypass-tool/utils"
 )
+
+// errChallengeRefused marks a first-tier challenge that Yandex presented and
+// then did not accept an answer to, or presented in a form this solver cannot
+// read. Retrying with the same cookies does not help; fresh browser cookies do.
+var errChallengeRefused = errors.New("first-tier captcha not accepted")
 
 // solveCaptcha проходит Яндекс-капчу (blink-check) для заданного URL.
 //
@@ -93,13 +99,13 @@ func solveCaptcha(docURL string, jar http.CookieJar, userAgent string) (string, 
 	resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("captcha showcaptcha status %d", resp.StatusCode)
+		return "", fmt.Errorf("%w: challenge page status %d", errChallengeRefused, resp.StatusCode)
 	}
 	utils.Debugf("[CAPTCHA] showcaptcha: %d bytes", len(body))
 
 	ssr, formAction, err := parseCaptchaHTML(string(body))
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %v", errChallengeRefused, err)
 	}
 	// The form posts back to the host that served the captcha: docs.yandex.ru
 	// for .ru documents, docs.yandex.com for .com ones.
@@ -149,7 +155,7 @@ func solveCaptcha(docURL string, jar http.CookieJar, userAgent string) (string, 
 		resp2.StatusCode, shortStr(resp2.Header.Get("Location"), 120))
 
 	if resp2.StatusCode < 300 || resp2.StatusCode >= 400 {
-		return "", fmt.Errorf("captcha POST unexpected status %d", resp2.StatusCode)
+		return "", fmt.Errorf("%w: answer status %d", errChallengeRefused, resp2.StatusCode)
 	}
 
 	retpath := resp2.Header.Get("Location")

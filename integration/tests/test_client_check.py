@@ -18,7 +18,7 @@ def volga_line(t,event,data=None):
 class PanelTest(unittest.TestCase):
     def test_v6_panel_keeps_the_last_client_check_visible(self):
         fresh=r.patch_panel(BASE_PANEL)
-        self.assertIn('data-volga-panel="8"',fresh);compile(fresh,'router-panel','exec')
+        self.assertIn('data-volga-panel="9"',fresh);compile(fresh,'router-panel','exec')
         for piece in ('clientBadge(legacyAuth)','clientBadge(vp)',"checkText(vp.client_check,'Volga')","checkText(lc,'Legacy')","'this mini-PC: cookies refused'"):
             self.assertEqual(fresh.count(piece),1,piece)
         # The Legacy line no longer shows a refusal that a later success answered.

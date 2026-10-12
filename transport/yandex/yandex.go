@@ -994,6 +994,11 @@ func (t *YandexDocsTransport) fetchDocInfo(url, userID string) (YandexDocsInfo, 
 		if strings.Contains(finalURL, "showcaptchafast") {
 			utils.Debugf("[YDOCS] first-tier captcha detected; solving PoW")
 			if err := t.solveFirstTierCaptcha(url, userAgent); err != nil {
+				if errors.Is(err, errChallengeRefused) {
+					// Yandex asked for the challenge and refused the answer: like
+					// SmartCaptcha, only fresh browser cookies help (AUTH_BLOCKED).
+					return YandexDocsInfo{}, fmt.Errorf("%w (%v)", ErrCaptchaRequired, err)
+				}
 				return YandexDocsInfo{}, fmt.Errorf("first-tier captcha solve failed: %w", err)
 			}
 			continue
