@@ -35,7 +35,7 @@ def mode_handler(body):
 class RouterEventsTest(unittest.TestCase):
     def test_v5_panel_gains_the_router_event_line(self):
         fresh=r.patch_panel(BASE_PANEL)
-        self.assertIn('data-volga-panel="8"',fresh);self.assertEqual(fresh.count('id="openfluxRouterEvent"'),1)
+        self.assertIn('data-volga-panel="9"',fresh);self.assertEqual(fresh.count('id="openfluxRouterEvent"'),1)
         self.assertIn('of.router_event',fresh)
         v5=fresh.replace(r.VOLGA_HTML,r.VOLGA_HTML_V5).replace(r.VOLGA_JS,r.VOLGA_JS_V5).replace(r.VOLGA_HOOK,r.VOLGA_HOOK_V5).replace(r.LEGACY_CHECK_V7[1],r.LEGACY_CHECK_V7[0])
         self.assertIn('data-volga-panel="5"',v5);self.assertNotIn('openfluxRouterEvent',v5)
