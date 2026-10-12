@@ -213,6 +213,7 @@ jobs:
           - Updates and rollbacks include Mail.ru: its unit follows the release, a running Mail.ru client or exit is tested, and a failed check restores everything. Like Volga, one mini-PC uses a Mail.ru document at a time.
           - The server's Mail.ru exit publishes its signed status through Yandex Disk like Legacy and Volga, and Router Panel shows it in the Mail.ru section ("Mail.ru server: connected / reconnecting with the reason / stopped"); the section badge warns while the exit is not connected.
           - When Yandex presents its first-tier challenge and refuses the answer, or presents one that cannot be read, Legacy and Volga treat it like SmartCaptcha: AUTH_BLOCKED until fresh browser cookies are saved, and the panel says so. Network errors while answering are still retried.
+          - A Volga client starts the first lane of each document one after another, each within its own 30 s, and brings up the other lanes in the background once the server answers. With Yandex answering an editor authorization in up to ~12 s, starting all four lanes under one 30 s deadline failed every Volga start on the mini-PCs.
           - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
           - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
           - Release creation does not deploy or restart running installations.
