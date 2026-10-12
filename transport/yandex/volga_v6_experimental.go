@@ -111,7 +111,13 @@ func NewVolgaV6Experimental(o VolgaV6ExperimentalOptions) (*YandexVolgaV6Transpo
 	if o.SendWorkers != 0 {
 		cfg.SendWorkers = o.SendWorkers
 	}
-	cfg.Runtime.CarrierStartTimeout = 30 * time.Second
+	// A generation starts the first lane of each document, one after another,
+	// each within its own lane timeout; the other lanes follow in the background
+	// once the peer answers (Wake), also one at a time. Each lane takes one
+	// editor authorization, which Yandex has been serving in up to ~12 s, so a
+	// single deadline for every lane at once failed the whole start.
+	idle, startLanes := volgaV6StartLanes(o.Documents)
+	cfg.Runtime.CarrierStartTimeout = time.Duration(startLanes) * volgaV6LaneStartTimeout
 	cfg.Runtime.Quiet = o.Quiet
 	cfg.Runtime.credentialsChanged = p.blockedCookiesChanged
 	if o.QuietRecycleInterval != 0 {
@@ -137,13 +143,8 @@ func NewVolgaV6Experimental(o VolgaV6ExperimentalOptions) (*YandexVolgaV6Transpo
 			laneGates[i] = shared
 		}
 	}
-	// A waiting server needs one session per document to hear a client.
-	var idle []int
-	if o.Quiet {
-		idle = volgaV6FirstLanePerDocument(o.Documents)
-	}
 	factory := func(generation uint64, onFrame func(volgaV6WireFrame)) (volgaV6PhysicalCarrier, error) {
-		return newExperimentalV6Pool(generation, len(o.Documents), idle, cfg.Runtime.CarrierStartTimeout, func(i int) volgaV6PoolLane {
+		return newExperimentalV6Pool(generation, len(o.Documents), idle, volgaV6LaneStartTimeout, func(i int) volgaV6PoolLane {
 			laneCfg := cfg.Yandex
 			laneCfg.relayGate = laneGates[i]
 			return newVolgaV6YandexCarrier(generation, o.Documents[i], laneCfg, onFrame)
@@ -194,6 +195,22 @@ const (
 	laneWakeRetry    = 30 * time.Second
 	maxLaneWakeRetry = 10 * time.Minute
 )
+
+// volgaV6LaneStartTimeout bounds the start of one lane: its editor
+// authorization, Volga session and push socket.
+const volgaV6LaneStartTimeout = 30 * time.Second
+
+// volgaV6StartLanes is what a generation's Start brings up: the first lane of
+// each document (nil meaning every lane, when no document repeats), and how
+// many lanes that is. A server needs one session per document to hear a
+// client, and a client one per document to hear everything the server sends.
+func volgaV6StartLanes(docs []string) (idle []int, count int) {
+	idle = volgaV6FirstLanePerDocument(docs)
+	if idle == nil {
+		return nil, max(len(docs), 1)
+	}
+	return idle, len(idle)
+}
 
 // volgaV6FirstLanePerDocument lists the first lane of each document: enough
 // sessions for a waiting server to hear a client on any of them. It returns
@@ -251,8 +268,8 @@ func newExperimentalV6Pool(generation uint64, lanes int, idle []int, startTimeou
 
 func (p *experimentalV6Pool) Generation() uint64 { return p.generation }
 
-// Start brings up the idle lanes, or every lane, and fails the generation if
-// any of them fails.
+// Start brings up the idle lanes, or every lane, one after another, each within
+// its own startTimeout, and fails the generation if any of them fails.
 func (p *experimentalV6Pool) Start(ctx context.Context) error {
 	start := p.idle
 	if start == nil {
@@ -265,7 +282,10 @@ func (p *experimentalV6Pool) Start(ctx context.Context) error {
 		p.mu.Lock()
 		lane := p.lanes[i]
 		p.mu.Unlock()
-		if err := lane.Start(ctx); err != nil {
+		laneCtx, cancel := context.WithTimeout(ctx, p.startTimeout)
+		err := lane.Start(laneCtx)
+		cancel()
+		if err != nil {
 			p.Stop()
 			return err
 		}
