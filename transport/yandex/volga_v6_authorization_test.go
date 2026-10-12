@@ -367,3 +367,40 @@ func TestVolgaV6AuthorizationProbe(t *testing.T) {
 		}
 	}
 }
+
+// A first-tier challenge that Yandex refuses, or one the solver cannot read,
+// latches like SmartCaptcha; a network error while answering does not.
+func TestVolgaV6AuthorizationRefusedBlinkLatches(t *testing.T) {
+	doc := "https://disk.yandex.ru/i/test"
+	ssr := base64.StdEncoding.EncodeToString([]byte(`{"uniqueKey":"test","pow":{"complexity":0,"prefix":"00"}}`))
+	page := `<script>window.__SSR_DATA__ = JSON.parse(atob("` + ssr + `"))</script><form id="tmgrdfrend-form" action="/checkcaptcha">`
+	cases := []struct {
+		name  string
+		page  string
+		check func(*http.Request) (*http.Response, error)
+		latch bool
+	}{
+		{"unreadable challenge", "<html>new challenge</html>", nil, true},
+		{"answer refused", page, func(r *http.Request) (*http.Response, error) { return volgaV6AuthResponse(r, 403, "", nil), nil }, true},
+		{"network error", page, func(*http.Request) (*http.Response, error) { return nil, errors.New("connection reset") }, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newVolgaV6AuthProvider("")
+			p.roundTripper = volgaV6AuthRoundTripper(func(r *http.Request) (*http.Response, error) {
+				switch {
+				case r.Method == "POST":
+					return tc.check(r)
+				case strings.HasPrefix(r.URL.Path, "/showcaptchafast"):
+					return volgaV6AuthResponse(r, 200, tc.page, nil), nil
+				default:
+					return volgaV6AuthResponse(r, 302, "", http.Header{"Location": {"/showcaptchafast?x=1"}}), nil
+				}
+			})
+			_, e := p.bootstrap(context.Background(), doc, true)
+			if errors.Is(e, ErrCaptchaRequired) != tc.latch || p.anyBlocked() != tc.latch {
+				t.Fatalf("latch=%v blocked=%v err=%v", tc.latch, p.anyBlocked(), e)
+			}
+		})
+	}
+}
