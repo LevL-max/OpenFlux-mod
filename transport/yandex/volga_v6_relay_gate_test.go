@@ -132,3 +132,45 @@ func TestVolgaV6PacingReservationsDoNotStarve(t *testing.T) {
 		t.Fatalf("old reservations survived 429: %v %d", at, epoch)
 	}
 }
+
+func TestVolgaV6IdlePeerDoesNotKeepAccumulatedRatePenalty(t *testing.T) {
+	g := &volgaV6RelayGate{rate: 480}
+	now := time.Unix(1000, 0)
+	// Several peer disconnects reduce the shared gate below the rate needed
+	// by the protocol's control records. A later client must be able to start.
+	for i := 0; i < 10; i++ {
+		g.limited("", now)
+		now = now.Add(time.Minute)
+	}
+	if rate, _ := g.snapshot(); rate != 1 {
+		t.Fatalf("fixture rate = %v, want 1", rate)
+	}
+	now = now.Add(20 * time.Minute)
+	at, _ := g.reserve(now)
+	if rate, _ := g.snapshot(); rate != 480 || !at.Equal(now) {
+		t.Fatalf("idle peer kept penalty: rate=%v, next=%v", rate, at)
+	}
+	second, _ := g.reserve(now)
+	if !second.After(at) {
+		t.Fatal("recovery removed pacing")
+	}
+}
+
+func TestVolgaV6IdleRecoveryRespectsProviderPauseAndQueuedWork(t *testing.T) {
+	now := time.Unix(1000, 0)
+	g := &volgaV6RelayGate{rate: 480}
+	g.limited("600", now)
+	at, _ := g.reserve(now.Add(2 * time.Minute))
+	if rate, _ := g.snapshot(); rate != 240 || at.Before(now.Add(10*time.Minute)) {
+		t.Fatalf("idle recovery bypassed Retry-After: rate=%v at=%v", rate, at)
+	}
+	// Work reserved recently, including reservations during the cooldown,
+	// prevents recovery just because the last 429 is old.
+	now = now.Add(10 * time.Minute)
+	for i := 0; i < 5; i++ {
+		g.reserve(now.Add(time.Duration(i) * 30 * time.Second))
+	}
+	if rate, _ := g.snapshot(); rate != 240 {
+		t.Fatalf("active reservations replenished rate: %v", rate)
+	}
+}
