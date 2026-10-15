@@ -175,6 +175,8 @@ jobs:
 
           ## Mail.ru browser sessions and Volga recovery
 
+          - Fix Volga idle recovery when editor session pings continue in the background. Pings retain shared pacing and Retry-After but no longer keep an old relay rate penalty alive. Regression tests exercise the actual ping and relay paths, including active traffic and provider cooldowns.
+
           - Mail.ru documents requiring login accept Copy as cURL from the public page or editor POST. Public-page imports obtain CSRF tokens with the same cookie jar. A changed import reconnects automatically; rejected logins wait for fresh cookies.
           - Router Panel v10 keeps browser cookies inside Mail.ru document, with separate local save, encrypted Yandex Disk server upload, and encrypted download actions. Use a separate browser session for each endpoint. The server publishes its signed authentication state.
           - Authenticated Mail.ru uses OFX2 process markers so two sessions of the same account can exchange traffic. Update both ends for authenticated traffic; anonymous OFX1 remains supported.
