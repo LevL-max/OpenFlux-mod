@@ -302,7 +302,7 @@ func (c *volgaV6YandexCarrier) sessionPingLoop(interval time.Duration) {
 // sendSessionPing posts one ping. A 401/403/404/410 means the editor session
 // is gone, which the runtime answers with a fresh authorization.
 func (c *volgaV6YandexCarrier) sendSessionPing() error {
-	if err := c.config.relayGate.wait(c.ctx); err != nil {
+	if err := c.config.relayGate.waitSessionPing(c.ctx); err != nil {
 		return err
 	}
 	auth, httpClient := c.authSnapshot()

@@ -8,8 +8,76 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 )
+
+func TestVolgaV6SessionPingsDoNotKeepIdleRatePenalty(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		name := "idle"
+		if active {
+			name = "active relay"
+		}
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				c := newPingTestCarrier(t, func(req *http.Request) (*http.Response, error) {
+					return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header), Request: req}, nil
+				})
+				defer c.Stop()
+				c.config.relayGate = &volgaV6RelayGate{rate: 480}
+				c.config.relayGate.limited("", time.Now())
+				// Shared lanes have staggered session pings. They must retain
+				// pacing without making an idle relay look continuously busy.
+				for i := 0; i < 4; i++ {
+					time.Sleep(20 * time.Second)
+					if err := c.sendSessionPing(); err != nil {
+						t.Fatal(err)
+					}
+					if active {
+						if err := c.postRelayBody([]byte("{}")); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				want := float64(480)
+				if active {
+					want = 240
+				}
+				if rate, _ := c.config.relayGate.snapshot(); rate != want {
+					t.Fatalf("rate after session pings = %v, want %v", rate, want)
+				}
+			})
+		})
+	}
+}
+
+func TestVolgaV6SessionPingStillHonorsProviderPause(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var calls atomic.Int64
+		c := newPingTestCarrier(t, func(req *http.Request) (*http.Response, error) {
+			calls.Add(1)
+			return &http.Response{StatusCode: http.StatusNoContent, Body: io.NopCloser(strings.NewReader("")), Header: make(http.Header), Request: req}, nil
+		})
+		defer c.Stop()
+		c.config.relayGate = &volgaV6RelayGate{rate: 480}
+		c.config.relayGate.limited("120", time.Now())
+		done := make(chan error, 1)
+		go func() { done <- c.sendSessionPing() }()
+		time.Sleep(119 * time.Second)
+		synctest.Wait()
+		if calls.Load() != 0 {
+			t.Fatal("session ping bypassed Retry-After")
+		}
+		time.Sleep(time.Second)
+		synctest.Wait()
+		if err := <-done; err != nil {
+			t.Fatal(err)
+		}
+		if rate, _ := c.config.relayGate.snapshot(); rate != 240 || calls.Load() != 1 {
+			t.Fatalf("provider pause lost: rate=%v calls=%v", rate, calls.Load())
+		}
+	})
+}
 
 func newPingTestCarrier(t *testing.T, rt volgaV6LocalRoundTripper) *volgaV6YandexCarrier {
 	t.Helper()
