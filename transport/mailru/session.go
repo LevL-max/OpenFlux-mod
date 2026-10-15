@@ -12,9 +12,10 @@ import (
 )
 
 type editorEvent struct {
-	Type     string `json:"type"`
-	Result   *int   `json:"result"`
-	WaitAuth bool   `json:"waitAuth"`
+	Type     string          `json:"type"`
+	Result   *int            `json:"result"`
+	WaitAuth bool            `json:"waitAuth"`
+	Code     json.RawMessage `json:"code"`
 }
 
 var errEditorAuthRejected = errors.New("document authorization rejected")
@@ -81,7 +82,7 @@ func waitMailruEditorAuth(session *DocSession) error {
 		if err := session.Conn.SetReadDeadline(deadline); err != nil {
 			return err
 		}
-		_, data, err := session.Conn.ReadMessage()
+		_, data, err := session.readMessage()
 		if err != nil {
 			return err
 		}
@@ -133,10 +134,10 @@ func (t *MailruDocsTransport) Stop() error {
 	t.stopOnce.Do(func() { close(t.done) })
 	t.Mu.Unlock()
 	if session != nil && session.Conn != nil {
-		_ = session.Conn.Close()
+		session.closeWithReason("stop")
 	}
 	if opening != nil && opening.Conn != nil {
-		_ = opening.Conn.Close()
+		opening.closeWithReason("stop")
 	}
 	return err
 }
@@ -184,6 +185,7 @@ func (t *MailruDocsTransport) refreshDocumentKey() {
 	info, err := t.fetchDocInfo(t.weblink)
 	if err != nil {
 		if errors.Is(err, errBrowserAuth) {
+			session.trace.fail("browser_auth", nil)
 			t.dropConnection(session)
 			return
 		}
@@ -203,6 +205,6 @@ func (t *MailruDocsTransport) refreshDocumentKey() {
 	t.Mu.Unlock()
 	if current {
 		utils.Statusf("[M-DOCS] document key changed; reconnecting to current editor session")
-		_ = session.Conn.Close() // reader owns reconnect and fetches a fresh token
+		session.closeWithReason("document_key_changed") // reader owns reconnect
 	}
 }

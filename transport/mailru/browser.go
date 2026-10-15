@@ -162,10 +162,11 @@ func (t *MailruDocsTransport) browserProfileLoop() {
 		session, opening := t.session, t.opening
 		t.Mu.RUnlock()
 		if session != nil {
+			session.trace.fail("profile_changed", nil)
 			t.dropConnection(session)
 		}
 		if opening != nil && opening.Conn != nil {
-			_ = opening.Conn.Close()
+			opening.closeWithReason("profile_changed")
 		}
 	}
 }

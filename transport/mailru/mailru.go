@@ -53,8 +53,11 @@ type DocSession struct {
 	UserID           string
 	writeMu          sync.Mutex
 	heartbeatTimeout time.Duration
+	pingIntervalMS   int
+	pingTimeoutMS    int
 	chatReady        atomic.Bool
 	chatReadyAfter   time.Time
+	trace            sessionTrace
 }
 
 type queuedPacket struct {
@@ -69,12 +72,16 @@ const maxQueuedBytes = 8 << 20
 const maxQueuedAge = 15 * time.Second
 
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
+	queued := time.Now()
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
+	started := time.Now()
 	// A write into a half-open connection (NAT dropped it, the network
 	// changed) would otherwise block until the kernel gives up, minutes.
 	_ = s.Conn.SetWriteDeadline(time.Now().Add(docWriteTimeout))
-	return s.Conn.WriteMessage(messageType, data)
+	err := s.Conn.WriteMessage(messageType, data)
+	s.trace.wrote(data, started.Sub(queued), time.Since(started), err)
+	return err
 }
 
 // docWriteTimeout bounds one WebSocket write to the document.
@@ -97,7 +104,7 @@ func waitMailruSocketIO(session *DocSession, token string) error {
 
 	waitFor := func(match func(string) bool) error {
 		for {
-			messageType, payload, err := conn.ReadMessage()
+			messageType, payload, err := session.readMessage()
 			if err != nil {
 				return err
 			}
@@ -115,7 +122,7 @@ func waitMailruSocketIO(session *DocSession, token string) error {
 			if match(text) {
 				return nil
 			}
-			utils.Debugf("[M-DOCS] handshake: ignoring server frame %q", text)
+			utils.Debugf("[M-DOCS] handshake: ignoring server frame (%d bytes)", len(payload))
 		}
 	}
 
@@ -129,6 +136,7 @@ func waitMailruSocketIO(session *DocSession, token string) error {
 			PingTimeout  int `json:"pingTimeout"`
 		}
 		if json.Unmarshal([]byte(text[1:]), &hello) == nil && hello.PingInterval > 0 && hello.PingTimeout > 0 {
+			session.pingIntervalMS, session.pingTimeoutMS = hello.PingInterval, hello.PingTimeout
 			session.heartbeatTimeout = time.Duration(hello.PingInterval+hello.PingTimeout)*time.Millisecond + 5*time.Second
 		}
 		return true
@@ -136,6 +144,7 @@ func waitMailruSocketIO(session *DocSession, token string) error {
 		return fmt.Errorf("mailru: wait for Engine.IO open: %w", err)
 	}
 	utils.Debugf("[M-DOCS] Engine.IO open")
+	session.trace.phase("socket_handshake")
 
 	if err := session.safeWrite(websocket.TextMessage, []byte(fmt.Sprintf(`40{"token":"%s"}`, token))); err != nil {
 		return fmt.Errorf("mailru: send Socket.IO connect: %w", err)
@@ -191,6 +200,7 @@ type MailruDocsTransport struct {
 	writeErrors atomic.Uint64
 	wsWrites    atomic.Uint64
 	wsBytes     atomic.Uint64
+	sessionIDs  atomic.Uint64
 }
 
 // NewMailruDocsTransport accepts either a bare weblink ("AbCd/EfGh") or a full
@@ -337,7 +347,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		headers.Set("Accept-Language", "en-US,en;q=0.9")
 		headers.Set("Origin", "https://docs.datacloudmail.ru")
 
-		utils.Debugf("[M-DOCS] WebSocket dial %s", info.WsURL)
+		utils.Debugf("[M-DOCS] dialing document WebSocket")
 		conn, resp, err := dialer.DialContext(t.ctx, info.WsURL, headers)
 		if err != nil {
 			status := 0
@@ -345,7 +355,8 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 				status = resp.StatusCode
 				t.refusals.Add(1)
 			}
-			utils.Debugf("[M-DOCS] WebSocket dial failed (http %d): %v", status, err)
+			kind, _ := sessionError(err)
+			utils.Debugf("[M-DOCS] WebSocket dial failed (http %d): %s", status, kind)
 			if status != 0 {
 				t.statusThrottled("dial", time.Minute, "[M-DOCS] document server refused the connection (http %d); retrying", status)
 			} else {
@@ -360,10 +371,17 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			writeQueue = existingSession.WriteQueue
 		}
 		session := &DocSession{Info: info, Conn: conn, WriteQueue: writeQueue, UserID: userID}
+		session.trace.start(t.sessionIDs.Add(1))
+		defer func() {
+			if !t.IsRunning() {
+				session.trace.fail("stop", nil)
+			}
+			session.reportClosed()
+		}()
 		t.Mu.Lock()
 		if !t.IsRunning() {
 			t.Mu.Unlock()
-			_ = conn.Close()
+			session.closeWithReason("stop")
 			return
 		}
 		t.opening = session
@@ -377,9 +395,10 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		}()
 
 		if err := waitMailruSocketIO(session, info.Token); err != nil {
-			utils.Debugf("[M-DOCS] Socket.IO handshake failed: %v", err)
+			session.trace.fail("socket_handshake", err)
 			t.statusThrottled("handshake", time.Minute, "[M-DOCS] document server did not finish the handshake; retrying")
 			_ = conn.Close()
+			session.reportClosed()
 			t.scheduleReconnect(attempt)
 			return
 		}
@@ -422,19 +441,23 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			"supportAuthChangesAck": true,
 		}
 		messagePart, _ := json.Marshal([]interface{}{"message", authMsg})
+		session.trace.phase("editor_auth")
 		if err := session.safeWrite(websocket.TextMessage, []byte("42"+string(messagePart))); err == nil {
 			err = waitMailruEditorAuth(session)
 			if err != nil {
+				session.trace.fail("editor_auth", err)
 				_ = conn.Close()
 				if errors.Is(err, errEditorAuthRejected) {
 					t.refusals.Add(1)
 				}
 				t.statusThrottled("auth", time.Minute, "[M-DOCS] document authorization failed; retrying")
+				session.reportClosed()
 				t.scheduleReconnect(attempt)
 				return
 			}
 		} else {
 			_ = conn.Close()
+			session.reportClosed()
 			t.scheduleReconnect(attempt)
 			return
 		}
@@ -443,7 +466,8 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		t.authMu.Lock()
 		if info.profileSum != t.profileSum {
 			t.authMu.Unlock()
-			_ = conn.Close()
+			session.closeWithReason("profile_changed")
+			session.reportClosed()
 			t.scheduleReconnect(-1)
 			return
 		}
@@ -451,7 +475,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		if !t.IsRunning() {
 			t.Mu.Unlock()
 			t.authMu.Unlock()
-			_ = conn.Close()
+			session.closeWithReason("stop")
 			return
 		}
 		session.chatReadyAfter = time.Now().Add(chatReadyFallback)
@@ -461,6 +485,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		t.Mu.Unlock()
 		t.authMu.Unlock()
 		t.refusals.Store(0)
+		session.trace.phase("ready")
 		if existingSession == nil {
 			utils.SafeGo("mailru.writer", t.writerLoop)
 		}
@@ -468,11 +493,12 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 
 		connectedAt := time.Now()
 		for t.IsRunning() {
-			_, message, err := conn.ReadMessage()
+			_, message, err := session.readMessage()
 			if err != nil {
-				utils.Debugf("[M-DOCS] Read error: %v", err)
-				t.statusThrottled("drop", time.Minute, "[M-DOCS] connection to the document dropped: %v; reconnecting", err)
+				kind, code := sessionError(err)
+				t.statusThrottled("drop", time.Minute, "[M-DOCS] connection to the document dropped: %s (code %d); reconnecting", kind, code)
 				t.dropConnection(session)
+				session.reportClosed()
 				next := attempt
 				if time.Since(connectedAt) > 15*time.Second {
 					next = -1
@@ -544,7 +570,6 @@ func (t *MailruDocsTransport) writerLoop() {
 		msg := encodeChatData(pending.data, sender)
 		if err := session.safeWrite(websocket.TextMessage, msg); err != nil {
 			t.writeErrors.Add(1)
-			utils.Debugf("[M-DOCS] Write error: %v", err)
 			t.dropConnection(session)
 			continue
 		}
