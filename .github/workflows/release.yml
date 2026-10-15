@@ -180,7 +180,7 @@ jobs:
           - Authenticated Mail.ru uses OFX2 process markers so two sessions of the same account can exchange traffic. Update both ends for authenticated traffic; anonymous OFX1 remains supported.
           - First-time Mail.ru server setup can wait for its cookie import. Native release health checks and rollback remain strict.
           - Volga limits handshake confirmation retries and restores its configured relay pacing after a full minute without queued relay work, once any provider Retry-After has expired. This prevents old rate penalties from indefinitely slowing a returning client. New counters report pacing, cooldown and replay queue state without credentials.
-          - This release candidate is for native update and end-to-end validation before stable promotion. The release build runs the full Linux tests, race checks and integration suite. Publishing does not deploy it.
+          - This stable release includes native update and rollback support. The release build runs the full Linux tests, race checks and integration suite. Publishing does not deploy it.
 
           ## Mail.ru chat compatibility
 
