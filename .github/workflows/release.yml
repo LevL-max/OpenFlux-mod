@@ -173,6 +173,17 @@ jobs:
 
           Downstream release built and tested from GitHub main.
 
+          ## Mail.ru chat transport
+
+          - Mail.ru now carries OFX1-tagged Base64 data in document chat messages, replacing cursor writes rejected by current editors. Human chat, self echoes and authentication history are ignored.
+          - Mail.ru uses OFB1/LZ4 batching with defaults of 512 packets, a 500,000-byte batch target and a 5 ms flush delay. Explicit packet/delay settings remain supported; Legacy and Volga profiles are unchanged.
+          - Both Mail.ru endpoints must be updated together: this chat carrier cannot communicate with v4.2.3-or-earlier cursor peers. Keep a working fallback transport during the transition; rolling back to the rejected cursor carrier may not restore Mail.ru connectivity.
+          - The release includes the matching Mail.ru integration profile and binary capability check. Use a dedicated document because transport messages appear in its chat. This fork retains OFB1/LZ4 and is not wire-compatible with upstream Session/zstd.
+          - Real-service tests passed with 524,288 bytes in each direction over TCP, including a forced WebSocket reconnect on the same TCP connection. These are functional checks, not a long-term availability guarantee.
+          - Publishing this release does not deploy it. A native server update changes the shared Legacy/Mail.ru binary and restarts affected services; schedule a maintenance window and update clients deliberately.
+
+          ## Included capabilities
+
           - Functional baseline remains the proven Yandex v4 line.
           - Safe authentication events are visible without debug logging.
           - Versioned Router Panel integration shows Connected, Connecting, AUTH_BLOCKED and retained authentication errors.
@@ -187,7 +198,7 @@ jobs:
           - Persistent per-document Yandex cookie state is supported with an optional one-time browser seed.
           - Second-tier SmartCaptcha enters AUTH_BLOCKED and makes no further Yandex requests until the cookie store changes.
           - A safe openflux-yandex-cookie-import helper is included for browser cURL refresh without printing cookie values.
-          - Private 4-packet / 1 ms batching and current reliability hardening are retained.
+          - Legacy's 4-packet / 1 ms batching and current reliability hardening are retained.
           - Volga is a separate opt-in runtime with a frozen profile, public-only egress and at most 64 concurrent connections.
           - Legacy remains the default; installing this release does not switch protocols.
           - One updater installs Legacy and Volga together, with one checkpoint and one rollback. Volga keeps its own container/service and cookies with explicit CPU and memory limits.
