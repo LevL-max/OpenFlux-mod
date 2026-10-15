@@ -421,8 +421,8 @@ def main():
     for command in ('status','check','download','update','rollback','start','stop','restart','run','menu','health'):
         p=sub.add_parser(command);p.add_argument('--transport',choices=('yandex','volga','mailru'));p.add_argument('--seconds',type=int,default=90)
     p=sub.add_parser('configure'); p.add_argument('--channel',choices=('stable','prerelease')); p.add_argument('--args-file'); p.add_argument('--transport'); p.add_argument('--document-url');p.add_argument('--config-file')
-    p=sub.add_parser('cookies'); p.add_argument('operation',choices=('import','package','send')); p.add_argument('--file',default='-'); p.add_argument('--output');p.add_argument('--transport',choices=('yandex','volga'));p.add_argument('--document-url')
-    p=sub.add_parser('recovery'); p.add_argument('--server-public-key'); p.add_argument('--sender-public-key'); p.add_argument('--disk-token-file'); p.add_argument('--disk-path');p.add_argument('--transport',choices=('yandex','volga'))
+    p=sub.add_parser('cookies'); p.add_argument('operation',choices=('import','package','send')); p.add_argument('--file',default='-'); p.add_argument('--output');p.add_argument('--transport',choices=('yandex','volga','mailru'));p.add_argument('--document-url')
+    p=sub.add_parser('recovery'); p.add_argument('--server-public-key'); p.add_argument('--sender-public-key'); p.add_argument('--disk-token-file'); p.add_argument('--disk-path');p.add_argument('--transport',choices=('yandex','volga','mailru'))
     p=sub.add_parser('setup-volga');p.add_argument('--config-file',required=True);p.add_argument('--memory-mib',type=int,default=256);p.add_argument('--cpu-percent',type=int,default=50)
     # Mail.ru: the public document link; a server's exit defaults to the Legacy exit's image and network.
     p=sub.add_parser('setup-mailru');p.add_argument('--document-url',required=True);p.add_argument('--image');p.add_argument('--network')

@@ -111,7 +111,8 @@ class OpenFluxConfigs:
             'openflux-runtime':'Transport, compression, buffers and batching. Restart OpenFlux after changing.'}
         extra={
             'openflux-volga-config':('/etc/openflux-volga/config.json','Volga configuration','Volga document links and shared key. Separate from Legacy; the measured performance profile is fixed. Restart Volga after changing.'),
-            'openflux-mailru':(MAILRU_ENV,'Mail.ru document','Public Mail.ru Cloud document link, MAILRU_DOCUMENT=https://cloud.mail.ru/public/…; no cookies. The server’s Mail.ru exit must use the same link. Apply Mail.ru again (or restart OPENFLUX) after changing.'),
+            'openflux-mailru':(MAILRU_ENV,'Mail.ru document','Public Mail.ru Cloud document link, MAILRU_DOCUMENT=https://cloud.mail.ru/public/…. The server’s Mail.ru exit must use the same link. Apply Mail.ru again (or restart OPENFLUX) after changing.'),
+            'openflux-mailru-cookies':(MAILRU_BROWSER,'Mail.ru browser cookies','Secret browser request profile for this mini-PC only. Import Copy as cURL in the Mail.ru browser cookies section; replacement retries authorization automatically.'),
             'openflux-node':('/etc/openflux/node.json','Node and Disk settings','Document URL, Disk recovery path and release channel. Managed service paths stay unchanged.'),
             'openflux-updater':('/etc/router/updater/settings.json','Update settings','Allow prereleases and expected exit IP. Settings of other components stay unchanged.'),
             'openflux-disk-token':('/etc/openflux-recovery/disk-token','Disk OAuth token','Secret API token for cookies and status. Applied on the next Disk request; no restart.'),
@@ -155,6 +156,10 @@ class OpenFluxConfigs:
             node=json.loads(read(node_path));validate_volga_config(json.loads(text),node['role'])
         elif target=='openflux-mailru':
             writes[path]=('MAILRU_DOCUMENT='+mailru_env(text)+'\n').encode()
+        elif target=='openflux-mailru-cookies':
+            source=read(self.path(MAILRU_ENV))
+            document=mailru_env(source.decode() if isinstance(source,bytes) else source)
+            MailruRuntime.validate_browser(json.loads(text),document)
         elif target=='openflux-node':
             old=json.loads(read(node_path));node=json.loads(text)
             if not isinstance(node,dict) or set(node)!=set(old):raise ValueError('Keep all existing profile fields')
@@ -212,7 +217,7 @@ class OpenFluxConfigs:
         import base64,json,os,tempfile,stat,time,uuid,fcntl,sys
         from pathlib import Path
         target=body.get('target');rows=self.registry()
-        custom={'openflux-url','openflux-node','openflux-updater','openflux-disk-token','openflux-server-key','openflux-client-key','openflux-client-public','openflux-cookies','openflux-volga-config','openflux-mailru'}
+        custom={'openflux-url','openflux-node','openflux-updater','openflux-disk-token','openflux-server-key','openflux-client-key','openflux-client-public','openflux-cookies','openflux-volga-config','openflux-mailru','openflux-mailru-cookies'}
         if target not in custom:return self.original_upload(body)
         if target not in rows or body.get('confirm') is not True:raise ValueError('Unknown config or missing replacement confirmation')
         data=base64.b64decode(body.get('data',''),validate=True)
@@ -260,7 +265,7 @@ class OpenFluxConfigs:
             message='Saved with backup. No services restarted.'
             if self.path('/etc/openflux-client/yandex.env') in changes:message+=' Restart OpenFlux to use the new document; profile URL is synchronized.'
             elif target=='openflux-client-key':message+=' Matching public key updated; register it on the server if identity changed.'
-            elif target=='openflux-cookies':message+=' A blocked client will reload changed cookies automatically.'
+            elif target in ('openflux-cookies','openflux-mailru-cookies'):message+=' A blocked client will reload changed cookies automatically.'
             elif target=='openflux-mailru':message+=' Apply Mail.ru again (or restart OPENFLUX) to use the new document.'
             else:message+=' Used by the next recovery/update operation.'
             result={'ok':True,'changed':True,'target':target,'message':message,'backup':str(backup),'saved_at':int(time.time())}
@@ -287,12 +292,14 @@ VOLGA_CONTAINER = 'openflux-volga'
 VOLGA_IMAGE_REPOSITORY = 'ghcr.io/levl-max/openflux-mod-volga'
 CONFIG_BACKUPS = 3
 
-# Mail.ru: one public Mail.ru Cloud document opened as an anonymous visitor and
-# carried by the Legacy binary (--transport mailru). No cookies, no Disk
-# recovery. A client runs it as its own unit on the router SOCKS port; a server
+# Mail.ru: one public Mail.ru Cloud document, with an optional private browser
+# profile when login is required, carried by the Legacy binary (--transport
+# mailru). A client runs it as its own unit on the router SOCKS port; a server
 # runs its exit as a systemd-managed container beside the Legacy exit.
 MAILRU_ENV = '/etc/openflux-mailru/mailru.env'
 MAILRU_DATA = '/var/lib/openflux-mailru'
+MAILRU_AUTH_DATA = '/var/lib/openflux-mailru-auth'
+MAILRU_BROWSER = MAILRU_AUTH_DATA+'/browser.json'
 MAILRU_UNIT = 'openflux-mailru-client.service'
 MAILRU_EXIT_UNIT = 'openflux-mailru-exit.service'
 MAILRU_CONTAINER = 'openflux-mailru'
@@ -1005,9 +1012,11 @@ class VolgaRuntime:
 
 class MailruRuntime:
     """Mail.ru beside Legacy and Volga: the Legacy binary with --transport mailru,
-    in its own client unit or, on a server, in an exit container. No cookies."""
+    in its own client unit or, on a server, in an exit container."""
     # Status lines of transport/mailru; the newest one decides. Fixed texts only.
     EVENTS=(
+        ('Mail.ru requires fresh browser cookies','auth_blocked','Mail.ru requires fresh browser cookies.'),
+        ('browser profile changed; retrying authorization','connecting','New Mail.ru cookies saved; checking authorization.'),
         ('connected to the document','connected','Connected to the Mail.ru document.'),
         ('connection to the document dropped','connecting','The connection to the Mail.ru document dropped; reconnecting.'),
         ('cannot open the document','connecting','Mail.ru did not open the document; retrying. If this persists, check the link and that the document can be edited by link.'),
@@ -1045,11 +1054,149 @@ class MailruRuntime:
         try:return self.node()['role']
         except ValueError:return None
 
-    def disk_path(self):
+    @staticmethod
+    def validate_browser(profile,document):
+        import json,re
+        required={'schema','document','cookies','headers','body','query'}
+        if not isinstance(profile,dict) or not required<=set(profile) or set(profile)-required-{'bootstrap'} or profile['schema']!=1 or profile['document']!=document or ('bootstrap' in profile and not isinstance(profile['bootstrap'],bool)):raise ValueError('Invalid Mail.ru browser profile')
+        if len(json.dumps(profile).encode())>131072:raise ValueError('Mail.ru browser profile is too large')
+        cookies=profile['cookies'];headers=profile['headers'];body=profile['body'];query=profile['query']
+        if not isinstance(cookies,dict) or not cookies or not isinstance(headers,dict) or not isinstance(body,dict) or not isinstance(query,dict):raise ValueError('Invalid Mail.ru browser profile')
+        for name,value in cookies.items():
+            if not isinstance(name,str) or not re.fullmatch(r'[!#$%&\x27*+.^_`|~0-9A-Za-z-]+',name) or not isinstance(value,str) or any(ord(c)<33 or ord(c)>126 or c in '\";,\\' for c in value):raise ValueError('Invalid Mail.ru cookie')
+        allowed={'user-agent','accept','accept-language','sec-ch-ua','sec-ch-ua-mobile','sec-ch-ua-platform','x-api-version','x-email','x-csrf-token','x-request-token','authorization'}
+        for name,value in headers.items():
+            if not isinstance(name,str) or name.lower() not in allowed or not isinstance(value,str) or len(value)>8192 or any(c in value for c in '\r\n\0'):raise ValueError('Invalid Mail.ru browser header')
+        if body.get('public')!='/'+document.split('/public/',1)[1]:raise ValueError('Choose the same Mail.ru document as the copied request')
+        for key,values in query.items():
+            if not isinstance(key,str) or not isinstance(values,list) or any(not isinstance(v,str) for v in values):raise ValueError('Invalid Mail.ru query')
+        return profile
+
+    def parse_browser(self,document,text):
+        import json,shlex
+        from urllib.parse import urlsplit,parse_qs
+        import cookie_import
+        if not document or document!=self.document():raise ValueError('Choose the configured Mail.ru document')
+        if not isinstance(text,str) or not 1<=len(text.encode())<=120000:raise ValueError('Paste Copy as cURL, at most 120 KiB')
+        words=shlex.split(text.replace('\\\r\n',' ').replace('\\\n',' '))
+        if not words or words[0]!='curl':raise ValueError('Expected Copy as cURL (bash)')
+        urls=[];headers={};payloads=[];method=None;i=1
+        allowed={'user-agent','accept','accept-language','sec-ch-ua','sec-ch-ua-mobile','sec-ch-ua-platform','x-api-version','x-email','x-csrf-token','x-request-token','authorization'}
+        while i<len(words):
+            word=words[i];i+=1
+            if word in ('-H','--header','--url','-b','--cookie','-A','--user-agent','--data-raw','--data','--data-binary','-d','-X','--request'):
+                if i>=len(words):raise ValueError('Incomplete cURL option')
+                value=words[i];i+=1
+                if word=='--url':urls.append(value)
+                elif word in ('-H','--header'):
+                    name,sep,content=value.partition(':')
+                    if sep and name.lower() in allowed:headers[name.lower()]=content.strip()
+                elif word in ('-A','--user-agent'):headers['user-agent']=value
+                elif word in ('--data-raw','--data','--data-binary','-d'):payloads.append(value)
+                elif word in ('-X','--request'):method=value.upper()
+            elif word.startswith(('https://','http://')):urls.append(word)
+        if len(urls)!=1:raise ValueError('Copy one Mail.ru document or editor request')
+        u=urlsplit(urls[0])
+        if u.scheme!='https' or u.netloc!='cloud.mail.ru' or u.fragment:raise ValueError('Copy the cloud.mail.ru document or editor request')
+        try:cookies=cookie_import.parse_cookie_map(cookie_import.extract_cookie_header(text))
+        except (ValueError,SystemExit):raise ValueError('Copy the request with browser cookies') from None
+        if u.path.rstrip('/')==urlsplit(document).path:
+            query=parse_qs(u.query,keep_blank_values=True);weblink=document.split('/public/',1)[1]
+            if method not in (None,'GET') or payloads or set(query)-{'weblink'} or ('weblink' in query and query['weblink']!=[weblink]):raise ValueError('Copy the configured public document page')
+            identity=cookies.get('o','').split(':',1)[0]
+            if '@' not in identity:identity=next((part for part in cookies.get('Mpop','').split(':') if '@' in part),'anonym')
+            body={'public':'/'+weblink,'x-email':identity,'platform':'desktop_web'}
+            return self.validate_browser({'schema':1,'document':document,'cookies':cookies,'headers':headers,'body':body,'query':{},'bootstrap':True},document)
+        if u.path!='/api/v4/r7/edit' or method not in (None,'POST') or len(payloads)!=1:raise ValueError('Copy the public document page or the editor POST request with JSON body')
+        try:body=json.loads(payloads[0])
+        except ValueError:raise ValueError('Copy the editor request with its JSON body') from None
+        return self.validate_browser({'schema':1,'document':document,'cookies':cookies,'headers':headers,'body':body,'query':parse_qs(u.query,keep_blank_values=True)},document)
+
+    def prepare_browser_store(self):
+        import os,pwd
+        directory=self.path(MAILRU_AUTH_DATA);directory.mkdir(parents=True,exist_ok=True,mode=0o700)
+        if self.role()=='client':
+            account=pwd.getpwnam(self.node().get('cookie_user','openflux'))
+            os.chown(directory,account.pw_uid,account.pw_gid)
+            profile=self.path(MAILRU_BROWSER)
+            if profile.exists():os.chown(profile,account.pw_uid,account.pw_gid)
+        os.chmod(directory,0o700)
+
+    def import_cookies(self,document,text):
+        profile=self.parse_browser(document,text)
+        self.prepare_browser_store();self.save(self.path(MAILRU_BROWSER),profile);self.prepare_browser_store()
+        return {'ok':True,'count':len(profile['cookies']),'message':'Mail.ru browser cookies saved on this node only. Authorization retries automatically; nothing was sent to the other node.'}
+
+    def package_cookies(self,document,text,upload=False):
+        import json
+        from cryptography.hazmat.primitives import serialization
+        import recovery_crypto,recovery_inbox
+        if self.role()!='client':raise ValueError('Send recovery cookies from a client')
+        self.parse_browser(document,text)
+        keys=self.path('/etc/openflux-recovery')
+        public=serialization.load_pem_public_key((keys/'server-public.pem').read_bytes())
+        signer=serialization.load_pem_private_key((keys/'sender-private.pem').read_bytes(),password=None)
+        payload=json.dumps({'protocol':'mailru-chat-auth-v1','document':document,'curl':text})
+        packet=recovery_crypto.seal(payload,public,signer,protocol='mailru')
+        if upload:
+            recovery_inbox.upload(self.disk_path(document),packet,(keys/'disk-token').read_text().strip())
+            return {'ok':True,'message':'Encrypted Mail.ru cookies sent to the server only. While authentication is blocked, its inbox is checked about every two minutes.'}
+        return {'ok':True,'package':packet,'filename':self.disk_path(document).rsplit('/',1)[-1],'message':'Encrypted Mail.ru server file ready.'}
+
+    def recovery_poll(self):
+        import json,time,urllib.error
+        from cryptography.hazmat.primitives import serialization
+        import openflux_auth,recovery_crypto,recovery_inbox
+        if self.role()!='server' or not self.document():return
+        keys=self.path('/etc/openflux-recovery')
+        try:token=(keys/'disk-token').read_text().strip()
+        except FileNotFoundError:return
+        if not token or openflux_auth.disk_token_rejected(token):return
+        now=int(time.time());document=self.document();inbox=self.disk_path(document)
+        state=self.read(self.data/'recovery.json',{}) or {};state.setdefault('seen',[])
+        entry=state.setdefault('inboxes',{}).setdefault(inbox,{})
+        every=recovery_inbox.SERVER_POLL_WAITING if self.status().get('needs_cookies') else recovery_inbox.SERVER_POLL_EVERY
+        if now<entry.get('next_check',0) or now-int(entry.get('checked_at') or 0)<every:return
+        entry['checked_at']=now
+        try:
+            md5=recovery_inbox.disk_md5(inbox,token)
+            if md5 and md5==entry.get('md5'):
+                self.save(self.data/'recovery.json',state);return
+            packet=recovery_inbox.download(inbox,token);entry['md5']=md5
+            if packet.get('id') not in state['seen']:
+                private=serialization.load_pem_private_key((keys/'server-private.pem').read_bytes(),password=None)
+                trusted=list((keys/'trusted-senders').glob('*.pem'))
+                if (keys/'sender-public.pem').exists():trusted.append(keys/'sender-public.pem')
+                decoded=None
+                for key in trusted:
+                    try:
+                        public=serialization.load_pem_public_key(key.read_bytes())
+                        decoded=recovery_crypto.unseal(packet,private,public,state['seen'],protocol='mailru');break
+                    except Exception:continue
+                if decoded is None:raise ValueError('No trusted Mail.ru sender')
+                payload,ident=decoded;payload=json.loads(payload)
+                if set(payload)!={'protocol','document','curl'} or payload['protocol']!='mailru-chat-auth-v1' or payload['document']!=document:raise ValueError('Wrong Mail.ru cookie payload')
+                self.import_cookies(document,payload['curl'])
+                state['seen']=(state['seen']+[ident])[-256:];entry['applied_at']=now
+            entry.update(failures=0,next_check=0,inbox='Applied or already seen')
+        except Exception as e:
+            rejected=recovery_inbox.refused(e)
+            if rejected:openflux_auth.reject_disk_token(token)
+            missing=isinstance(e,urllib.error.HTTPError) and e.code==404
+            disk=isinstance(e,(OSError,recovery_inbox.DiskCaptcha)) and not missing
+            if disk or missing:entry.pop('md5',None)
+            failures=entry.get('failures',0)+1
+            entry.update(failures=failures,next_check=now+min(900,60*2**min(failures,4)),inbox='DISK_AUTH_REQUIRED' if rejected else 'Waiting for a Mail.ru recovery file' if missing else 'Yandex Disk temporarily unavailable' if disk else 'Waiting for a valid Mail.ru recovery file')
+        self.save(self.data/'recovery.json',state)
+
+    def disk_path(self,document=None):
         """The Yandex Disk file of the server's Mail.ru status, beside Legacy's and Volga's."""
         base=self.node().get('recovery_path','disk:/OpenFlux Recovery/server-recovery.json')
         path=(base[:-5] if base.endswith('.json') else base)+'-mailru.json'
         if not isinstance(path,str) or not path.startswith(('disk:/','app:/')) or '..' in path.split('/') or any(ord(c)<32 for c in path):raise ValueError('Invalid Mail.ru status path')
+        if document is not None:
+            if document!=self.document():raise ValueError('Unknown Mail.ru recovery document')
+            path=path[:-5]+'-'+__import__('hashlib').sha256(document.encode()).hexdigest()[:16]+'.json'
         return path
 
     # A server that reconnected within this long still counts as connected, so a
@@ -1059,8 +1206,8 @@ class MailruRuntime:
     def status_exchange(self):
         """Mail.ru's server status on Yandex Disk, signed like Legacy's and Volga's:
         a server publishes its exit's state on a change and at least hourly, a
-        client fetches it while someone looks at its panel. Mail.ru has no cookies,
-        so there is no inbox. Runs from the Volga recovery timer."""
+        client fetches it while someone looks at its panel. Runs from the shared
+        recovery timer, alongside its separate cookie inbox."""
         import time
         from cryptography.hazmat.primitives import serialization
         import openflux_auth,recovery_crypto,recovery_inbox
@@ -1093,7 +1240,7 @@ class MailruRuntime:
             status=self.status()
             if status.get('state')=='connecting' and now-int(status.get('connected_at') or 0)<self.RECONNECT_GRACE:
                 status=dict(status,state='connected',reason='Connected to the Mail.ru document.')
-            view={k:status.get(k) for k in ('state','reason','active')}
+            view={k:status.get(k) for k in ('state','reason','active','needs_cookies')}
             signature=recovery_inbox.status_signature(view,tuple(view))
             if recovery_inbox.publish_due(state,signature,now):
                 recovery_inbox.upload(path,recovery_crypto.sign_status(status,private,protocol='mailru'),token)
@@ -1124,7 +1271,7 @@ class MailruRuntime:
         # The hardening of the Legacy client unit, which runs the same binary.
         return ('[Unit]\nDescription=OpenFlux Mail.ru client\nAfter=network-online.target\nWants=network-online.target\n'
             'Conflicts='+legacy+' '+VOLGA_UNIT+'\nPartOf=sing-box-openflux.service\n[Service]\nType=simple\nUser='+account+'\nGroup='+account+'\n'
-            'EnvironmentFile='+MAILRU_ENV+'\nExecStart='+self.binary()+' --client --transport mailru --url ${MAILRU_DOCUMENT} --socks5 127.0.0.1:11080 '+' '.join(MAILRU_PROFILE)+'\n'
+            'EnvironmentFile='+MAILRU_ENV+'\nExecStart='+self.binary()+' --client --transport mailru --url ${MAILRU_DOCUMENT} --socks5 127.0.0.1:11080 '+' '.join(MAILRU_PROFILE)+' --mailru-browser-profile '+MAILRU_BROWSER+'\n'
             'Restart=on-failure\nRestartSec=5\nUMask=0077\nNoNewPrivileges=yes\nPrivateTmp=yes\nPrivateDevices=yes\nProtectSystem=strict\nProtectHome=yes\n'
             'ProtectKernelTunables=yes\nProtectKernelModules=yes\nProtectControlGroups=yes\nRestrictSUIDSGID=yes\nLockPersonality=yes\n'
             'CapabilityBoundingSet=\nAmbientCapabilities=\n[Install]\nWantedBy=multi-user.target\n')
@@ -1139,8 +1286,9 @@ class MailruRuntime:
             'ExecStart=/usr/bin/docker run --rm --pull=never --name '+MAILRU_CONTAINER+' --label io.openflux.managed=mailru --network='+settings['network']+' '
             '--cap-drop=ALL --cap-add=NET_RAW --cap-add=NET_ADMIN --security-opt=no-new-privileges --pids-limit=256 --memory=512m --memory-swap=512m '
             '--log-driver=json-file --log-opt=max-size=10m --log-opt=max-file=2 '
+            '--mount=type=bind,src='+MAILRU_AUTH_DATA+',dst='+MAILRU_AUTH_DATA+',readonly '
             '--mount=type=bind,src='+self.binary()+',dst=/usr/local/bin/openflux,readonly --mount=type=bind,src='+MAILRU_DATA+'/run.sh,dst=/run/openflux-mailru/run.sh,readonly '
-            '--entrypoint=/bin/sh '+settings['image']+' /run/openflux-mailru/run.sh --exit-node --transport mailru --url ${MAILRU_DOCUMENT} '+' '.join(MAILRU_PROFILE)+'\n'
+            '--entrypoint=/bin/sh '+settings['image']+' /run/openflux-mailru/run.sh --exit-node --transport mailru --url ${MAILRU_DOCUMENT} '+' '.join(MAILRU_PROFILE)+' --mailru-browser-profile '+MAILRU_BROWSER+'\n'
             'ExecStop=/usr/bin/docker stop --time 10 '+MAILRU_CONTAINER+'\n'
             # A Go program running as PID 1 exits with status 2 on SIGTERM.
             'SuccessExitStatus=2 143\nRestart=always\nRestartSec=5\nTimeoutStartSec=120\nTimeoutStopSec=30\n[Install]\nWantedBy=multi-user.target\n')
@@ -1170,6 +1318,7 @@ class MailruRuntime:
     def write_units(self):
         """Write this node's Mail.ru unit (and a server's exit script) for the
         current release; True when anything changed. Callers reload systemd."""
+        self.prepare_browser_store()
         server=self.node()['role']=='server'
         files=[(self.units/self.unit(),(self.exit_unit_text() if server else self.unit_text()).encode(),0o644)]
         if server:files.append((self.data/'run.sh',MAILRU_EXIT_SCRIPT.encode(),0o755))
@@ -1179,12 +1328,12 @@ class MailruRuntime:
         return changed
 
     def configure(self,document,exit_settings=None):
-        """Save the document link and write the unit. A server's exit then starts
-        and must connect; any failure restores the previous files and state."""
+        """Save the document and start a server exit. Initial setup can wait for
+        cookies; a failed change to an existing exit restores its files/state."""
         document=mailru_document(document);node=self.node();server=node['role']=='server'
         if server:exit_settings=mailru_exit_settings(exit_settings or node.get('mailru_exit') or self.legacy_exit_settings())
         usage=self.run([self.binary(),'--help'],check=False)
-        if 'mailru-batch-bytes' not in usage.stdout+usage.stderr:raise ValueError('The installed OpenFlux binary has no Mail.ru chat transport; update OpenFlux first')
+        if 'mailru-browser-profile' not in usage.stdout+usage.stderr:raise ValueError('The installed OpenFlux binary has no Mail.ru chat transport with browser authentication; update OpenFlux first')
         unit=self.units/self.unit()
         paths=[self.env_path,unit,self.node_path]+([self.data/'run.sh'] if server else [])
         before={p:(p.read_bytes(),p.stat().st_mode&0o777) if p.exists() else None for p in paths}
@@ -1202,7 +1351,9 @@ class MailruRuntime:
                 return {'ok':True,'changed':changed,'message':'Mail.ru link saved. Select Mail.ru as the protocol to use it; the server’s Mail.ru exit must use the same document.'}
             self.run(['systemctl','enable',MAILRU_EXIT_UNIT])
             if changed or units_changed or not was_active:self.run(['systemctl','restart',MAILRU_EXIT_UNIT],timeout=150)
-            self.health()
+            status=self.health(allow_auth_block=not existed)
+            if status and status.get('needs_cookies'):
+                return {'ok':True,'changed':True,'needs_cookies':True,'message':'Mail.ru exit is configured and waiting for browser cookies. Send a separate server session through the panel.'}
             return {'ok':True,'changed':changed or units_changed,'message':'Mail.ru exit is running and connected to the document.'}
         except BaseException:
             if server:
@@ -1223,6 +1374,7 @@ class MailruRuntime:
     @classmethod
     def classify(cls,message):
         import re
+        if 'cannot open the document' in message and re.search(r'(?:status|http) (401|403)\b',message):return 'auth_blocked','Mail.ru requires fresh browser cookies.'
         for needle,state,reason in cls.EVENTS:
             if needle in message:
                 code=re.search(r'(?:status|http) ([1-5]\d\d)\b',message)
@@ -1232,8 +1384,9 @@ class MailruRuntime:
 
     def status(self):
         import fcntl,json,re,time
+        import openflux_auth
         unit=self.unit()
-        out={'transport':'mailru','state':'stopped','active':False,'installed':(self.units/unit).is_file(),'configured':False,'reason':'Mail.ru is stopped.'}
+        out={'transport':'mailru','state':'stopped','active':False,'needs_cookies':False,'installed':(self.units/unit).is_file(),'configured':False,'reason':'Mail.ru is stopped.'}
         try:
             document=self.document()
             if document:out.update(configured=True,documents=[document])
@@ -1246,7 +1399,9 @@ class MailruRuntime:
             out['server_authentication']=peer
         p=self.run(['systemctl','show',unit,'-p','ActiveState','-p','InvocationID'],check=False)
         d=dict(line.split('=',1) for line in p.stdout.splitlines() if '=' in line)
-        if d.get('ActiveState')!='active':return out
+        if d.get('ActiveState')!='active':
+            if self.role()=='client':out['client_check']=self.client_check()
+            return out
         out.update(active=True,state='connecting',reason='Mail.ru is connecting.')
         invocation=d.get('InvocationID','')
         if not re.fullmatch('[0-9a-f]{32}',invocation):return out
@@ -1267,20 +1422,49 @@ class MailruRuntime:
                 event=self.classify(message)
                 if not event:continue
                 saved.update(state=event[0],reason=event[1],event_at=ts)
+                openflux_auth.record_check(saved,ts,*event)
                 if event[0]=='connected':saved['connected_at']=ts
             if p.returncode in (0,1):saved['scanned_at']=started
             self.save(self.data/'status.json',saved)
         if saved.get('state'):out.update(state=saved['state'],reason=saved['reason'])
         if saved.get('connected_at'):out['connected_at']=int(saved['connected_at'])
+        out['needs_cookies']=out['state']=='auth_blocked'
+        if self.role()=='client':out['client_check']=self.client_check(saved)
         out['checked_at']=int(time.time())
         return out
 
-    def health(self,seconds=90):
+    def client_check(self,current=None):
+        """Retain the last verdict even when the router stops a failed client."""
+        import fcntl,json,re,time
+        import openflux_auth as auth
+        self.data.mkdir(parents=True,exist_ok=True,mode=0o700)
+        path=self.data/'client-check.json'
+        with open(self.data/'.client-check.lock','a') as lock:
+            fcntl.flock(lock,fcntl.LOCK_EX)
+            rec=self.read(path,{}) or {};now=time.time()
+            if current is None and now-rec.get('scanned_at',0)>=auth.SCAN_EVERY:
+                pattern='|'.join(re.escape(e[0]) for e in self.EVENTS)
+                p=self.run(['journalctl','--no-pager','-o','json','-u',MAILRU_UNIT,'--since','@%d'%int(max(rec.get('scanned_at',0)-2,now-auth.SCAN_BACK)),'--grep',pattern],check=False,timeout=20)
+                for line in p.stdout.splitlines():
+                    try:e=json.loads(line);ts=int(e['__REALTIME_TIMESTAMP'])/1e6;event=self.classify(str(e.get('MESSAGE','')))
+                    except (ValueError,KeyError,TypeError):continue
+                    if event:auth.record_check(rec,ts,*event)
+                if p.returncode in (0,1):rec['scanned_at']=now
+            if current:
+                for key in ('last_failure','last_success'):
+                    if (current.get(key) or {}).get('at',0)>(rec.get(key) or {}).get('at',0):rec[key]=current[key]
+            self.save(path,rec)
+        return auth.client_check(rec,[self.path(MAILRU_BROWSER)])
+
+    def health(self,seconds=90,allow_auth_block=False):
         import time
         deadline=time.monotonic()+seconds;client=self.node()['role']=='client'
         while time.monotonic()<deadline:
             s=self.status()
             if not s['active']:raise RuntimeError('Mail.ru stopped during health check')
+            if s.get('needs_cookies'):
+                if allow_auth_block and not client:return s
+                raise RuntimeError('Mail.ru requires fresh browser cookies')
             # A server is ready once it holds the document; a client also proves
             # the exit through its SOCKS port.
             if s['state']=='connected' and (not client or VolgaRuntime(self.root).exit_ok()):return
@@ -1288,7 +1472,7 @@ class MailruRuntime:
         raise RuntimeError('Mail.ru did not pass connection and exit-IP checks')
 
 def run_mailru_cli(args):
-    import contextlib,fcntl,pathlib
+    import contextlib,fcntl,pathlib,sys
     runtime=MailruRuntime();action=args.action
     if action in ('check','download','update','rollback'):raise ValueError('Mail.ru is updated together with OpenFlux: run this without --transport')
     with contextlib.ExitStack() as stack:
@@ -1311,6 +1495,15 @@ def run_mailru_cli(args):
             if node['role']=='client' and action in ('start','restart') and node.get('active_transport','yandex')!='mailru':raise ValueError('Use select-protocol mailru to switch clients safely')
             runtime.action(action);return {'ok':True,'action':action}
         if action=='health':runtime.health(max(1,min(args.seconds,150)));return {'ok':True,'health':'passed'}
+        if action=='cookies':
+            text=sys.stdin.read(120001) if args.file=='-' else pathlib.Path(args.file).read_text()
+            result=runtime.import_cookies(args.document_url,text) if args.operation=='import' else runtime.package_cookies(args.document_url,text,upload=args.operation=='send')
+            if args.output and 'package' in result:runtime.save(pathlib.Path(args.output),result['package']);return {'saved':args.output}
+            return result
+        if action=='recovery':
+            import openflux_auth
+            result=openflux_auth.configure_recovery(vars(args))
+            VolgaRuntime().install_recovery_timer();result['disk_path']=runtime.disk_path(runtime.document());return result
         raise ValueError('Unsupported Mail.ru action')
 
 # The router helpers accept only the units of known protocols (v4.2.0: Mail.ru).
@@ -1377,8 +1570,9 @@ def run_volga_cli(args):
             return runtime.restore_transaction(record) if record else {'ok':True,'message':'No interrupted Volga operation.'}
         if action=='select-protocol':return runtime.select(args.protocol)
         if action=='poll-volga-recovery':
-            # The same timer carries Mail.ru's status: Mail.ru has no inbox of its own.
-            try:MailruRuntime().status_exchange()
+            # Separate protocol envelopes and inboxes share the existing timer.
+            try:
+                mailru=MailruRuntime();mailru.recovery_poll();mailru.status_exchange()
             except Exception as e:print('Mail.ru status exchange failed: '+type(e).__name__,file=sys.stderr)
             runtime.recovery_poll();return {'ok':True}
         if action in ('start','stop','restart'):
@@ -1653,6 +1847,52 @@ MAILRU_SERVER_HOOK='''  const ms=mp.server_authentication||{}, msWarn=!!mp.confi
 VOLGA_HOOK=VOLGA_HOOK_V8+MAILRU_SERVER_HOOK
 assert VOLGA_HTML.count('id="mailruServerState"')==1 and VOLGA_HTML.count('data-volga-panel="9"')==1
 
+# v10: authenticated Mail.ru documents use their own encrypted cookie channel.
+# Keep all v9 strings above verbatim: installed panels are upgraded by exact match.
+VOLGA_HTML_V9,VOLGA_JS_V9,VOLGA_HOOK_V9=VOLGA_HTML,VOLGA_JS,VOLGA_HOOK
+MAILRU_COOKIE_HTML='''
+  <div id="mailruCookies" style="margin-top:12px">
+   <b>Mail.ru browser cookies</b><span class="small" id="mailruCookieBadge"></span>
+   <p class="small">Open the document and sign in. F12 → Network → reload → select the document page → Copy as cURL (bash). The editor POST request also works.</p>
+   <label>Document <select id="mailruCookieDocument"></select></label>
+   <textarea id="mailruCurl" rows="5" autocomplete="off" spellcheck="false" style="width:100%;box-sizing:border-box" placeholder="Copy as cURL (bash)"></textarea>
+   <div class="row"><button id="mailruCookiesSave">Save on this mini-PC only</button><button id="mailruRecoverySend">Send to server only</button><button id="mailruRecoveryDownload">Download encrypted server file</button></div>
+   <p class="small" id="mailruCookieResult" role="status" aria-live="polite"></p>
+   <p class="small">Use separate browser sessions for this mini-PC and the server. Server cookies go encrypted via Yandex Disk; pickup takes 2–15 minutes. New cookies load automatically.</p>
+   <p class="small" id="mailruDiskToken" role="status"></p>
+  </div>'''
+MAILRU_COOKIE_JS='''async function mailruCookies(operation){
+ const r=$('#mailruCookieResult'),buttons=[$('#mailruCookiesSave'),$('#mailruRecoverySend'),$('#mailruRecoveryDownload')];
+ for(const b of buttons)b.disabled=true;r.textContent='Processing Mail.ru browser cookies…';
+ try{const d=await volgaPost(operation==='import'?'mailru/cookies':'mailru/recovery',{document:$('#mailruCookieDocument').value,curl:$('#mailruCurl').value,upload:operation==='send'});if(d.package)volgaDownload(d.package,d.filename);$('#mailruCurl').value='';r.textContent=d.message;}catch(e){r.textContent=e.message;}finally{refresh();}
+}
+$('#mailruCookiesSave').onclick=()=>mailruCookies('import');
+$('#mailruRecoverySend').onclick=()=>mailruCookies('send');
+$('#mailruRecoveryDownload').onclick=()=>mailruCookies('package');
+'''
+MAILRU_COOKIE_HOOK='''  const mc=mp.client_check, mailNames={connected:'Connected',connecting:'Connecting',auth_blocked:'AUTH_BLOCKED — refresh Mail.ru browser cookies',stopped:'Stopped'};
+  const mailCheck=!mc?'':mc.result==='refused'?(mc.cookies_saved_after?'Fresh cookies saved; they will be checked at the next start':'Mail.ru refused these cookies on '+new Date(mc.at*1000).toLocaleString()+' — import fresh cookies'):'Cookies accepted on '+new Date(mc.at*1000).toLocaleString();
+  const mailClient='This mini-PC: '+(mailNames[mp.state]||'Unknown')+(mailCheck?' · '+mailCheck:'');
+  const mailServer='Mail.ru server: '+(!ms.state||ms.stale?'Unknown — no fresh verified response':mailNames[ms.state]||'Unknown')+(ms.reported_at?' · Last response: '+new Date(ms.reported_at*1000).toLocaleString():'');
+  $('#mailruClientState').textContent=mailClient;
+  $('#mailruServerState').textContent=mailServer;
+  const mailWarn=mp.state==='auth_blocked'||refused(mc)||msWarn;
+  $('#mailruCookieBadge').textContent=mailWarn?' · attention needed':'';
+  for(const el of [$('#mailruCookieBadge'),$('#mailruBadge')]){el.style.color=mailWarn?'#d97706':'';el.style.fontWeight=mailWarn?'600':'';}
+  const md=$('#mailruCookieDocument'),mailDocs=mp.documents||[];
+  if(JSON.stringify(Array.from(md.options,o=>o.value))!==JSON.stringify(mailDocs)){md.textContent='';for(const url of mailDocs){const o=document.createElement('option');o.value=url;o.textContent=url;md.appendChild(o);}}
+  $('#mailruCookiesSave').disabled=!mp.configured;
+  $('#mailruRecoveryDownload').disabled=!mp.configured||!legacyAuth.recovery_sender_ready;
+  $('#mailruRecoverySend').disabled=!mp.configured||!legacyAuth.recovery_upload_ready;
+  $('#mailruDiskToken').textContent=legacyAuth.disk_token_rejected?'Yandex Disk refused the Disk OAuth token. Replace it under Configuration (OpenFlux · Disk OAuth token); cookie delivery and server status wait until then.':'';
+  $('#mailruDiskToken').style.color='#d97706';
+  if(selected==='mailru'&&of.state==='stopped'&&refused(mc))$('#openfluxState').textContent='Stopped · Mail.ru requires fresh browser cookies on this mini-PC';
+'''
+VOLGA_HTML=VOLGA_HTML_V9.replace('data-volga-panel="9"','data-volga-panel="10"').replace('Mail.ru opens one public Mail.ru Cloud document as an anonymous visitor: no cookies and no login. The server&#39;s Mail.ru exit must use the same document. Paste the document&#39;s public link, or upload a Mail.ru config file, to set Mail.ru up or to change the document.','Use the same public document link on this mini-PC and the server. If Mail.ru asks for a login, import browser cookies below.')
+VOLGA_HTML=VOLGA_HTML.rsplit('</details>',1)[0]+MAILRU_COOKIE_HTML+'\n  </details>'
+VOLGA_JS=VOLGA_JS_V9+MAILRU_COOKIE_JS
+VOLGA_HOOK=VOLGA_HOOK_V9+MAILRU_COOKIE_HOOK
+
 # The mode buttons show why a mode did not start: the last line of the mode
 # controller, e.g. "OPENFLUX was not started: AUTH_BLOCKED… AWG kept serving
 # the LAN." Both router panel layouts get the same answer and timeout.
@@ -1693,16 +1933,20 @@ def patch_legacy_check(text):
 def patch_volga_panel(text):
     if 'const CFG_GROUPS=' in text:
         # Grouped configuration cards: the Volga and Mail.ru files join OpenFlux.
-        new="'openflux-updater','openflux-volga-config','openflux-mailru'],modes:['openflux']"
+        new="'openflux-updater','openflux-volga-config','openflux-mailru','openflux-mailru-cookies'],modes:['openflux']"
         if new not in text:
             old="'openflux-updater','openflux-volga-config'],modes:['openflux']"
+            if "'openflux-updater','openflux-volga-config','openflux-mailru'],modes:['openflux']" in text:old="'openflux-updater','openflux-volga-config','openflux-mailru'],modes:['openflux']"
             text=replace(text,old if old in text else "'openflux-updater'],modes:['openflux']",new)
-        new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config','openflux-mailru']);"
+        new="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config','openflux-mailru','openflux-mailru-cookies']);"
         if new not in text:
             old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config']);"
+            if "const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config','openflux-mailru']);" in text:old="const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies','openflux-volga-config','openflux-mailru']);"
             text=replace(text,old if old in text else "const CFG_SECRET=new Set(['openflux-disk-token','openflux-client-key','openflux-cookies']);",new)
-    if 'data-volga-panel="9"' in text:return text
-    if 'data-volga-panel="8"' in text:
+    if 'data-volga-panel="10"' in text:return text
+    if 'data-volga-panel="9"' in text:
+        text=replace(replace(replace(text,VOLGA_HTML_V9,VOLGA_HTML),VOLGA_JS_V9,VOLGA_JS),VOLGA_HOOK_V9,VOLGA_HOOK)
+    elif 'data-volga-panel="8"' in text:
         # A v4.2.0/v4.2.1 panel: the Mail.ru section shows the server's exit.
         text=replace(replace(replace(text,VOLGA_HTML_V8,VOLGA_HTML),VOLGA_JS_V8,VOLGA_JS),VOLGA_HOOK_V8,VOLGA_HOOK)
     elif 'data-volga-panel="7"' in text:
@@ -1748,6 +1992,7 @@ def patch_volga_panel(text):
 # shown, never the exception itself: no browser text, credential, raw
 # subprocess output or key path. Every switch restores the previous protocol.
 PROTOCOL_ERRORS=(
+    ('Mail.ru requires fresh browser cookies','Mail.ru requires fresh browser cookies. Save them on this mini-PC or send a separate browser session to the server in Mail.ru browser cookies.'),
     ('AUTH_BLOCKED','Legacy: Yandex asks for fresh browser cookies (captcha or login). Save fresh Legacy cookies on this mini-PC, then apply the protocol again.'),
     ('Volga requires fresh browser cookies','Volga: Yandex asks for fresh browser cookies (captcha or login). Save fresh Volga cookies on this mini-PC for both documents, then apply the protocol again.'),
     ('OpenFlux health check failed','Legacy did not connect within 100 s, or its exit IP was wrong. Check the server status in the Legacy section.'),
@@ -1767,6 +2012,7 @@ MAILRU_SETUP_ERRORS=(
     ('cloud.mail.ru/public/','Paste the public link of a Mail.ru Cloud document: https://cloud.mail.ru/public/… with nothing after it.'),
     ('Invalid Mail.ru document link','Paste the public link of a Mail.ru Cloud document: https://cloud.mail.ru/public/…'),
     ('has no Mail.ru transport','This mini-PC’s OpenFlux has no Mail.ru transport yet: install the current OpenFlux release in Router Updater first.'),
+    ('has no Mail.ru chat transport','Install the current OpenFlux release with Mail.ru browser authentication in Router Updater first.'),
     ('Unknown router','The router helpers on this mini-PC have an unexpected layout; Mail.ru was not set up.'))
 
 def mailru_setup_error(exc):
@@ -1785,7 +2031,7 @@ def protocol_error(exc):
 
 def volga_panel_post(handler):
     import json,types,contextlib,fcntl
-    paths=('/api/openflux/protocol','/api/openflux/volga/config','/api/openflux/volga/cookies','/api/openflux/volga/recovery','/api/openflux/volga/update','/api/openflux/mailru/config')
+    paths=('/api/openflux/protocol','/api/openflux/volga/config','/api/openflux/volga/cookies','/api/openflux/volga/recovery','/api/openflux/volga/update','/api/openflux/mailru/config','/api/openflux/mailru/cookies','/api/openflux/mailru/recovery')
     if handler.path not in paths:return False
     if not handler.allowed() or not handler.authorized():handler.j({'ok':False,'error':'Request rejected'},403);return True
     if handler.path.endswith('/update'):
@@ -1794,7 +2040,7 @@ def volga_panel_post(handler):
     try:
         length=int(handler.headers.get('Content-Length','0'))
         if not 1<=length<=140000 or 'application/json' not in handler.headers.get('Content-Type',''):raise ValueError('Invalid request')
-        body=json.loads(handler.rfile.read(length));runtime=VolgaRuntime()
+        body=json.loads(handler.rfile.read(length));runtime=MailruRuntime() if '/mailru/' in handler.path else VolgaRuntime()
         if not isinstance(body,dict):raise ValueError('JSON object required')
         if handler.path=='/api/openflux/volga/config' and body.get('operation')=='upload' and runtime.config_path.is_file():
             handler.j({'ok':False,'error':'Volga is configured. Replace its file under Configuration.'},400);return True
@@ -1829,6 +2075,7 @@ def volga_panel_post(handler):
         if handler.path.endswith('/protocol'):error=protocol_error(exc)
         elif handler.path=='/api/openflux/mailru/config':error=mailru_setup_error(exc)
         elif isinstance(exc,BlockingIOError):error=BUSY_ERROR
+        elif '/mailru/' in handler.path:error='Mail.ru cookie operation failed. Copy the public page request for the selected document, including browser cookies; check server pairing and the Yandex Disk token.'
         else:error='Volga operation failed. Check configuration, release availability and cookie pairing. Any runtime switch/update is restored on failure.'
         handler.j({'ok':False,'error':error},400)
     return True

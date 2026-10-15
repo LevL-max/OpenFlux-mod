@@ -1,6 +1,6 @@
 """Mail.ru, the third protocol (v4.2.0): its link, client unit and server exit,
 status, protocol switching, router helpers, panel v8 and configuration card."""
-import io,json,pathlib,re,tempfile,time,types,unittest
+import io,json,os,pathlib,re,tempfile,time,types,unittest
 from unittest.mock import patch
 import openflux_auth
 import router_integration as ri
@@ -16,7 +16,7 @@ def result(rc=0,out='',err=''):return types.SimpleNamespace(returncode=rc,stdout
 class FakeHost:
     """systemd, journald and docker as the Mail.ru runtime sees them."""
     def __init__(self):
-        self.active=set();self.calls=[];self.journal=[];self.invocation='a'*32;self.help='  -mailru-batch-bytes'
+        self.active=set();self.calls=[];self.journal=[];self.invocation='a'*32;self.help='  -mailru-batch-bytes -mailru-browser-profile'
         self.legacy_exit={'Config':{'Image':'openflux-runtime:24.04'},'NetworkSettings':{'Networks':{'openflux-net':{}}}}
     def run(self,argv,check=True,timeout=30):
         self.calls.append(argv)
@@ -43,6 +43,7 @@ class Base(unittest.TestCase):
         self.runtime.save(self.runtime.node_path,self.node)
         for target,name in ((MailruRuntime,'run'),(VolgaRuntime,'run')):
             p=patch.object(target,name,side_effect=self.host.run);p.start();self.addCleanup(p.stop)
+        patch('pwd.getpwnam',return_value=types.SimpleNamespace(pw_uid=os.getuid(),pw_gid=os.getgid())).start()
         self.hooks=patch.object(VolgaRuntime,'install_router_hooks',return_value=[]).start();self.addCleanup(patch.stopall)
     def unit(self):return self.runtime.units/self.runtime.unit()
 
@@ -69,7 +70,7 @@ class ClientTests(Base):
         self.assertIn('Conflicts='+LEGACY+' '+VOLGA_UNIT+'\n',text);self.assertIn('PartOf=sing-box-openflux.service',text)
         self.assertIn('User=openflux\n',text);self.assertIn('EnvironmentFile=/etc/openflux-mailru/mailru.env\n',text)
         self.assertIn('ExecStart=/opt/openflux-client/bin/openflux --client --transport mailru --url ${MAILRU_DOCUMENT} --socks5 127.0.0.1:11080 --compression=true --yandex-queue-size=1024 '
-                      '--tcp-buffer-default=1048576 --tcp-buffer-max=4194304 --batch-packets=512 --batch-delay-us=5000 --mailru-batch-bytes=500000\n',text)
+                      '--tcp-buffer-default=1048576 --tcp-buffer-max=4194304 --batch-packets=512 --batch-delay-us=5000 --mailru-batch-bytes=500000 --mailru-browser-profile /var/lib/openflux-mailru-auth/browser.json\n',text)
         for field in ('NoNewPrivileges=yes','ProtectSystem=strict','CapabilityBoundingSet=\n','PrivateDevices=yes'):self.assertIn(field,text)
         self.assertNotIn('--debug',text);self.assertNotIn('--mailru-editor-activity',text)
         with patch.object(self.runtime,'node',return_value=dict(self.node,binary='relative/openflux')),self.assertRaises(ValueError):self.runtime.unit_text()
@@ -113,7 +114,7 @@ class ClientTests(Base):
         self.host.journal.append((now+5,'[M-DOCS] connection to the document dropped: websocket: close 1006; reconnecting'))
         self.host.journal.append((now+6,'[M-DOCS] cannot open the document: API returned status 404; retrying'))
         s=self.runtime.status();self.assertEqual(s['state'],'connecting');self.assertIn('(HTTP 404)',s['reason'])
-        journal=[c for c in self.host.calls if c[0]=='journalctl']
+        journal=[c for c in self.host.calls if c[0]=='journalctl' and '-u' not in c]
         self.assertNotIn('--since',journal[0]);self.assertIn('--since',journal[1])
         # A new run starts from scratch: no state of the previous run survives.
         self.host.invocation='b'*32;self.host.journal=[]
@@ -251,7 +252,7 @@ class PanelTests(unittest.TestCase):
     def test_v7_panel_migrates_to_v8(self):
         fresh=ri.patch_panel(BASE_PANEL)
         v7=(fresh.replace(ri.VOLGA_HTML,ri.VOLGA_HTML_V7).replace(ri.VOLGA_JS,ri.VOLGA_JS_V7).replace(ri.VOLGA_HOOK,ri.VOLGA_HOOK_V7)
-            .replace(",'openflux-mailru'],modes",'],modes').replace(",'openflux-mailru']);",']);'))
+            .replace(",'openflux-mailru','openflux-mailru-cookies'],modes",'],modes').replace(",'openflux-mailru','openflux-mailru-cookies']);",']);'))
         self.assertIn('data-volga-panel="7"',v7);self.assertNotIn('mailru',v7)
         self.assertEqual(ri.patch_panel(v7),fresh)
         with self.assertRaises(ValueError):ri.patch_panel(v7.replace(ri.VOLGA_JS_V7,ri.VOLGA_JS_V7.replace('cookieLinks','links')))
@@ -314,7 +315,7 @@ class ConfigCardTests(unittest.TestCase):
         env=root/'etc/openflux-mailru/mailru.env';env.parent.mkdir(parents=True);env.write_text('MAILRU_DOCUMENT='+DOC+'\n')
         core=types.SimpleNamespace(registry=lambda:{},upload=lambda body:None,parse=lambda data:data.decode())
         configs=ri.OpenFluxConfigs(core,root);row=configs.registry()['openflux-mailru']
-        self.assertEqual(row['path'],str(env));self.assertIn('no cookies',row['description'])
+        self.assertEqual(row['path'],str(env));self.assertIn('same link',row['description'])
         writes=configs.plan('openflux-mailru',b'# new\nMAILRU_DOCUMENT=https://cloud.mail.ru/public/Zzzz/Yyyy/\n',lambda path:pathlib.Path(path).read_bytes())
         self.assertEqual(writes,{env:b'MAILRU_DOCUMENT=https://cloud.mail.ru/public/Zzzz/Yyyy\n'})
         with self.assertRaises(ValueError):configs.plan('openflux-mailru',b'MAILRU_DOCUMENT=https://evil.example/x\n',lambda path:b'')

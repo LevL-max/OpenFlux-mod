@@ -249,14 +249,14 @@ class VolgaTests(unittest.TestCase):
  def test_fresh_panel_gets_one_cookie_section_per_protocol(self):
   changed=router_integration.patch_panel(BASE_PANEL);compile(changed,'router-panel','exec')
   self.assertEqual(router_integration.patch_panel(changed),changed)
-  self.assertIn("'openflux-updater','openflux-volga-config','openflux-mailru'],modes:['openflux']",changed)
-  self.assertIn("'openflux-cookies','openflux-volga-config','openflux-mailru']);",changed)
-  self.assertIn('data-volga-panel="9"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
+  self.assertIn("'openflux-updater','openflux-volga-config','openflux-mailru','openflux-mailru-cookies'],modes:['openflux']",changed)
+  self.assertIn("'openflux-cookies','openflux-volga-config','openflux-mailru','openflux-mailru-cookies']);",changed)
+  self.assertIn('data-volga-panel="10"',changed);self.assertNotIn('data-volga-update',changed);self.assertNotIn('volga/update',changed)
   # One browser login per place: no button puts one session on both, and a refused Disk token is shown.
   self.assertNotIn('CookieBoth',changed);self.assertNotIn('cookiesBoth',changed)
   self.assertEqual(changed.count(router_integration.SEPARATE_LOGINS),2)
   self.assertIn('within 2 minutes while it waits for cookies, otherwise within 15 minutes',changed)
-  for element in ('id="openfluxDiskToken"','id="volgaDiskToken"','legacyAuth.disk_token_rejected'):self.assertEqual(changed.count(element),1)
+  for element in ('id="openfluxDiskToken"','id="volgaDiskToken"','id="mailruDiskToken"'):self.assertEqual(changed.count(element),1)
   # An idle Volga server is "connecting"; its heading says what that means.
   self.assertIn("connecting:'waiting for a client'",changed);self.assertIn("['auth_blocked','stopped']",changed)
   for summary in ('>Legacy browser cookies<','>Volga browser cookies<','>Mail.ru document<'):self.assertEqual(changed.count(summary),1)

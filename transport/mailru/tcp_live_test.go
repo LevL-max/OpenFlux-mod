@@ -81,11 +81,16 @@ func chatTCPStack(t *testing.T, link transport.Transport, last byte) *stack.Stac
 	return s
 }
 
-func runChatTCPProbe(t *testing.T, doc string) {
+func runChatTCPProbe(t *testing.T, doc string, profiles ...string) {
 	t.Helper()
 	peers := []*MailruDocsTransport{NewMailruDocsTransport(doc, transport.DefaultConfig()), NewMailruDocsTransport(doc, transport.DefaultConfig())}
 	stacks := make([]*stack.Stack, 2)
 	for i, peer := range peers {
+		if i < len(profiles) {
+			if err := peer.SetBrowserProfile(profiles[i]); err != nil {
+				t.Fatal(err)
+			}
+		}
 		link := transport.NewBatchingTransport(transport.NewCompressedTransport(peer), 512, 500000, 5*time.Millisecond)
 		stacks[i] = chatTCPStack(t, link, byte(i+1))
 		if err := link.Start(); err != nil {

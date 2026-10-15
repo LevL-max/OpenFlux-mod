@@ -37,6 +37,7 @@ func main() {
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, mailru, oneme)")
 	mailruEditorActivity := flag.Bool("mailru-editor-activity", false, "Deprecated: true is rejected by the Mail.ru chat carrier")
 	mailruBatchBytes := flag.Int("mailru-batch-bytes", 500000, "Mail.ru chat batch payload target in bytes (4096..500000)")
+	mailruBrowserProfile := flag.String("mailru-browser-profile", "", "Private Mail.ru browser request profile JSON; reloads imports without restart")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
 	yandexSafeMode := flag.Bool("yandex-safe-mode", false, "Fragment Legacy cursor payloads below 2600 bytes and pace all writes at 10/s (enable on both peers)")
 	yandexLanes := flag.Int("yandex-lanes", 1, "Legacy participants: 1..32 (multiple participants require safe mode on both peers)")
@@ -156,6 +157,11 @@ func main() {
 	case "mailru":
 		mailruTransport := mailru.NewMailruDocsTransport(globalDocUrl, config)
 		mailruTransport.SetEditorActivity(*mailruEditorActivity)
+		if *mailruBrowserProfile != "" {
+			if err := mailruTransport.SetBrowserProfile(*mailruBrowserProfile); err != nil {
+				log.Fatalf("Cannot configure Mail.ru browser profile: %v", err)
+			}
+		}
 		if *compressionEnabled {
 			trans = transport.NewCompressedTransport(mailruTransport)
 		} else {

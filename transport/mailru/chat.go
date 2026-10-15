@@ -10,14 +10,24 @@ import (
 const chatDataTag = "OFX1"
 const chatReadyFallback = 3 * time.Second
 
-func encodeChatData(packet []byte) []byte {
+func encodeChatData(packet []byte, sender ...string) []byte {
 	// Base64 and the tag need no JSON escaping.
-	return []byte(`42["message",{"type":"message","message":"` + chatDataTag + base64.StdEncoding.EncodeToString(packet) + `"}]`)
+	tag := chatDataTag
+	if len(sender) > 0 && sender[0] != "" {
+		tag = "OFX2" + sender[0] + ":"
+	}
+	return []byte(`42["message",{"type":"message","message":"` + tag + base64.StdEncoding.EncodeToString(packet) + `"}]`)
 }
 
 // Decode only live chat broadcasts, never auth history, cursors or human chat.
 // Mail.ru echoes writes to their sender; discard those before delivery to TCP.
 func decodeChatData(frame []byte, ownIDs ...string) [][]byte {
+	return decodeSessionChatData(frame, "", ownIDs...)
+}
+
+// Authenticated sessions can share an account ID. A per-process marker filters
+// echoes without discarding the other endpoint's traffic from the same account.
+func decodeSessionChatData(frame []byte, sender string, ownIDs ...string) [][]byte {
 	if len(frame) < 2 || string(frame[:2]) != "42" {
 		return nil
 	}
@@ -38,6 +48,17 @@ func decodeChatData(frame []byte, ownIDs ...string) [][]byte {
 	}
 	var packets [][]byte
 	for _, msg := range event.Messages {
+		if strings.HasPrefix(msg.Message, "OFX2") {
+			id, payload, ok := strings.Cut(msg.Message[4:], ":")
+			if !ok || len(id) != 26 || id == sender || strings.Trim(id, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") != "" {
+				continue
+			}
+			packet, err := base64.StdEncoding.DecodeString(payload)
+			if err == nil && len(packet) > 0 {
+				packets = append(packets, packet)
+			}
+			continue
+		}
 		own := false
 		for _, id := range ownIDs {
 			if id != "" && msg.UserIDOriginal == id {
