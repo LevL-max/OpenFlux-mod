@@ -404,11 +404,16 @@ updater's checkpoints are removed by that update.
 ## Mail.ru (opt-in)
 
 Mail.ru is the third protocol. It runs the same Legacy binary with `--transport mailru`
-and carries packets through one public Mail.ru Cloud document opened as an anonymous
-visitor: no cookies, no login and no Disk recovery. Create a document in Mail.ru Cloud,
+and carries packets through one public Mail.ru Cloud document. Anonymous editing is
+supported, but a public link may still require login. Create a document in Mail.ru Cloud,
 share it by link with editing allowed, and use its public link
 `https://cloud.mail.ru/public/XXXX/YYYYYYYY` on the server and on the clients. As with
-Legacy, anyone who has the link can open the document.
+Legacy, the link identifies the shared document. If Mail.ru asks for login, import
+separate browser sessions for the client and server inside **Mail.ru document →
+Mail.ru browser cookies**. Server imports use encrypted Yandex Disk recovery.
+See [Mail.ru browser authentication](../docs/MAILRU-BROWSER-AUTH.md) for the cURL
+formats, separate save/send actions and native CLI commands. Authenticated traffic
+requires both endpoints to support OFX2 process markers.
 
 The carrier now sends tagged binary payloads through the **document chat**, because
 the editor rejects synthetic cursor/saveChanges writes. Use a dedicated document:
@@ -439,8 +444,9 @@ sudo openfluxctl status --transport mailru
 The exit runs as `openflux-mailru-exit.service`, a `docker run --rm` container
 `openflux-mailru` with only NET_RAW and NET_ADMIN, its own network namespace (the TCP RST
 rule stays inside it), 512 MiB of memory, a bounded container log and the host's Legacy
-binary mounted read-only. Setup restores the previous state unless the exit connects to
-the document within 90 s. `--image` and `--network` choose another image or bridge
+binary mounted read-only. First setup may stay configured while waiting for cookies;
+other failures restore the previous state. Native update health checks still require
+a connection within 90 s. `--image` and `--network` choose another image or bridge
 network; host networking is refused.
 
 Mini-PC: the **Mail.ru document** section of the OpenFlux card takes the link, or a

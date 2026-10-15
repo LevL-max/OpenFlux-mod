@@ -173,13 +173,22 @@ jobs:
 
           Downstream release built and tested from GitHub main.
 
-          ## Mail.ru chat transport
+          ## Mail.ru browser sessions and Volga recovery
+
+          - Mail.ru documents requiring login accept Copy as cURL from the public page or editor POST. Public-page imports obtain CSRF tokens with the same cookie jar. A changed import reconnects automatically; rejected logins wait for fresh cookies.
+          - Router Panel v10 keeps browser cookies inside Mail.ru document, with separate local save, encrypted Yandex Disk server upload, and encrypted download actions. Use a separate browser session for each endpoint. The server publishes its signed authentication state.
+          - Authenticated Mail.ru uses OFX2 process markers so two sessions of the same account can exchange traffic. Update both ends for authenticated traffic; anonymous OFX1 remains supported.
+          - First-time Mail.ru server setup can wait for its cookie import. Native release health checks and rollback remain strict.
+          - Volga limits handshake confirmation retries and restores its configured relay pacing after a full minute without queued relay work, once any provider Retry-After has expired. This prevents old rate penalties from indefinitely slowing a returning client. New counters report pacing, cooldown and replay queue state without credentials.
+          - This release candidate is for native update and end-to-end validation before stable promotion. The release build runs the full Linux tests, race checks and integration suite. Publishing does not deploy it.
+
+          ## Mail.ru chat compatibility
 
           - Mail.ru now carries OFX1-tagged Base64 data in document chat messages, replacing cursor writes rejected by current editors. Human chat, self echoes and authentication history are ignored.
           - Mail.ru uses OFB1/LZ4 batching with defaults of 512 packets, a 500,000-byte batch target and a 5 ms flush delay. Explicit packet/delay settings remain supported; Legacy and Volga profiles are unchanged.
           - Both Mail.ru endpoints must be updated together: this chat carrier cannot communicate with v4.2.3-or-earlier cursor peers. Keep a working fallback transport during the transition; rolling back to the rejected cursor carrier may not restore Mail.ru connectivity.
           - The release includes the matching Mail.ru integration profile and binary capability check. Use a dedicated document because transport messages appear in its chat. This fork retains OFB1/LZ4 and is not wire-compatible with upstream Session/zstd.
-          - Real-service tests passed with 524,288 bytes in each direction over TCP, including a forced WebSocket reconnect on the same TCP connection. These are functional checks, not a long-term availability guarantee.
+          - Authenticated Mail.ru passed four real-service HTTPS exit checks and a complete 1 MiB download. Local relay tests cover same-account TCP and forced reconnect. These are functional checks, not a long-term availability guarantee.
           - Publishing this release does not deploy it. A native server update changes the shared Legacy/Mail.ru binary and restarts affected services; schedule a maintenance window and update clients deliberately.
 
           ## Included capabilities
@@ -219,7 +228,7 @@ jobs:
           - Built with Go 1.26.8, which carries the security fixes of Go 1.26.5 to 1.26.8 for TLS, HTTP, URL parsing and networking.
           - Router Panel keeps this mini-PC's last check of its own cookies after the client stops. When Yandex refused them (captcha or login), the protocol's cookie section, its badge and the OPENFLUX card say so until fresh cookies are saved or a later check passes; Legacy's old "last issue" line no longer outlives later successes.
           - Legacy carries traffic again on Yandex's current document editor: each packet declares its real length, which Yandex now checks, instead of a fixed value it stopped relaying. Exit and clients both need this release.
-          - Mail.ru is a third protocol beside Legacy and Volga. The same binary with --transport mailru carries packets through one public Mail.ru Cloud document opened as an anonymous visitor, so no cookies are needed. A server runs its exit as openflux-mailru-exit.service (openfluxctl setup-mailru); a mini-PC selects Mail.ru in Router Panel, whose Mail.ru section takes the document link and downloads or uploads its config file.
+          - Mail.ru is a third protocol beside Legacy and Volga. The same binary with --transport mailru carries packets through one public Mail.ru Cloud document. Documents that allow anonymous editing need no cookies; others use separate browser imports. A server runs its exit as openflux-mailru-exit.service (openfluxctl setup-mailru); a mini-PC selects Mail.ru in Router Panel, whose Mail.ru document section contains its link and cookie actions.
           - When Mail.ru answers but refuses the document, retries slow down after three quick tries, from 30 s up to 10 min; network failures keep quick retries.
           - Updates and rollbacks include Mail.ru: its unit follows the release, a running Mail.ru client or exit is tested, and a failed check restores everything. Like Volga, one mini-PC uses a Mail.ru document at a time.
           - The server's Mail.ru exit publishes its signed status through Yandex Disk like Legacy and Volga, and Router Panel shows it in the Mail.ru section ("Mail.ru server: connected / reconnecting with the reason / stopped"); the section badge warns while the exit is not connected.
