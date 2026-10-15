@@ -410,6 +410,24 @@ share it by link with editing allowed, and use its public link
 `https://cloud.mail.ru/public/XXXX/YYYYYYYY` on the server and on the clients. As with
 Legacy, anyone who has the link can open the document.
 
+The carrier now sends tagged binary payloads through the **document chat**, because
+the editor rejects synthetic cursor/saveChanges writes. Use a dedicated document:
+its chat contains tunnel messages. Both the server and client must run the chat
+carrier; v4.2.3 and earlier cursor peers cannot exchange data with it. Stage both
+ends before switching Mail.ru, and roll back both ends together if needed.
+The `--mailru-editor-activity=true` option is rejected before connecting.
+
+Mail.ru defaults to up to 512 packets per batch, a 500,000-byte payload target
+and a 5 ms flush delay. The target is not a WebSocket size cap: OFB1 framing and
+Base64 add overhead, and the existing batcher can exceed it by the last packet.
+`--batch-packets`, `--batch-delay-us` and `--mailru-batch-bytes` override these
+values; client and server must both enable batching (or both disable it with
+`--batch-packets=1`) and use matching compression settings. The OFB1/LZ4 format
+is retained; this does not make the fork wire-compatible with upstream clients.
+Server-imposed chat disconnects still occur; the carrier reconnects automatically
+and keeps a bounded 8 MiB queue for at most 15 seconds. This is not a delivery
+guarantee: TCP remains responsible for retransmitting lost packets.
+
 Server, beside the Legacy exit (the image and Docker network default to those of the
 Legacy exit container):
 

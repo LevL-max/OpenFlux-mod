@@ -32,9 +32,9 @@ func parseEditorEvent(data []byte) (editorEvent, bool) {
 	return event, true
 }
 
-// Quoted names cannot occur inside a Base64 cursor payload, so a data message
+// Quoted names cannot occur inside a Base64 chat payload, so a data message
 // never matches. Parsing every data message as JSON cost about as much as the
-// cursor decode itself and lowered downloads on the mini-PC by about a quarter.
+// chat decode itself and lowered downloads on the mini-PC by about a quarter.
 var editorControlTypes = [][]byte{[]byte(`"authChanges"`), []byte(`"connectState"`)}
 
 func isEditorControl(data []byte) bool {
@@ -66,7 +66,11 @@ func handleMailruControl(session *DocSession, data []byte) (bool, error) {
 	if response == "" {
 		return false, nil
 	}
-	return true, session.safeWrite(websocket.TextMessage, []byte(response))
+	err := session.safeWrite(websocket.TextMessage, []byte(response))
+	if err == nil && response == `42["message",{"type":"authChangesAck"}]` {
+		session.chatReady.Store(true)
+	}
+	return true, err
 }
 
 // Socket.IO connect acknowledges the namespace, not access to the document.
@@ -154,7 +158,7 @@ func (t *MailruDocsTransport) perfStatsLoop() {
 }
 
 // A public URL can acquire a new editor key while an old WebSocket remains
-// healthy. Both sessions authorize, but their cursors belong to different rooms.
+// healthy. Both sessions authorize, but their messages belong to different rooms.
 // Refresh metadata without disturbing a connection whose key is unchanged.
 func (t *MailruDocsTransport) documentKeyLoop(interval time.Duration) {
 	ticker := time.NewTicker(interval)

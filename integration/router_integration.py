@@ -296,10 +296,10 @@ MAILRU_DATA = '/var/lib/openflux-mailru'
 MAILRU_UNIT = 'openflux-mailru-client.service'
 MAILRU_EXIT_UNIT = 'openflux-mailru-exit.service'
 MAILRU_CONTAINER = 'openflux-mailru'
-# The Legacy profile it was measured with (2026-10-11, PC2 through the AWS exit):
-# fixed, like Volga's.
+# Chat carrier: coalesce more data into the server's limited message budget.
+# Both peers must run the chat-capable binary; old cursor peers are incompatible.
 MAILRU_PROFILE = ('--compression=true','--yandex-queue-size=1024','--tcp-buffer-default=1048576',
-                  '--tcp-buffer-max=4194304','--batch-packets=4','--batch-delay-us=1000')
+                  '--tcp-buffer-max=4194304','--batch-packets=512','--batch-delay-us=5000','--mailru-batch-bytes=500000')
 # The exit forwards with raw sockets; its own kernel must not reset those flows.
 # The rule lives in the container's network namespace only.
 MAILRU_EXIT_SCRIPT = ('#!/bin/sh\nset -eu\niptables -C OUTPUT -p tcp --tcp-flags RST RST -j DROP 2>/dev/null || '
@@ -1184,7 +1184,7 @@ class MailruRuntime:
         document=mailru_document(document);node=self.node();server=node['role']=='server'
         if server:exit_settings=mailru_exit_settings(exit_settings or node.get('mailru_exit') or self.legacy_exit_settings())
         usage=self.run([self.binary(),'--help'],check=False)
-        if 'mailru-editor-activity' not in usage.stdout+usage.stderr:raise ValueError('The installed OpenFlux binary has no Mail.ru transport; update OpenFlux first')
+        if 'mailru-batch-bytes' not in usage.stdout+usage.stderr:raise ValueError('The installed OpenFlux binary has no Mail.ru chat transport; update OpenFlux first')
         unit=self.units/self.unit()
         paths=[self.env_path,unit,self.node_path]+([self.data/'run.sh'] if server else [])
         before={p:(p.read_bytes(),p.stat().st_mode&0o777) if p.exists() else None for p in paths}

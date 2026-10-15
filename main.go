@@ -35,7 +35,8 @@ func main() {
 	statusEvents := flag.Bool("status-events", true, "Emit safe authentication and connection status events")
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, mailru, oneme)")
-	mailruEditorActivity := flag.Bool("mailru-editor-activity", false, "Mail.ru: send fake saveChanges edits like a live editor (changes the document)")
+	mailruEditorActivity := flag.Bool("mailru-editor-activity", false, "Deprecated: true is rejected by the Mail.ru chat carrier")
+	mailruBatchBytes := flag.Int("mailru-batch-bytes", 500000, "Mail.ru chat batch payload target in bytes (4096..500000)")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
 	yandexSafeMode := flag.Bool("yandex-safe-mode", false, "Fragment Legacy cursor payloads below 2600 bytes and pace all writes at 10/s (enable on both peers)")
 	yandexLanes := flag.Int("yandex-lanes", 1, "Legacy participants: 1..32 (multiple participants require safe mode on both peers)")
@@ -51,6 +52,16 @@ func main() {
 	flag.StringVar(&maxToken, "maxToken", "", "MAX call user id. If u use MAX transport")
 	flag.StringVar(&maxUid, "maxUid", "", "MAX Web token. If u use MAX transport")
 	flag.Parse()
+	explicit := map[string]bool{}
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	if *transportType == "mailru" {
+		if !explicit["batch-packets"] {
+			*batchPackets = 512
+		}
+		if !explicit["batch-delay-us"] {
+			*batchDelayUs = 5000
+		}
+	}
 	utils.EnableStatusEvents(*statusEvents)
 
 	if !*exitNode && !*client {
@@ -80,8 +91,15 @@ func main() {
 	if *tcpBufferMax < *tcpBufferDefault {
 		log.Fatalf("Invalid TCP buffers: max %d < default %d", *tcpBufferMax, *tcpBufferDefault)
 	}
-	if *batchPackets < 1 || *batchPackets > 64 {
+	maxBatchPackets := 64
+	if *transportType == "mailru" {
+		maxBatchPackets = 512
+	}
+	if *batchPackets < 1 || *batchPackets > maxBatchPackets {
 		log.Fatalf("Invalid --batch-packets: %d", *batchPackets)
+	}
+	if *transportType == "mailru" && (*mailruBatchBytes < 4096 || *mailruBatchBytes > 500000) {
+		log.Fatal("--mailru-batch-bytes must be 4096..500000")
 	}
 	if *batchDelayUs < 50 || *batchDelayUs > 100000 {
 		log.Fatalf("Invalid --batch-delay-us: %d", *batchDelayUs)
@@ -153,13 +171,17 @@ func main() {
 	}
 
 	if (*transportType == "yandex" || *transportType == "mailru") && *batchPackets > 1 {
+		maxBytes := 32768
+		if *transportType == "mailru" {
+			maxBytes = *mailruBatchBytes
+		}
 		trans = transport.NewBatchingTransport(
 			trans,
 			*batchPackets,
-			32768,
+			maxBytes,
 			time.Duration(*batchDelayUs)*time.Microsecond,
 		)
-		log.Printf("Batching: packets=%d max_bytes=32768 delay=%dus", *batchPackets, *batchDelayUs)
+		log.Printf("Batching: packets=%d max_bytes=%d delay=%dus", *batchPackets, maxBytes, *batchDelayUs)
 	} else {
 		log.Printf("Batching: disabled")
 	}

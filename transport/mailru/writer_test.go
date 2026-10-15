@@ -14,9 +14,8 @@ import (
 	"universal-bypass-tool/transport"
 )
 
-// A cursor declares the packet's real length before Base64, as the web editor
-// does: Yandex already drops a mismatch, and Mail.ru runs the same backend.
-func TestWriterCursorPrefixIsThePacketLength(t *testing.T) {
+// Every write is a tagged chat message, including large coalesced frames.
+func TestWriterUsesChat(t *testing.T) {
 	received := make(chan string, 16)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}).Upgrade(w, r, nil)
@@ -43,12 +42,12 @@ func TestWriterCursorPrefixIsThePacketLength(t *testing.T) {
 	if err := tr.BaseTransport.Start(); err != nil {
 		t.Fatal(err)
 	}
-	defer tr.BaseTransport.Stop()
+	defer tr.Stop()
 	tr.session = &DocSession{Conn: conn, WriteQueue: make(chan queuedPacket, 16)}
 	tr.SetConnected(true)
 	go tr.writerLoop()
 
-	for _, size := range []int{1, 18, 1200, 3000} {
+	for _, size := range []int{1, 18, 1200, 3000, 500000} {
 		packet := make([]byte, size)
 		for i := range packet {
 			packet[i] = byte(i)
@@ -56,7 +55,7 @@ func TestWriterCursorPrefixIsThePacketLength(t *testing.T) {
 		if err := tr.Send(packet); err != nil {
 			t.Fatal(err)
 		}
-		want := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"%d;%s"}]`, size, base64.StdEncoding.EncodeToString(packet))
+		want := fmt.Sprintf(`42["message",{"type":"message","message":"OFX1%s"}]`, base64.StdEncoding.EncodeToString(packet))
 		select {
 		case got := <-received:
 			if got != want {

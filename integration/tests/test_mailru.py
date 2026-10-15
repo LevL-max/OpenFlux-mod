@@ -16,7 +16,7 @@ def result(rc=0,out='',err=''):return types.SimpleNamespace(returncode=rc,stdout
 class FakeHost:
     """systemd, journald and docker as the Mail.ru runtime sees them."""
     def __init__(self):
-        self.active=set();self.calls=[];self.journal=[];self.invocation='a'*32;self.help='  -mailru-editor-activity'
+        self.active=set();self.calls=[];self.journal=[];self.invocation='a'*32;self.help='  -mailru-batch-bytes'
         self.legacy_exit={'Config':{'Image':'openflux-runtime:24.04'},'NetworkSettings':{'Networks':{'openflux-net':{}}}}
     def run(self,argv,check=True,timeout=30):
         self.calls.append(argv)
@@ -69,7 +69,7 @@ class ClientTests(Base):
         self.assertIn('Conflicts='+LEGACY+' '+VOLGA_UNIT+'\n',text);self.assertIn('PartOf=sing-box-openflux.service',text)
         self.assertIn('User=openflux\n',text);self.assertIn('EnvironmentFile=/etc/openflux-mailru/mailru.env\n',text)
         self.assertIn('ExecStart=/opt/openflux-client/bin/openflux --client --transport mailru --url ${MAILRU_DOCUMENT} --socks5 127.0.0.1:11080 --compression=true --yandex-queue-size=1024 '
-                      '--tcp-buffer-default=1048576 --tcp-buffer-max=4194304 --batch-packets=4 --batch-delay-us=1000\n',text)
+                      '--tcp-buffer-default=1048576 --tcp-buffer-max=4194304 --batch-packets=512 --batch-delay-us=5000 --mailru-batch-bytes=500000\n',text)
         for field in ('NoNewPrivileges=yes','ProtectSystem=strict','CapabilityBoundingSet=\n','PrivateDevices=yes'):self.assertIn(field,text)
         self.assertNotIn('--debug',text);self.assertNotIn('--mailru-editor-activity',text)
         with patch.object(self.runtime,'node',return_value=dict(self.node,binary='relative/openflux')),self.assertRaises(ValueError):self.runtime.unit_text()
@@ -84,7 +84,12 @@ class ClientTests(Base):
 
     def test_setup_refuses_a_binary_without_mailru_and_leaves_nothing(self):
         self.host.help='  -yandex-cookie-store'
-        with self.assertRaisesRegex(ValueError,'no Mail.ru transport'):self.runtime.configure(DOC)
+        with self.assertRaisesRegex(ValueError,'no Mail.ru chat transport'):self.runtime.configure(DOC)
+        self.assertFalse(self.runtime.env_path.exists());self.assertFalse(self.unit().exists())
+
+    def test_setup_refuses_old_cursor_binary(self):
+        self.host.help='  -mailru-editor-activity'
+        with self.assertRaisesRegex(ValueError,'no Mail.ru chat transport'):self.runtime.configure(DOC)
         self.assertFalse(self.runtime.env_path.exists());self.assertFalse(self.unit().exists())
 
     def test_failed_router_helpers_restore_the_previous_link(self):
