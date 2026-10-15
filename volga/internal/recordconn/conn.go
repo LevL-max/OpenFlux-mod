@@ -334,6 +334,7 @@ func (c *Conn) controls() {
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	var helloAt, ackAt time.Time
+	var ackPeer Epoch
 	var creditAt time.Time
 	var reason error
 	var sentCredit uint64
@@ -356,12 +357,20 @@ func (c *Conn) controls() {
 			}
 			helloAt = now
 		}
-		if peer != (Epoch{}) && (!ready || now.Sub(ackAt) >= time.Second) {
+		// A delayed/lost K must not turn the 20 ms control tick into a 50/s
+		// handshake flood. Repeat at the hello cadence until confirmed, then
+		// once a second. A different peer still gets an immediate answer.
+		ackEvery := time.Second
+		if !ready {
+			ackEvery = 300 * time.Millisecond
+		}
+		if peer != (Epoch{}) && (peer != ackPeer || now.Sub(ackAt) >= ackEvery) {
 			if err = c.sendRecord(c.ctx, 'K', peer, 0, nil); err != nil {
 				reason = err
 				break
 			}
 			ackAt = now
+			ackPeer = peer
 		}
 		if ready && read != sentCredit && now.Sub(creditAt) >= 20*time.Millisecond {
 			if err = c.sendRecord(c.ctx, 'A', peer, read, nil); err != nil {

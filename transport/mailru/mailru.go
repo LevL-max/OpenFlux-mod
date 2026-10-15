@@ -6,6 +6,7 @@ package mailru
 import (
 	"bytes"
 	"context"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -32,15 +33,17 @@ import (
 const mailruUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
 
 type MailruDocsInfo struct {
-	Token        string
-	DocKey       string
-	WsURL        string
-	FileType     string
-	DocURL       string
-	DocTitle     string
-	Permissions  map[string]interface{}
-	CallbackURL  string
-	EditorUserID string
+	Token         string
+	DocKey        string
+	WsURL         string
+	FileType      string
+	DocURL        string
+	DocTitle      string
+	Permissions   map[string]interface{}
+	CallbackURL   string
+	EditorUserID  string
+	Authenticated bool
+	profileSum    [32]byte
 }
 
 type DocSession struct {
@@ -157,7 +160,16 @@ type MailruDocsTransport struct {
 	userCounter atomic.Int32
 	baseUserID  string
 
-	cookieJar *cookiejar.Jar
+	cookieJar     *cookiejar.Jar
+	authMu        sync.Mutex
+	profilePath   string
+	profile       *browserProfile
+	profileSum    [32]byte
+	profileLoaded bool
+	browserToken  string
+	authBlocked   bool
+	authChanged   chan struct{}
+	senderID      string
 
 	// editorActivity sends fake saveChanges edits as a live editor would.
 	editorActivity bool
@@ -191,6 +203,8 @@ func NewMailruDocsTransport(weblink string, config transport.TransportConfig) *M
 		weblink:       normalizeWeblink(weblink),
 		baseUserID:    randUserID(),
 		cookieJar:     jar,
+		authChanged:   make(chan struct{}, 1),
+		senderID:      cryptorand.Text(),
 		statusLast:    map[string]time.Time{},
 		done:          make(chan struct{}),
 		ctx:           ctx,
@@ -243,6 +257,7 @@ func (t *MailruDocsTransport) Start() error {
 	}
 	t.baseUserID = randUserID()
 	utils.SafeGo("mailru.stats", t.perfStatsLoop)
+	utils.SafeGo("mailru.browser", t.browserProfileLoop)
 	utils.SafeGo("mailru.documentKey", func() { t.documentKeyLoop(30 * time.Second) })
 	t.connectToDoc(0)
 	return nil
@@ -423,9 +438,19 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			t.scheduleReconnect(attempt)
 			return
 		}
+		// An import may finish while this socket is authenticating. Never
+		// publish an old credential generation after the watcher has moved on.
+		t.authMu.Lock()
+		if info.profileSum != t.profileSum {
+			t.authMu.Unlock()
+			_ = conn.Close()
+			t.scheduleReconnect(-1)
+			return
+		}
 		t.Mu.Lock()
 		if !t.IsRunning() {
 			t.Mu.Unlock()
+			t.authMu.Unlock()
 			_ = conn.Close()
 			return
 		}
@@ -434,6 +459,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 		t.opening = nil
 		t.SetConnected(true)
 		t.Mu.Unlock()
+		t.authMu.Unlock()
 		t.refusals.Store(0)
 		if existingSession == nil {
 			utils.SafeGo("mailru.writer", t.writerLoop)
@@ -511,7 +537,11 @@ func (t *MailruDocsTransport) writerLoop() {
 			time.Sleep(15 * time.Millisecond)
 			continue
 		}
-		msg := encodeChatData(pending.data)
+		sender := ""
+		if session.Info.Authenticated {
+			sender = t.senderID
+		}
+		msg := encodeChatData(pending.data, sender)
 		if err := session.safeWrite(websocket.TextMessage, msg); err != nil {
 			t.writeErrors.Add(1)
 			utils.Debugf("[M-DOCS] Write error: %v", err)
@@ -543,7 +573,7 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	if !bytes.Contains(data, []byte(`"messages"`)) || session == nil {
 		return
 	}
-	for _, packet := range decodeChatData(data, session.Info.EditorUserID, session.UserID) {
+	for _, packet := range decodeSessionChatData(data, t.senderID, session.Info.EditorUserID, session.UserID) {
 		t.RecordReceive(len(packet))
 		t.CallReceive(packet)
 	}
@@ -557,6 +587,22 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 	if !t.reconnecting.CompareAndSwap(false, true) {
 		return // one is already waiting
 	}
+	if t.browserAuthBlocked() {
+		select {
+		case <-t.authChanged:
+		case <-t.done:
+			t.reconnecting.Store(false)
+			return
+		}
+		if !t.IsRunning() {
+			t.reconnecting.Store(false)
+			return
+		}
+		t.reconnecting.Store(false)
+		t.RecordReconnect()
+		t.connectToDoc(0)
+		return
+	}
 	d := reconnectBackoff(next)
 	if r := refusalBackoff(int(t.refusals.Load())); r > d {
 		d = r
@@ -564,7 +610,10 @@ func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
 	utils.Debugf("[M-DOCS] reconnecting in %v (attempt %d)", d, next)
 	select {
 	case <-time.After(d):
+	case <-t.authChanged:
+		next = 0
 	case <-t.done:
+		t.reconnecting.Store(false)
 		return
 	}
 	t.reconnecting.Store(false) // a failed connect schedules the next one itself
@@ -632,38 +681,47 @@ func isNetworkFailure(err error) bool {
 // editAPI is Mail.ru's public-document editor API (a variable for tests).
 var editAPI = "https://cloud.mail.ru/api/v4/r7/edit"
 
-// fetchDocInfo POSTs to Mail.ru's public-document editor API as an anonymous
-// visitor and returns what is needed to open the collaborative WebSocket.
+// fetchDocInfo opens the public-document editor with the imported browser
+// request, or anonymously when no profile exists, and prepares the WebSocket.
 func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, error) {
-	client := &http.Client{Jar: t.cookieJar, Timeout: 15 * time.Second}
-	jsonData, _ := json.Marshal(map[string]string{
-		"x-email":  "anonym",
-		"public":   "/" + weblink,
-		"platform": "desktop_web",
-	})
-	req, err := http.NewRequestWithContext(t.ctx, "POST", editAPI, bytes.NewBuffer(jsonData))
+	return t.fetchDocInfoAttempt(weblink, true)
+}
+
+func (t *MailruDocsTransport) fetchDocInfoAttempt(weblink string, renewToken bool) (MailruDocsInfo, error) {
+	req, client, sum, authenticated, err := t.editorRequest()
 	if err != nil {
 		return MailruDocsInfo{}, err
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("User-Agent", mailruUserAgent)
-	req.Header.Set("X-Api-Version", "4")
-	req.Header.Set("Referer", fmt.Sprintf("https://cloud.mail.ru/public/%s?weblink=%s", weblink, weblink))
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return MailruDocsInfo{}, err
+		return MailruDocsInfo{}, safeRequestError{err}
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// A page import obtains its CSRF token with the same cookie jar. If the
+		// token expires, renew it once before requiring a new browser login.
+		var denial struct {
+			Error string `json:"error"`
+		}
+		_ = json.NewDecoder(io.LimitReader(resp.Body, 4096)).Decode(&denial)
+		if renewToken && denial.Error == "token" && t.clearBrowserToken(sum) {
+			_ = resp.Body.Close()
+			return t.fetchDocInfoAttempt(weblink, false)
+		}
+		t.blockBrowserAuth(sum)
+		return MailruDocsInfo{}, errBrowserAuth
+	}
 	if resp.StatusCode != http.StatusOK {
 		return MailruDocsInfo{}, fmt.Errorf("API returned status %d", resp.StatusCode)
 	}
-	bodyBytes, _ := io.ReadAll(resp.Body)
+	bodyBytes, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return MailruDocsInfo{}, errors.New("cannot read editor response")
+	}
 	var res map[string]interface{}
 	if err := json.Unmarshal(bodyBytes, &res); err != nil {
-		return MailruDocsInfo{}, fmt.Errorf("failed to parse JSON: %w", err)
+		return MailruDocsInfo{}, errors.New("invalid editor response JSON")
 	}
 
 	apiBase, _ := res["api"].(string)
@@ -692,15 +750,17 @@ func (t *MailruDocsTransport) fetchDocInfo(weblink string) (MailruDocsInfo, erro
 
 	wsBase := strings.Replace(apiBase, "https://", "wss://", 1)
 	return MailruDocsInfo{
-		Token:        token,
-		DocKey:       docKey,
-		WsURL:        fmt.Sprintf("%s/doc/%s/c/?EIO=4&transport=websocket", wsBase, docKey),
-		FileType:     fileType,
-		DocURL:       docURL,
-		DocTitle:     docTitle,
-		Permissions:  permissions,
-		CallbackURL:  callbackURL,
-		EditorUserID: editorUserID,
+		Token:         token,
+		DocKey:        docKey,
+		WsURL:         fmt.Sprintf("%s/doc/%s/c/?EIO=4&transport=websocket", wsBase, docKey),
+		FileType:      fileType,
+		DocURL:        docURL,
+		DocTitle:      docTitle,
+		Permissions:   permissions,
+		CallbackURL:   callbackURL,
+		EditorUserID:  editorUserID,
+		Authenticated: authenticated,
+		profileSum:    sum,
 	}, nil
 }
 

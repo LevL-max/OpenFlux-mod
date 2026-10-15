@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -16,6 +17,14 @@ import (
 // End-to-end regression without an external service: real WebSockets, editor
 // auth, echoing relay, OFB1/LZ4 and gVisor TCP, including socket replacement.
 func TestChatTCPThroughRelayAndReconnect(t *testing.T) {
+	testChatTCPRelay(t, false)
+}
+
+func TestAuthenticatedChatTCPWithSameAccountAndReconnect(t *testing.T) {
+	testChatTCPRelay(t, true)
+}
+
+func testChatTCPRelay(t *testing.T, authenticated bool) {
 	type client struct {
 		conn *websocket.Conn
 		mu   sync.Mutex
@@ -32,9 +41,21 @@ func TestChatTCPThroughRelayAndReconnect(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 	mux.HandleFunc("/edit", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]any{"api": "ws" + strings.TrimPrefix(srv.URL, "http"), "token": "test", "document": map[string]string{"key": "test", "fileType": "docx"}, "editorConfig": map[string]any{"user": map[string]string{"id": fmt.Sprintf("user%d", sequence.Add(1))}}})
+		id := fmt.Sprintf("user%d", sequence.Add(1))
+		if authenticated {
+			cookie, err := r.Cookie("Mpop")
+			if err != nil || cookie.Value == "" {
+				w.WriteHeader(401)
+				return
+			}
+			id = "same-account"
+		}
+		json.NewEncoder(w).Encode(map[string]any{"api": "ws" + strings.TrimPrefix(srv.URL, "http"), "token": "test", "document": map[string]string{"key": "test", "fileType": "docx"}, "editorConfig": map[string]any{"user": map[string]string{"id": id}}})
 	})
 	mux.HandleFunc("/doc/test/c/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Cookie") != "" || r.Header.Get("X-Csrf-Token") != "" {
+			t.Error("browser credentials leaked to WebSocket host")
+		}
 		ws, err := (&websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}).Upgrade(w, r, nil)
 		if err != nil {
 			return
@@ -110,5 +131,15 @@ func TestChatTCPThroughRelayAndReconnect(t *testing.T) {
 	editAPI = srv.URL + "/edit"
 	defer func() { editAPI = old }()
 	// A subtest finishes its cleanup before the fake API is restored.
-	t.Run("TCP", func(t *testing.T) { runChatTCPProbe(t, "test/doc") })
+	t.Run("TCP", func(t *testing.T) {
+		var profiles []string
+		if authenticated {
+			for _, name := range []string{"client", "server"} {
+				path := filepath.Join(t.TempDir(), "browser.json")
+				saveBrowserFixture(t, path, name)
+				profiles = append(profiles, path)
+			}
+		}
+		runChatTCPProbe(t, "test/doc", profiles...)
+	})
 }

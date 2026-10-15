@@ -16,6 +16,7 @@ import (
 type volgaV6RelayGate struct {
 	mu      sync.Mutex
 	rate    float64
+	ceiling float64 // rate before congestion backoff
 	next    time.Time
 	retryAt time.Time
 	backoff time.Duration
@@ -55,6 +56,15 @@ func (g *volgaV6RelayGate) wait(ctx context.Context) error {
 func (g *volgaV6RelayGate) reserve(now time.Time) (time.Time, uint64) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
+	// A disconnected peer can provoke several 429 episodes while reliable
+	// delivery drains. Keeping every rate reduction forever eventually makes
+	// even handshake/keepalive traffic exceed the remaining budget. After a
+	// full minute without reserved relay work, start again at the configured
+	// rate. Pending reservations and the provider's Retry-After always win.
+	if g.ceiling > g.rate && now.Sub(g.next) >= time.Minute && !now.Before(g.retryAt) {
+		g.rate = g.ceiling
+		g.backoff = 0
+	}
 	at := now
 	if g.retryAt.After(at) {
 		at = g.retryAt
@@ -85,6 +95,12 @@ func (g *volgaV6RelayGate) limited(value string, now time.Time) {
 	previous := g.retryAt
 	// One reduction per episode, not per already in-flight request.
 	if !now.Before(g.retryAt) {
+		if g.ceiling == 0 {
+			g.ceiling = g.rate
+			if g.ceiling == 0 {
+				g.ceiling = 100
+			}
+		}
 		g.backoff = min(max(time.Second, 2*g.backoff), 30*time.Second)
 		if g.rate == 0 {
 			g.rate = 100

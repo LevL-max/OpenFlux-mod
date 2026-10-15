@@ -24,8 +24,8 @@ class StatusSigningTests(unittest.TestCase):
         for protocol in ('volga','yandex'):
             with self.assertRaises(ValueError):recovery_crypto.verify_status(signed,KEY.public_key(),protocol=protocol)
         with self.assertRaises(ValueError):recovery_crypto.sign_status({},KEY,protocol='other')
-        # Mail.ru has no cookie channel.
-        with self.assertRaises(ValueError):recovery_crypto.destination('mailru')
+        # Mail.ru recovery is isolated from the other protocols.
+        self.assertNotEqual(recovery_crypto.destination('mailru'),recovery_crypto.destination('volga'))
 
 class Exchange(Base):
     def setUp(self):
@@ -95,7 +95,7 @@ class ClientTests(Exchange):
 class PanelTests(unittest.TestCase):
     def test_v8_panel_shows_the_server_exit(self):
         fresh=ri.patch_panel(BASE_PANEL)
-        self.assertIn('data-volga-panel="9"',fresh);compile(fresh,'router-panel','exec')
+        self.assertIn('data-volga-panel="10"',fresh);compile(fresh,'router-panel','exec')
         for piece in ('id="mailruServerState"',"const ms=mp.server_authentication||{}","' · server: '"):self.assertEqual(fresh.count(piece),1,piece)
         v8=fresh.replace(ri.VOLGA_HTML,ri.VOLGA_HTML_V8).replace(ri.VOLGA_JS,ri.VOLGA_JS_V8).replace(ri.VOLGA_HOOK,ri.VOLGA_HOOK_V8)
         self.assertIn('data-volga-panel="8"',v8);self.assertNotIn('mailruServerState',v8)

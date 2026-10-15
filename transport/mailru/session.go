@@ -183,6 +183,10 @@ func (t *MailruDocsTransport) refreshDocumentKey() {
 	}
 	info, err := t.fetchDocInfo(t.weblink)
 	if err != nil {
+		if errors.Is(err, errBrowserAuth) {
+			t.dropConnection(session)
+			return
+		}
 		if t.IsRunning() {
 			t.statusThrottled("key-refresh", time.Minute, "[M-DOCS] cannot refresh document metadata; keeping current connection")
 		}

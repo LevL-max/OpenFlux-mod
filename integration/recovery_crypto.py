@@ -13,6 +13,7 @@ def canonical(value):return json.dumps(value,sort_keys=True,separators=(',',':')
 def destination(protocol):
     if protocol=='yandex':return SCHEMA,TARGET
     if protocol=='volga':return 'openflux-volga-cookie-recovery-v1','openflux-volga-server'
+    if protocol=='mailru':return 'openflux-mailru-cookie-recovery-v1','openflux-mailru-server'
     raise ValueError('Unsupported recovery protocol')
 
 def seal(curl,server_public,signer,now=None,protocol='yandex'):
@@ -45,7 +46,7 @@ def unseal(envelope,server_private,sender_public,seen,now=None,protocol='yandex'
     if not isinstance(curl,str) or not 1<=len(curl.encode())<=131072:raise ValueError('Invalid cookie payload')
     return curl,ident
 
-# Signed server status per protocol. Mail.ru has no cookie channel, only status.
+# Signed server status per protocol, separate from encrypted cookie envelopes.
 STATUS_SCHEMAS={'yandex':'openflux-server-status-v1','volga':'openflux-volga-server-status-v1','mailru':'openflux-mailru-server-status-v1'}
 def status_schema(protocol):
     if protocol not in STATUS_SCHEMAS:raise ValueError('Unsupported recovery protocol')
