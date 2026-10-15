@@ -1,19 +1,11 @@
-// Package mailru tunnels packets through Mail.ru's cloud document editor
-// (docs.datacloudmail.ru, R7-Office), the same coauthoring backend family as
-// Yandex Docs. Both peers open one public document anonymously and carry
-// packets in the "cursor" field of the collaborative editing protocol.
-//
-// Ported from upstream OpenFlux 0.5.1 (transport/mailru) with these changes:
-// the cursor declares the packet's real length (Yandex drops a mismatch since
-// 2026-10-09, see transport/yandex), the fake saveChanges edits are off unless
-// asked for, and there is no interface binding or cookie exchange: the
-// document is opened as an anonymous visitor.
+// Package mailru carries packets through the Mail.ru document chat channel.
+// Both peers must use the chat carrier; the old cursor carrier is incompatible.
+// Adapted from upstream 4ee9614, preserving downstream session recovery.
 package mailru
 
 import (
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -23,7 +15,6 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/url"
-	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -39,13 +30,6 @@ import (
 // some edge nodes; a current Firefox UA is accepted for both the API and the
 // WebSocket (upstream issue #164).
 const mailruUserAgent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:155.0) Gecko/20100101 Firefox/155.0"
-
-var cursorPayloadRe = regexp.MustCompile(`"cursor":"[^;]+;([^"]+)"`)
-
-// saveChangesMessageTemplate is a saveChanges message as Mail.ru's web editor
-// sends it, with the participant's UserId and UserShortId substituted. It makes
-// a real edit to the document, so it is sent only when editor activity is on.
-const saveChangesMessageTemplate = `42["message",{"type":"saveChanges","changes":"[\"76;AgAAADEA//8BAOwbfF7pEAAALQEAAAMAAAAAAAAAAAAAAAAAAAAAAAAA9v///xoAAAAyADAAMgA2AC4AMgAuADEALgAyADIANgA4AA==\",\"35;BgAAADYAMgA3AAEAHAABAAAAAAAAAAEAAABhAAAAAAMAAAA=\",\"35;BgAAADYAMgA3AAEAHAABAAAAAQAAAAEAAABzAAAAAAMAAAA=\",\"35;BgAAADYAMgA3AAEAHAABAAAAAgAAAAEAAABkAAAAAAMAAAA=\"]","startSaveChanges":true,"endSaveChanges":true,"isCoAuthoring":false,"isExcel":false,"deleteIndex":null,"excelAdditionalInfo":"{\"UserId\":\"%s\",\"UserShortId\":\"%s\",\"CursorInfo\":\"14;BgAAADYAMgA3AAMAAAA=\"}","unlock":false,"releaseLocks":false}]`
 
 type MailruDocsInfo struct {
 	Token        string
@@ -66,6 +50,8 @@ type DocSession struct {
 	UserID           string
 	writeMu          sync.Mutex
 	heartbeatTimeout time.Duration
+	chatReady        atomic.Bool
+	chatReadyAfter   time.Time
 }
 
 type queuedPacket struct {
@@ -74,7 +60,10 @@ type queuedPacket struct {
 }
 
 const maxQueuedBytes = 8 << 20
-const maxQueuedAge = 3 * time.Second
+
+// A reconnect includes API bootstrap, editor auth and a readiness grace period.
+// Keep the queue bounded, but do not expire it during that normal recovery.
+const maxQueuedAge = 15 * time.Second
 
 func (s *DocSession) safeWrite(messageType int, data []byte) error {
 	s.writeMu.Lock()
@@ -209,8 +198,8 @@ func NewMailruDocsTransport(weblink string, config transport.TransportConfig) *M
 	}
 }
 
-// SetEditorActivity turns the fake saveChanges edits on or off. Call it before
-// Start. They change the document, so they are off by default.
+// SetEditorActivity is retained for source compatibility. Start rejects true:
+// synthetic document edits are no longer supported by the chat carrier.
 func (t *MailruDocsTransport) SetEditorActivity(enabled bool) { t.editorActivity = enabled }
 
 func normalizeWeblink(weblink string) string {
@@ -241,6 +230,9 @@ func (t *MailruDocsTransport) statusThrottled(key string, every time.Duration, f
 }
 
 func (t *MailruDocsTransport) Start() error {
+	if t.editorActivity {
+		return fmt.Errorf("mailru-editor-activity is incompatible with the chat carrier; remove the flag")
+	}
 	select {
 	case <-t.done:
 		return fmt.Errorf("transport already stopped")
@@ -250,12 +242,8 @@ func (t *MailruDocsTransport) Start() error {
 		return err
 	}
 	t.baseUserID = randUserID()
-	utils.SafeGo("mailru.keepAlive", t.keepAliveLoop)
 	utils.SafeGo("mailru.stats", t.perfStatsLoop)
 	utils.SafeGo("mailru.documentKey", func() { t.documentKeyLoop(30 * time.Second) })
-	if t.editorActivity {
-		utils.SafeGo("mailru.editorActivity", t.editorActivityLoop)
-	}
 	t.connectToDoc(0)
 	return nil
 }
@@ -441,6 +429,7 @@ func (t *MailruDocsTransport) connectToDoc(attempt int) {
 			_ = conn.Close()
 			return
 		}
+		session.chatReadyAfter = time.Now().Add(chatReadyFallback)
 		t.session = session
 		t.opening = nil
 		t.SetConnected(true)
@@ -516,10 +505,14 @@ func (t *MailruDocsTransport) writerLoop() {
 			time.Sleep(15 * time.Millisecond)
 			continue
 		}
-		// The cursor declares the packet's real length before Base64, as the
-		// web editor does.
-		msg := fmt.Sprintf(`42["message",{"type":"cursor","cursor":"%d;%s"}]`, len(pending.data), base64.StdEncoding.EncodeToString(pending.data))
-		if err := session.safeWrite(websocket.TextMessage, []byte(msg)); err != nil {
+		// Acknowledge authChanges before the first chat write. Older editor
+		// versions may omit it; the grace period starts only after auth succeeds.
+		if !session.chatReady.Load() && time.Now().Before(session.chatReadyAfter) {
+			time.Sleep(15 * time.Millisecond)
+			continue
+		}
+		msg := encodeChatData(pending.data)
+		if err := session.safeWrite(websocket.TextMessage, msg); err != nil {
 			t.writeErrors.Add(1)
 			utils.Debugf("[M-DOCS] Write error: %v", err)
 			t.dropConnection(session)
@@ -530,77 +523,6 @@ func (t *MailruDocsTransport) writerLoop() {
 		t.queuedBytes.Add(-int64(len(pending.data)))
 		pending = nil
 	}
-}
-
-func (t *MailruDocsTransport) keepAliveLoop() {
-	ticker := time.NewTicker(t.GetConfig().KeepAliveInterval)
-	defer ticker.Stop()
-	keepAliveMsg := `42["message",{"type":"cursor","cursor":"18;---KA---"}]`
-	for t.IsRunning() {
-		select {
-		case <-ticker.C:
-		case <-t.done:
-			return
-		}
-		t.Mu.Lock()
-		session := t.session
-		t.Mu.Unlock()
-		if session != nil && session.Conn != nil {
-			if err := session.safeWrite(websocket.TextMessage, []byte(keepAliveMsg)); err != nil {
-				utils.Debugf("[M-DOCS] Keep-alive failed, closing the connection to reconnect: %v", err)
-				t.dropConnection(session)
-			}
-		}
-	}
-}
-
-// editorActivityLoop sends a saveChanges edit every 0.5-5 s, as a live editor
-// would. Off by default (SetEditorActivity): each one changes the document.
-func (t *MailruDocsTransport) editorActivityLoop() {
-	const (
-		minDelay = 500 * time.Millisecond
-		maxDelay = 5 * time.Second
-	)
-	for t.IsRunning() {
-		select {
-		case <-time.After(minDelay + time.Duration(rand.Int63n(int64(maxDelay-minDelay)+1))):
-		case <-t.done:
-			return
-		}
-		t.Mu.RLock()
-		session := t.session
-		t.Mu.RUnlock()
-		if session == nil || session.Conn == nil {
-			continue
-		}
-		// A read-only link may not save: the server closes the connection on
-		// the first saveChanges, over and over.
-		if !canEdit(session.Info.Permissions) {
-			continue
-		}
-		if err := session.safeWrite(websocket.TextMessage, buildSaveChanges(session)); err != nil {
-			utils.Debugf("[M-DOCS] saveChanges write error: %v", err)
-		}
-	}
-}
-
-// canEdit says whether the document may be edited through the joined link. A
-// document that does not say is treated as editable.
-func canEdit(permissions map[string]interface{}) bool {
-	edit, ok := permissions["edit"].(bool)
-	return !ok || edit
-}
-
-func buildSaveChanges(session *DocSession) []byte {
-	userID := session.Info.EditorUserID
-	if userID == "" {
-		userID = session.UserID
-	}
-	short := userID
-	if len(short) > 1 {
-		short = short[:len(short)-1]
-	}
-	return []byte(fmt.Sprintf(saveChangesMessageTemplate, userID, short))
 }
 
 func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
@@ -618,30 +540,13 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 		utils.Debugf("[M-DOCS] Auth OK for user %s", session.UserID)
 		return
 	}
-	if strings.Contains(text, "cursor") {
-		for _, base64Str := range cursorPayloads(text) {
-			decoded, err := base64.StdEncoding.DecodeString(base64Str)
-			if err != nil {
-				utils.Debugf("[M-DOCS] Base64 decode error: %v", err)
-				continue
-			}
-			t.RecordReceive(len(decoded))
-			t.CallReceive(decoded)
-		}
+	if !bytes.Contains(data, []byte(`"messages"`)) || session == nil {
+		return
 	}
-}
-
-// cursorPayloads returns the Base64 payload of every cursor entry in a server
-// message, in order, without the keep-alives. Under load the server batches
-// several entries into one message.
-func cursorPayloads(text string) []string {
-	var out []string
-	for _, m := range cursorPayloadRe.FindAllStringSubmatch(text, -1) {
-		if len(m) > 1 && m[1] != "---KA---" {
-			out = append(out, m[1])
-		}
+	for _, packet := range decodeChatData(data, session.Info.EditorUserID, session.UserID) {
+		t.RecordReceive(len(packet))
+		t.CallReceive(packet)
 	}
-	return out
 }
 
 func (t *MailruDocsTransport) scheduleReconnect(attempt int) {
