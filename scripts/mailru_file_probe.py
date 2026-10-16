@@ -43,7 +43,7 @@ class Probe:
         self.headers = {'User-Agent': p.get('headers', {}).get('user-agent', 'Mozilla/5.0'),
                         'Referer': 'https://cloud.mail.ru/home/'}
 
-    def request(self, url, data=None, method=None, headers=None):
+    def request(self, url, data=None, method=None, headers=None, redirects=0):
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme != 'https' or not (parsed.hostname == 'cloud.mail.ru' or
                                            parsed.hostname.endswith('.cloud.mail.ru')):
@@ -66,6 +66,16 @@ class Probe:
                                    body=data, headers=request_headers)
                 response = connection.getresponse()
                 self.jar.extract_cookies(response, req)
+                if response.status in (301, 302, 303, 307, 308) and req.get_method() == 'GET' and redirects < 3:
+                    target = urllib.parse.urljoin(url, response.getheader('Location', ''))
+                    response.close()
+                    connection.close()
+                    forwarded = dict(headers or {})
+                    if urllib.parse.urlsplit(target).netloc != parsed.netloc:
+                        forwarded.pop('X-Csrf-Token', None)
+                    # Revalidate HTTPS and cloud domain, and construct cookies
+                    # for the destination rather than forwarding a Cookie header.
+                    return self.request(target, headers=forwarded, redirects=redirects+1)
                 if response.status >= 300:
                     status = response.status
                     response.close()

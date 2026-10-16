@@ -110,6 +110,8 @@ def main():
             except Exception as error:
                 report['cleanup'][role] = {'error_type': type(error).__name__}
         args.output.parent.mkdir(parents=True, exist_ok=True)
+        if args.output.exists():
+            args.output.rename(args.output.with_name(args.output.stem + '-' + str(int(time.time())) + args.output.suffix))
         args.output.write_text(json.dumps(report, indent=2), encoding='utf-8')
         print(json.dumps({'stopped': report.get('stopped'), 'cleanup': report['cleanup']}), flush=True)
     return 1 if report.get('stopped') else 0
