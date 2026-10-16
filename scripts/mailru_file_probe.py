@@ -46,7 +46,8 @@ class Probe:
     def request(self, url, data=None, method=None, headers=None, redirects=0):
         parsed = urllib.parse.urlsplit(url)
         if parsed.scheme != 'https' or not (parsed.hostname == 'cloud.mail.ru' or
-                                           parsed.hostname.endswith('.cloud.mail.ru')):
+                                           parsed.hostname.endswith('.cloud.mail.ru') or
+                                           (data is None and parsed.hostname.endswith('.datacloudmail.ru'))):
             raise ValueError('non-cloud endpoint')
         req = urllib.request.Request(url, data=data, method=method,
                                      headers=dict(self.headers, **(headers or {})))
