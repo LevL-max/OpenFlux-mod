@@ -70,7 +70,7 @@ class ClientTests(Base):
         self.assertIn('Conflicts='+LEGACY+' '+VOLGA_UNIT+'\n',text);self.assertIn('PartOf=sing-box-openflux.service',text)
         self.assertIn('User=openflux\n',text);self.assertIn('EnvironmentFile=/etc/openflux-mailru/mailru.env\n',text)
         self.assertIn('ExecStart=/opt/openflux-client/bin/openflux --client --transport mailru --url ${MAILRU_DOCUMENT} --socks5 127.0.0.1:11080 --compression=true --yandex-queue-size=1024 '
-                      '--tcp-buffer-default=1048576 --tcp-buffer-max=4194304 --batch-packets=512 --batch-delay-us=5000 --mailru-batch-bytes=500000 --mailru-browser-profile /var/lib/openflux-mailru-auth/browser.json\n',text)
+                      '--tcp-buffer-default=4194304 --tcp-buffer-max=16777216 --batch-packets=512 --batch-delay-us=5000 --mailru-batch-bytes=500000 --mailru-hybrid=true --mailru-browser-profile /var/lib/openflux-mailru-auth/browser.json\n',text)
         for field in ('NoNewPrivileges=yes','ProtectSystem=strict','CapabilityBoundingSet=\n','PrivateDevices=yes'):self.assertIn(field,text)
         self.assertNotIn('--debug',text);self.assertNotIn('--mailru-editor-activity',text)
         with patch.object(self.runtime,'node',return_value=dict(self.node,binary='relative/openflux')),self.assertRaises(ValueError):self.runtime.unit_text()

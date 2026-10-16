@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
 	"time"
 
 	_ "github.com/wlynxg/anet"
@@ -38,6 +40,7 @@ func main() {
 	mailruEditorActivity := flag.Bool("mailru-editor-activity", false, "Deprecated: true is rejected by the Mail.ru chat carrier")
 	mailruBatchBytes := flag.Int("mailru-batch-bytes", 500000, "Mail.ru chat batch payload target in bytes (4096..500000)")
 	mailruBrowserProfile := flag.String("mailru-browser-profile", "", "Private Mail.ru browser request profile JSON; reloads imports without restart")
+	mailruHybrid := flag.Bool("mailru-hybrid", false, "Use document chat for control and four private Cloud file lanes for payloads; enable on both peers")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
 	yandexSafeMode := flag.Bool("yandex-safe-mode", false, "Fragment Legacy cursor payloads below 2600 bytes and pace all writes at 10/s (enable on both peers)")
 	yandexLanes := flag.Int("yandex-lanes", 1, "Legacy participants: 1..32 (multiple participants require safe mode on both peers)")
@@ -192,8 +195,23 @@ func main() {
 		log.Printf("Batching: disabled")
 	}
 
+	if *mailruHybrid {
+		if *transportType != "mailru" {
+			log.Fatal("--mailru-hybrid requires --transport=mailru")
+		}
+		hybrid, err := mailru.NewHybridTransport(trans, *mailruBrowserProfile, globalDocUrl)
+		if err != nil {
+			log.Fatal(err)
+		}
+		trans = hybrid
+	}
 	if err := trans.Start(); err != nil {
 		log.Fatalf("Failed to start transport: %v", err)
+	}
+	if *mailruHybrid {
+		stopping := make(chan os.Signal, 1)
+		signal.Notify(stopping, os.Interrupt, syscall.SIGTERM)
+		go func() { <-stopping; _ = trans.Stop(); os.Exit(0) }()
 	}
 
 	log.Printf("gVisor TCP buffers: default=%d max=%d", *tcpBufferDefault, *tcpBufferMax)

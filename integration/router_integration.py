@@ -305,8 +305,8 @@ MAILRU_EXIT_UNIT = 'openflux-mailru-exit.service'
 MAILRU_CONTAINER = 'openflux-mailru'
 # Chat carrier: coalesce more data into the server's limited message budget.
 # Both peers must run the chat-capable binary; old cursor peers are incompatible.
-MAILRU_PROFILE = ('--compression=true','--yandex-queue-size=1024','--tcp-buffer-default=1048576',
-                  '--tcp-buffer-max=4194304','--batch-packets=512','--batch-delay-us=5000','--mailru-batch-bytes=500000')
+MAILRU_PROFILE = ('--compression=true','--yandex-queue-size=1024','--tcp-buffer-default=4194304',
+                  '--tcp-buffer-max=16777216','--batch-packets=512','--batch-delay-us=5000','--mailru-batch-bytes=500000','--mailru-hybrid=true')
 # The exit forwards with raw sockets; its own kernel must not reset those flows.
 # The rule lives in the container's network namespace only.
 MAILRU_EXIT_SCRIPT = ('#!/bin/sh\nset -eu\niptables -C OUTPUT -p tcp --tcp-flags RST RST -j DROP 2>/dev/null || '

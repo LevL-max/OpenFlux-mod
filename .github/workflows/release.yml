@@ -23,10 +23,10 @@ jobs:
       PRODUCTION_V4_SHA256: 6f242d3c7ef9184811e58df5893e0ad0095da6aeb7354ba02df5da99fa569715
 
     steps:
-      - name: Checkout main
+      - name: Checkout selected source
         uses: actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.event_name == 'workflow_dispatch' && github.ref || 'main' }}
           fetch-depth: 0
 
       - name: Resolve and validate release version
@@ -37,6 +37,10 @@ jobs:
           VERSION="$(tr -d '[:space:]' < release/VERSION)"
           if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?$ ]]; then
             echo "Invalid release version: $VERSION" >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" != "refs/heads/main" && "$VERSION" != *-rc* ]]; then
+            echo "Only prereleases may be built from a non-main branch." >&2
             exit 1
           fi
           echo "SOURCE_COMMIT=$(git rev-parse HEAD)" >> "$GITHUB_ENV"
@@ -171,86 +175,17 @@ jobs:
           cat > dist/RELEASE-NOTES.md <<EOF
           # OpenFlux-mod $VERSION
 
-          Downstream release built and tested from GitHub main.
+          Experimental Mail.ru hybrid: document chat carries connection setup, TCP acknowledgements and the first 4 KiB per flow; four Cloud file lanes carry bulk packets.
 
-          ## Mail.ru browser sessions and Volga recovery
+          Both Mail.ru peers must update together. Existing browser profiles are reused and hot-reloaded. A private document-specific Cloud folder is created automatically; no public file links are created.
 
-          - Fix Volga idle recovery when editor session pings continue in the background. Pings retain shared pacing and Retry-After but no longer keep an old relay rate penalty alive. Regression tests exercise the actual ping and relay paths, including active traffic and provider cooldowns.
+          File notifications are retried, hashes verified and acknowledged files removed. File requests, queues and object lifetime are bounded. Dedicated stale protocol files are swept after an hour.
 
-          - Mail.ru documents requiring login accept Copy as cURL from the public page or editor POST. Public-page imports obtain CSRF tokens with the same cookie jar. A changed import reconnects automatically; rejected logins wait for fresh cookies.
-          - Router Panel v10 keeps browser cookies inside Mail.ru document, with separate local save, encrypted Yandex Disk server upload, and encrypted download actions. Use a separate browser session for each endpoint. The server publishes its signed authentication state.
-          - Authenticated Mail.ru uses OFX2 process markers so two sessions of the same account can exchange traffic. Update both ends for authenticated traffic; anonymous OFX1 remains supported.
-          - First-time Mail.ru server setup can wait for its cookie import. Native release health checks and rollback remain strict.
-          - Volga limits handshake confirmation retries and restores its configured relay pacing after a full minute without queued relay work, once any provider Retry-After has expired. This prevents old rate penalties from indefinitely slowing a returning client. New counters report pacing, cooldown and replay queue state without credentials.
-          - This stable release includes native update and rollback support. The release build runs the full Linux tests, race checks and integration suite. Publishing does not deploy it.
+          This prerelease changes the generated Mail.ru service profile. Legacy and Volga transport code is unchanged. Installing it does not select Mail.ru or switch router mode. Production clients on stable should remain on v4.2.6.
 
-          ## Mail.ru chat compatibility
+          This is a test candidate, not a claim of production browser stability. Validate actual routed browsing and recovery on test nodes before promoting it.
 
-          - Mail.ru now carries OFX1-tagged Base64 data in document chat messages, replacing cursor writes rejected by current editors. Human chat, self echoes and authentication history are ignored.
-          - Mail.ru uses OFB1/LZ4 batching with defaults of 512 packets, a 500,000-byte batch target and a 5 ms flush delay. Explicit packet/delay settings remain supported; Legacy and Volga profiles are unchanged.
-          - Both Mail.ru endpoints must be updated together: this chat carrier cannot communicate with v4.2.3-or-earlier cursor peers. Keep a working fallback transport during the transition; rolling back to the rejected cursor carrier may not restore Mail.ru connectivity.
-          - The release includes the matching Mail.ru integration profile and binary capability check. Use a dedicated document because transport messages appear in its chat. This fork retains OFB1/LZ4 and is not wire-compatible with upstream Session/zstd.
-          - Authenticated Mail.ru passed four real-service HTTPS exit checks and a complete 1 MiB download. Local relay tests cover same-account TCP and forced reconnect. These are functional checks, not a long-term availability guarantee.
-          - Publishing this release does not deploy it. A native server update changes the shared Legacy/Mail.ru binary and restarts affected services; schedule a maintenance window and update clients deliberately.
-
-          ## Included capabilities
-
-          - Functional baseline remains the proven Yandex v4 line.
-          - Safe authentication events are visible without debug logging.
-          - Versioned Router Panel integration shows Connected, Connecting, AUTH_BLOCKED and retained authentication errors.
-          - Generic semantic-version updates verify the binary, cookie helper and integration bundle together, with complete local rollback.
-          - Install OpenFlux itself on a Linux amd64 client or server using openflux-node.py.
-          - The server includes openfluxctl menu, release updates, rollback and direct cookie import.
-          - Cookie recovery files are created on the client from Router Panel or CLI; no Windows application is required.
-          - Optional signed and encrypted Yandex Disk recovery lets the server refresh cookies without inbound SSH.
-          - See integration/README.md for installer, pairing and dependency instructions.
-          - Dynamic Yandex bootstrap/session discovery is retained.
-          - First-tier showcaptchafast PoW is solved automatically.
-          - Persistent per-document Yandex cookie state is supported with an optional one-time browser seed.
-          - Second-tier SmartCaptcha enters AUTH_BLOCKED and makes no further Yandex requests until the cookie store changes.
-          - A safe openflux-yandex-cookie-import helper is included for browser cURL refresh without printing cookie values.
-          - Legacy's 4-packet / 1 ms batching and current reliability hardening are retained.
-          - Volga is a separate opt-in runtime with a frozen profile, public-only egress and at most 64 concurrent connections.
-          - Legacy remains the default; installing this release does not switch protocols.
-          - One updater installs Legacy and Volga together, with one checkpoint and one rollback. Volga keeps its own container/service and cookies with explicit CPU and memory limits.
-          - Known limitation: Volga serves one mini-PC at a time per document pair. Stop it on one mini-PC before starting it on the other.
-          - Router Panel has one browser-cookie section per protocol with document links and server state. A Volga server without a client stays quiet.
-          - A Legacy session Yandex has revoked (a redirect loop through Yandex Passport) enters AUTH_BLOCKED like a SmartCaptcha. When Yandex answers but refuses the exit, retries slow down to one per 10 min; network failures keep quick retries. Cookies delivered by the Disk inbox are used without a restart.
-          - An idle Volga server keeps its editor sessions alive with the ping an open browser tab sends every minute, instead of re-authorizing every lane every 90 s; a safety renewal runs every 20 min. New cookies end an AUTH_BLOCKED wait within seconds.
-          - Cookie recovery calls Yandex Disk rarely: the server checks its inboxes every 15 min, every 2 min only while it waits for cookies, and publishes its status on a change or hourly; a client fetches it while the panel or openfluxctl status looks, otherwise every 6 hours. A storage host that does not answer a download is retried with a new link.
-          - A new Docker server loads its runtime image from the release archive after digest verification; no container registry access is needed.
-          - A Volga client that answers late in the server's waiting window gets a full window to finish its handshake instead of being cut off and reconnecting.
-          - A Disk token that Yandex refuses is not sent again until the token file changes, and the panel says so. After a Disk failure the server reads its unchanged inboxes again instead of keeping the failure.
-          - While it waits for a client, a Volga server keeps one lane per document up and starts the others when a client arrives, halving its editor pings and renewals.
-          - Router Panel asks for a separate browser login for the server and for each mini-PC; the combined save-and-send buttons are gone.
-          - A Legacy connection to the document that stops taking writes, a half-open socket after a NAT or network change, is closed and reconnected within about 20 s instead of hanging for many minutes.
-          - A failed protocol switch in Router Panel says why (fresh browser cookies needed, no connection within the check time, another operation running) instead of a generic error; the previous protocol is selected again as before.
-          - Router Panel shows the router's last OPENFLUX start, restart or automatic return to the previous mode, and the mode buttons show the reason a mode did not start.
-          - Legacy and Volga reach Yandex over IPv4 first and use IPv6 only when IPv4 fails, so a node whose network gains IPv6 keeps presenting the address its browser cookies and passed checks belong to.
-          - Built with Go 1.26.8, which carries the security fixes of Go 1.26.5 to 1.26.8 for TLS, HTTP, URL parsing and networking.
-          - Router Panel keeps this mini-PC's last check of its own cookies after the client stops. When Yandex refused them (captcha or login), the protocol's cookie section, its badge and the OPENFLUX card say so until fresh cookies are saved or a later check passes; Legacy's old "last issue" line no longer outlives later successes.
-          - Legacy carries traffic again on Yandex's current document editor: each packet declares its real length, which Yandex now checks, instead of a fixed value it stopped relaying. Exit and clients both need this release.
-          - Mail.ru is a third protocol beside Legacy and Volga. The same binary with --transport mailru carries packets through one public Mail.ru Cloud document. Documents that allow anonymous editing need no cookies; others use separate browser imports. A server runs its exit as openflux-mailru-exit.service (openfluxctl setup-mailru); a mini-PC selects Mail.ru in Router Panel, whose Mail.ru document section contains its link and cookie actions.
-          - When Mail.ru answers but refuses the document, retries slow down after three quick tries, from 30 s up to 10 min; network failures keep quick retries.
-          - Updates and rollbacks include Mail.ru: its unit follows the release, a running Mail.ru client or exit is tested, and a failed check restores everything. Like Volga, one mini-PC uses a Mail.ru document at a time.
-          - The server's Mail.ru exit publishes its signed status through Yandex Disk like Legacy and Volga, and Router Panel shows it in the Mail.ru section ("Mail.ru server: connected / reconnecting with the reason / stopped"); the section badge warns while the exit is not connected.
-          - When Yandex presents its first-tier challenge and refuses the answer, or presents one that cannot be read, Legacy and Volga treat it like SmartCaptcha: AUTH_BLOCKED until fresh browser cookies are saved, and the panel says so. Network errors while answering are still retried.
-          - A Volga client starts the first lane of each document one after another, each within its own 30 s, and brings up the other lanes in the background once the server answers. With Yandex answering an editor authorization in up to ~12 s, starting all four lanes under one 30 s deadline failed every Volga start on the mini-PCs.
-          - No Yandex session token, private key, environment file or runtime secret is baked into the binary or container image.
-          - The exit-node runtime is packaged as a container image. Host networking is not required and no public container port is declared.
-          - Release creation does not deploy or restart running installations.
-
-          Container image:
-
-          $IMAGE:$VERSION
-
-          Registry digest:
-
-          $REGISTRY_DIGEST
-
-          Historical production binary SHA256 remains recorded for comparison only:
-
-          $PRODUCTION_V4_SHA256
+          Source commit: $SOURCE_COMMIT
           EOF
 
           sha256sum \
