@@ -39,8 +39,13 @@ func MuxConfig() *yamux.Config {
 	// Buffer capacity, carrier, Go and socket overhead are additional.
 	c.MaxStreamWindowSize = 2 << 20
 	c.KeepAliveInterval = 5 * time.Second
-	c.ConnectionWriteTimeout = 10 * time.Second
-	c.StreamOpenTimeout = 10 * time.Second
+	// The HTTP carrier can honor a 30-second congestion pause, followed by
+	// queued delivery. Yamux also uses ConnectionWriteTimeout for ping replies;
+	// a 10-second timeout killed every TCP stream during a valid provider pause.
+	// Keep recovery bounded, while leaving individual SOCKS setup deadlines at
+	// SetupTimeout. StreamOpenTimeout also closes the entire mux on expiry.
+	c.ConnectionWriteTimeout = 90 * time.Second
+	c.StreamOpenTimeout = 90 * time.Second
 	c.StreamCloseTimeout = 60 * time.Second
 	c.LogOutput = io.Discard
 	return c
