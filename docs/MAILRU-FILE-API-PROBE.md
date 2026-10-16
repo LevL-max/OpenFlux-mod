@@ -1,5 +1,9 @@
 # Mail.ru file API feasibility check, 2026-10-16
 
+> Latest result: the complete raw-IP hybrid candidate failed the live tunnel
+> acceptance test. The earlier file benchmarks below do not establish usable
+> browser throughput. Do not promote v4.3.0-rc1; see the final section.
+
 ## Scope and result
 
 Tested script commit: `0e5aa05ed3574a6ee5f2e9d5c50a6ff696729639`.
@@ -197,3 +201,60 @@ requests. The document chat's earlier sustained-load failures remain relevant;
 the small-message budget and recovery behavior still need an explicit design.
 
 No production transport implementation or release was produced by this proof.
+
+## Complete raw-IP hybrid candidate: acceptance failed
+
+Source: `f41d20fb1881223a6b11edb5a6945ae9db24616a` on
+`codex/mailru-hybrid`. CI passed Go tests, race tests, Linux integration tests,
+builds and container smoke tests. The exact CI binary was launched temporarily
+on the test client and server, with rollback checkpoints. Installed files and
+router mode were preserved. The production client was untouched.
+
+The candidate carries TCP setup, pure ACKs and the first 4 KiB per flow in chat.
+Other raw IP packets are collected for up to 80 ms into files of at most 512 KiB,
+with four upload/download workers. File notices and acknowledgements use chat.
+
+An initial implementation failed uploads because host-only cookies were not
+available on the upload subdomain and successful HTTP 201 responses were
+rejected. A bounded comparison observed HTTP 403 without authentication and
+HTTP 201 with it. Both defects were fixed in Git, with regression tests for
+upload registration and cookie scoping; a new CI binary was then tested.
+
+| Live check | Result |
+| --- | --- |
+| HTTPS, 32 KiB | HTTP 200, complete, 1.235 s |
+| Public bulk-test endpoint | HTTP 403; not a throughput measurement |
+| Private server, 16 MiB random download through hybrid SOCKS | Timed out at 40 s; only 199,824 bytes received, about 0.005 MB/s |
+| Concurrent ordinary HTTPS page | HTTP 200, complete, 1.327 s |
+| Registered / received file blocks | 33 / 33 |
+| Document reconnects during the observation | 0 |
+
+The private bulk source bound only to the server's Docker bridge, not a public
+interface. Random payload and readiness traveled through the tested tunnel;
+SSH only launched helpers and collected results. The incomplete bulk payload
+failed the expected full-file hash check. No LAN browsing or router-mode
+acceptance test was attempted after this failure.
+
+During bulk traffic, registration and deletion began returning non-JSON API
+responses. A subsequent single bootstrap check returned HTTP 200 HTML containing
+`robot` and `too many`, without the usual CSRF data. The exact rate threshold,
+scope and expiry of this provider restriction were not established. This must
+not be reported as an ordinary cookie expiry or a numeric Cloud bandwidth cap.
+
+The evidence is consistent with excessive API operations caused by many small
+TCP-driven blocks. Unlike the previous prefilled 2 MiB file experiment, raw TCP
+depends on acknowledgements across the file path and does not automatically
+fill large blocks. Increasing the worker count alone is not justified.
+
+The next design needs a connection/stream relay that separates Internet TCP
+flow control from reliable, ordered, bounded file delivery, aggregates bulk
+data into large objects, and stops API traffic on provider rejection. This is
+an architectural proposal, not a validated fix or a speed guarantee.
+
+Temporary transports and rollback timers were stopped. The test client remained
+in AWG with OpenFlux clients and bridge inactive. Five remaining test objects
+were removed through the test-client session; the dedicated Cloud folder was
+verified empty. The previous server binary was restored, but its Mail.ru login
+was still blocked by the provider at the first post-test check. The candidate
+must remain unpublished; restoring an installed version is not proof of
+provider-side recovery.
