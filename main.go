@@ -36,6 +36,7 @@ func main() {
 	socksAddr := flag.String("socks5", ":1080", "SOCKS5 address")
 	transportType := flag.String("transport", "yandex", "Transport type (yandex, mailru, oneme)")
 	mailruEditorActivity := flag.Bool("mailru-editor-activity", false, "Deprecated: true is rejected by the Mail.ru chat carrier")
+	mailruCursorProbe := flag.Bool("mailru-cursor-probe", false, "Experimental historical cursor carrier control; enable on both test peers")
 	mailruBatchBytes := flag.Int("mailru-batch-bytes", 500000, "Mail.ru chat batch payload target in bytes (4096..500000)")
 	mailruSendInterval := flag.Int("mailru-send-interval-ms", 0, "Minimum interval between Mail.ru chat messages; heartbeat bypasses this pacing")
 	mailruSendBytes := flag.Int("mailru-send-bytes-per-second", 0, "Mail.ru chat byte pacing budget including Base64; 0 disables byte pacing")
@@ -160,6 +161,9 @@ func main() {
 	case "mailru":
 		mailruTransport := mailru.NewMailruDocsTransport(globalDocUrl, config)
 		mailruTransport.SetEditorActivity(*mailruEditorActivity)
+		if err := mailruTransport.SetCursorProbe(*mailruCursorProbe); err != nil {
+			log.Fatal(err)
+		}
 		if err := mailruTransport.SetChatSessionBudget(*mailruSessionBytes); err != nil {
 			log.Fatal(err)
 		}

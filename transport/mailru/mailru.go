@@ -184,6 +184,7 @@ type MailruDocsTransport struct {
 
 	// editorActivity sends fake saveChanges edits as a live editor would.
 	editorActivity bool
+	cursorProbe    bool
 
 	// reconnecting is set while a scheduled reconnect waits out its backoff,
 	// so that two failures never open two sessions to the document.
@@ -259,6 +260,9 @@ func (t *MailruDocsTransport) statusThrottled(key string, every time.Duration, f
 }
 
 func (t *MailruDocsTransport) Start() error {
+	if t.cursorProbe && (t.sessionByteBudget != 0 || t.sendInterval != 0 || t.sendBytesPerSecond != 0) {
+		return fmt.Errorf("cursor control must not use experimental chat pacing or renewal")
+	}
 	if t.editorActivity {
 		return fmt.Errorf("mailru-editor-activity is incompatible with the chat carrier; remove the flag")
 	}
@@ -583,6 +587,9 @@ func (t *MailruDocsTransport) writerLoop() {
 			sender = t.senderID
 		}
 		msg := encodeChatData(pending.data, sender)
+		if t.cursorProbe {
+			msg = encodeProbeCursor(pending.data)
+		}
 		if t.sessionByteBudget > 0 {
 			if session.chatBytes > 0 && session.chatBytes+len(msg) > t.sessionByteBudget {
 				if !session.chatEchoes.wait(t.done, 3*time.Second) {
@@ -624,6 +631,13 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 		return
 	}
 	if !bytes.Contains(data, []byte(`"messages"`)) || session == nil {
+		return
+	}
+	if t.cursorProbe {
+		for _, packet := range decodeProbeCursors(data) {
+			t.RecordReceive(len(packet))
+			t.CallReceive(packet)
+		}
 		return
 	}
 	var ownEcho func(string)
