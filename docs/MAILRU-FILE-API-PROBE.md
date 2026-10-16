@@ -70,3 +70,69 @@ the account's file namespace and its retention was not inspected.
 
 No release was produced. The next engineering question is low-latency control
 and pipelined file blocks, rather than more document-channel timing changes.
+
+## Follow-up: 1, 4 and 6 file lanes
+
+Tested commit: `18d96b63f75eb289a35e4060a2d31dcafb246272`.
+Probe source SHA-256:
+`84e6b51d638889e48a91e9726e53f2646f1dfa5f2eccf3d1f56731abdc8a070d`.
+
+The follow-up enabled thread-local persistent HTTPS connections and independent
+receiver discovery. Before upload starts, the receiver knows only the experiment
+prefix, sequence numbers, block count and expected size. It checks file metadata
+and retries only a not-yet-created file (404), at 200 ms intervals after each
+response, with a 25-second discovery budget. It does not retry 429 or other
+provider failures. No per-file readiness or content travels through SSH.
+Final hashes from both ends are compared by the coordinator after the batch.
+
+Each lane uploads or receives its assigned sequence in order. Sending and receiving
+overlap, but each file must finish uploading and registering before downloading.
+There is no shared file overwrite, full tunnel implementation, or application
+acknowledgement protocol. The experiment is bounded to 12 distinct objects per
+bulk batch. Deletion follows completed verification and is outside the timing.
+
+Each bulk run sent the same 12 fresh random blocks of 2 MiB: 24 MiB total.
+One run per setting and direction was performed, in order 1, 4, 6.
+
+| Concurrent file lanes | Server to client | Elapsed | Client to server | Elapsed |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 2.39 MB/s | 10.515 s | 3.49 MB/s | 7.219 s |
+| 4 | 5.55 MB/s | 4.531 s | 7.32 MB/s | 3.437 s |
+| 6 | 6.82 MB/s | 3.688 s | 6.71 MB/s | 3.750 s |
+
+Four lanes improved observed throughput in both directions; six improved the
+download direction further but did not improve the reverse direction in this
+sample. These short, unrandomized runs do not establish an optimal lane count
+or isolate concurrency from changing provider conditions.
+
+Six separate 64 KiB transfers, three in each direction, measured latency:
+
+| Direction | Samples | Median |
+| --- | --- | ---: |
+| Server to client | 1.328, 1.516, 2.328 s | 1.516 s |
+| Client to server | 2.406, 1.672, 1.360 s | 1.672 s |
+
+The persistent-connection client did not solve interactive latency. Small-block
+tests used one lane and a fresh batch worker; latency under simultaneous bulk
+traffic was not measured. Compared with the earlier test, discovery is now part
+of the path and block sizes differ, so its 16 MiB rates are not a direct baseline.
+
+All 78 files (144.375 MiB total unique payload) passed SHA-256/length checks.
+Receivers made 124 metadata requests, including expected not-yet-ready replies.
+No completed matrix batch reported an error. Every test object was removed and
+both workers reported zero pending objects / cleanup failures. Installed services
+were unchanged: the server's normal Mail.ru service remained active; test-client
+OpenFlux services and bridge remained inactive. The client remained in its
+pre-existing AWG mode; restricted-network reachability is still unverified.
+
+Before the matrix, two 64 KiB setup attempts stopped on the downloader redirect
+handling (HTTP 301, then a rejected destination domain). A separate 64 KiB probe
+confirmed the HTTPS redirect from `*.cloud.mail.ru` to `*.datacloudmail.ru`.
+The reader now permits that observed download domain, limits redirects to three,
+rebuilds destination cookies and strips cross-host CSRF headers. All setup probe
+objects were also removed. These attempts were harness corrections, not capacity
+results. The additional download domain matters for future reachability tests.
+
+The evidence supports a bounded prototype with 4-6 bulk file lanes. Fast handling
+of small requests/replies still needs a separate design and validation. No release
+or router-mode change is justified by this benchmark alone.
