@@ -50,7 +50,10 @@ class Probe:
         data = urllib.parse.urlencode(dict(params or {}, token=self.token, api=2)).encode()
         url = 'https://cloud.mail.ru/api/v2/' + endpoint
         with self.request(url if post else url + '?' + data.decode(),
-                          data if post else None) as r:
+                          data if post else None,
+                          headers={'X-Csrf-Token': self.token,
+                                   'Origin': 'https://cloud.mail.ru',
+                                   'Content-Type': 'application/x-www-form-urlencoded'}) as r:
             result = json.load(r)
         if result.get('status') != 200:
             raise ValueError('API status ' + str(result.get('status')))
