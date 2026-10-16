@@ -2,14 +2,13 @@
 """Bounded hybrid proof: existing chat SOCKS tunnel controls Cloud file delivery.
 
 No general proxy or installed configuration is created. Server listens only on
-loopback. Payloads are random; the Cloud objects use the file probe's unique
+the exit container's private host bridge. Payloads are random; Cloud objects use the probe's unique
 namespace. Run server and client with the same nonce and existing profiles.
 """
 import argparse
 import concurrent.futures
-import ctypes
+import ipaddress
 import json
-import os
 import socket
 import statistics
 import struct
@@ -94,13 +93,14 @@ def serve(probe, listener, nonce, result):
         listener.close()
 
 
-def client(probe, port, nonce):
+def client(probe, port, nonce, address):
     sock = socket.create_connection(('127.0.0.1', 11080), timeout=25)
     with sock:
         sock.sendall(b'\x05\x01\x00')
         if exact(sock, 2) != b'\x05\x00':
             raise ValueError('SOCKS authentication')
-        sock.sendall(b'\x05\x01\x00\x01\x7f\x00\x00\x01' + struct.pack('!H', port))
+        print(json.dumps({'stage': 'socks_authenticated'}), flush=True)
+        sock.sendall(b'\x05\x01\x00\x01' + socket.inet_aton(address) + struct.pack('!H', port))
         header = exact(sock, 4)
         if header[:2] != b'\x05\x00':
             raise ValueError('SOCKS connect')
@@ -110,6 +110,7 @@ def client(probe, port, nonce):
         if address_size is None:
             raise ValueError('SOCKS address')
         exact(sock, address_size+2)
+        print(json.dumps({'stage': 'socks_connected'}), flush=True)
         sock.settimeout(8)
         control = Control(sock)
         control.send({'op': 'hello', 'nonce': nonce})
@@ -176,37 +177,24 @@ def main():
     parser.add_argument('--role', choices=('aws', 'pc2'), required=True)
     parser.add_argument('--nonce', required=True)
     parser.add_argument('--port', type=int, default=0)
-    parser.add_argument('--netns-pid', type=int, default=0)
+    parser.add_argument('--address', required=True)
     args = parser.parse_args()
     probe = Probe('/var/lib/openflux-mailru-auth/browser.json', args.nonce, keepalive=True)
     result = {}
     try:
         probe.init()
+        address = ipaddress.IPv4Address(args.address)
+        if not address.is_private or address.is_loopback or address.is_unspecified:
+            raise ValueError('private bridge address required')
         if args.role == 'aws':
-            if args.netns_pid <= 0:
-                raise ValueError('existing exit container namespace required')
-            # Create only the listening socket in the exit container network.
-            # Keep host filesystem, DNS and outgoing file API requests unchanged.
-            original = os.open('/proc/self/ns/net', os.O_RDONLY)
-            target = os.open(f'/proc/{args.netns_pid}/ns/net', os.O_RDONLY)
-            libc = ctypes.CDLL(None, use_errno=True)
-            try:
-                if libc.setns(target, 0) != 0:
-                    raise OSError('cannot enter exit network namespace')
-                listener = socket.socket()
-                listener.bind(('127.0.0.1', 0))
-            finally:
-                restored = libc.setns(original, 0)
-                os.close(original)
-                os.close(target)
-                if restored != 0:
-                    raise OSError('cannot restore probe network namespace')
+            listener = socket.socket()
+            listener.bind((str(address), 0))
             listener.listen(1)
             listener.settimeout(60)
             print(json.dumps({'ready': True, 'port': listener.getsockname()[1]}), flush=True)
             serve(probe, listener, args.nonce, result)
         else:
-            result = client(probe, args.port, args.nonce)
+            result = client(probe, args.port, args.nonce, str(address))
     except Exception as error:
         result['error_type'] = type(error).__name__
         if type(error) is ValueError:
