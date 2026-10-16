@@ -136,3 +136,64 @@ results. The additional download domain matters for future reachability tests.
 The evidence supports a bounded prototype with 4-6 bulk file lanes. Fast handling
 of small requests/replies still needs a separate design and validation. No release
 or router-mode change is justified by this benchmark alone.
+
+## Hybrid proof: document chat control and Cloud file payloads
+
+Tested commit: `14433761244bb457df2b07b02752a88ccf4d8600`.
+The isolated Python helper is `scripts/mailru_hybrid_probe.py`.
+
+The existing installed Mail.ru transport carried one persistent TCP control
+connection through its SOCKS endpoint. Its destination was an ephemeral test
+listener bound only to the host's private Docker bridge, with an experiment
+nonce handshake. No public listening address or firewall change was used.
+The server's normal Mail.ru service continued running. The test client's existing
+Mail.ru service was temporarily started under a four-minute rollback timer;
+router mode stayed AWG and the OpenFlux router bridge stayed inactive.
+
+The first control test targeted loopback inside the exit namespace and timed out.
+Both document sessions were ready; that attempt does not establish a chat
+failure. After correcting the probe target to the routable private bridge,
+the control connection and the whole hybrid exchange completed.
+
+Procedure on one control connection:
+
+1. Exchange 12 tiny ping/pong messages at 500 ms intervals.
+2. Request a download through the control connection.
+3. Server uploads eight fresh random 2 MiB files through four parallel lanes.
+4. For each registered file, server sends its name, size and SHA-256 through
+   document chat. The client starts its download on receiving this notification.
+5. Client verifies every file, acknowledges completion through chat, and server
+   deletes the eight objects and acknowledges cleanup.
+6. Exchange 12 more ping/pong messages, then close the connection.
+
+SSH only launched the two test processes and collected measurements. File
+readiness, hashes, requests and completion acknowledgements traveled through the
+existing Mail.ru document chat tunnel. There was no per-file SSH signalling.
+
+| Measurement | Result |
+| --- | ---: |
+| Control RTT median before payload | 123.7 ms |
+| Control RTT maximum before payload | 330.8 ms |
+| Download, 16 MiB end-to-end | 4.386 s |
+| Effective download throughput | 3.825 MB/s |
+| Control RTT median after payload | 125.0 ms |
+| Control RTT maximum after payload | 253.9 ms |
+| File hashes / sizes verified | 8 / 8 |
+| Outstanding test objects after cleanup | 0 |
+
+The download clock starts before its request is sent through chat and ends after
+all eight files are received and verified. Cleanup follows and is not included.
+The existing server reconnect counter stayed at five; the test client stayed at
+zero, with no reported document drops during the observation window. At the end,
+the test client was stopped, its rollback timer cancelled, and AWG mode confirmed.
+The server's normal service remained active. The production client was untouched.
+
+This establishes a working short hybrid exchange above the 2 MB/s bulk target,
+with low-latency control on either side of the transfer. It does not demonstrate
+interactive requests during bulk load, bidirectional payloads, long-session
+stability, restart recovery, or browser traffic through a complete hybrid tunnel.
+The 24 RTT samples contain only tiny synthetic messages, not arbitrary website
+requests. The document chat's earlier sustained-load failures remain relevant;
+the small-message budget and recovery behavior still need an explicit design.
+
+No production transport implementation or release was produced by this proof.
