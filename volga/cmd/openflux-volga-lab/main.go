@@ -176,6 +176,7 @@ func runSession(parent context.Context, c config, key []byte) error {
 	}
 	ep.MaxStreams = c.MaxStreams
 	ep.Event = func(s string) { event(s, nil) }
+	ep.Diagnostic = func(data map[string]string) { event("session_failure", data) }
 	tr.Receive(ep.Receive)
 	if e = tr.Start(); e != nil {
 		return e

@@ -18,6 +18,7 @@ type Endpoint struct {
 	MaxStreams int
 	Idle       time.Duration
 	Event      func(string)
+	Diagnostic func(map[string]string)
 	Opts       recordconn.Options
 	mu         sync.Mutex
 	openMu     sync.Mutex
@@ -139,10 +140,13 @@ func (e *Endpoint) Run(ctx context.Context) error {
 		err = e.handshake(ctx, c)
 		if err == nil {
 			var m *yamux.Session
+			diagnosis := &muxDiagnosis{}
+			muxConfig := MuxConfig()
+			muxConfig.LogOutput, muxConfig.Logger = nil, diagnosis
 			if e.Client {
-				m, err = yamux.Client(c, MuxConfig())
+				m, err = yamux.Client(c, muxConfig)
 			} else {
-				m, err = yamux.Server(c, MuxConfig())
+				m, err = yamux.Server(c, muxConfig)
 			}
 			if err == nil {
 				e.mu.Lock()
@@ -156,7 +160,10 @@ func (e *Endpoint) Run(ctx context.Context) error {
 					case <-m.CloseChan():
 					}
 				} else {
-					ServeRemote(ctx, m, e.Policy, e.Idle, e.MaxStreams)
+					err = ServeRemote(ctx, m, e.Policy, e.Idle, e.MaxStreams)
+				}
+				if e.Diagnostic != nil {
+					e.Diagnostic(diagnosis.snapshot(err))
 				}
 				m.Close()
 				e.mu.Lock()

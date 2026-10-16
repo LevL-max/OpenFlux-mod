@@ -191,16 +191,18 @@ type MailruDocsTransport struct {
 	// the peer into the document (an HTTP error from its API or WebSocket).
 	refusals atomic.Int32
 
-	statusMu    sync.Mutex
-	statusLast  map[string]time.Time
-	done        chan struct{}
-	stopOnce    sync.Once
-	queuedBytes atomic.Int64
-	queueDrops  atomic.Uint64
-	writeErrors atomic.Uint64
-	wsWrites    atomic.Uint64
-	wsBytes     atomic.Uint64
-	sessionIDs  atomic.Uint64
+	statusMu           sync.Mutex
+	statusLast         map[string]time.Time
+	done               chan struct{}
+	stopOnce           sync.Once
+	queuedBytes        atomic.Int64
+	queueDrops         atomic.Uint64
+	writeErrors        atomic.Uint64
+	wsWrites           atomic.Uint64
+	wsBytes            atomic.Uint64
+	sessionIDs         atomic.Uint64
+	sendInterval       time.Duration
+	sendBytesPerSecond int
 }
 
 // NewMailruDocsTransport accepts either a bare weblink ("AbCd/EfGh") or a full
@@ -528,6 +530,7 @@ func (t *MailruDocsTransport) writerLoop() {
 	}
 
 	var pending *queuedPacket
+	var nextSend time.Time
 	defer func() {
 		if pending != nil {
 			t.queuedBytes.Add(-int64(len(pending.data)))
@@ -563,6 +566,15 @@ func (t *MailruDocsTransport) writerLoop() {
 			time.Sleep(15 * time.Millisecond)
 			continue
 		}
+		if !t.waitChatSlot(nextSend) {
+			return
+		}
+		t.Mu.RLock()
+		current := t.session == session && t.IsConnected()
+		t.Mu.RUnlock()
+		if !current || time.Since(pending.at) > maxQueuedAge {
+			continue
+		}
 		sender := ""
 		if session.Info.Authenticated {
 			sender = t.senderID
@@ -575,6 +587,7 @@ func (t *MailruDocsTransport) writerLoop() {
 		}
 		t.wsWrites.Add(1)
 		t.wsBytes.Add(uint64(len(msg)))
+		nextSend = time.Now().Add(t.chatSpacing(len(msg)))
 		t.queuedBytes.Add(-int64(len(pending.data)))
 		pending = nil
 	}
