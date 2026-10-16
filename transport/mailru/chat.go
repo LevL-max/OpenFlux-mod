@@ -11,12 +11,16 @@ const chatDataTag = "OFX1"
 const chatReadyFallback = 3 * time.Second
 
 func encodeChatData(packet []byte, sender ...string) []byte {
+	return []byte(`42["message",{"type":"message","message":"` + chatDataText(packet, sender...) + `"}]`)
+}
+
+func chatDataText(packet []byte, sender ...string) string {
 	// Base64 and the tag need no JSON escaping.
 	tag := chatDataTag
 	if len(sender) > 0 && sender[0] != "" {
 		tag = "OFX2" + sender[0] + ":"
 	}
-	return []byte(`42["message",{"type":"message","message":"` + tag + base64.StdEncoding.EncodeToString(packet) + `"}]`)
+	return tag + base64.StdEncoding.EncodeToString(packet)
 }
 
 // Decode only live chat broadcasts, never auth history, cursors or human chat.
@@ -28,6 +32,10 @@ func decodeChatData(frame []byte, ownIDs ...string) [][]byte {
 // Authenticated sessions can share an account ID. A per-process marker filters
 // echoes without discarding the other endpoint's traffic from the same account.
 func decodeSessionChatData(frame []byte, sender string, ownIDs ...string) [][]byte {
+	return decodeObservedChatData(frame, sender, nil, ownIDs...)
+}
+
+func decodeObservedChatData(frame []byte, sender string, ownEcho func(string), ownIDs ...string) [][]byte {
 	if len(frame) < 2 || string(frame[:2]) != "42" {
 		return nil
 	}
@@ -50,7 +58,13 @@ func decodeSessionChatData(frame []byte, sender string, ownIDs ...string) [][]by
 	for _, msg := range event.Messages {
 		if strings.HasPrefix(msg.Message, "OFX2") {
 			id, payload, ok := strings.Cut(msg.Message[4:], ":")
-			if !ok || len(id) != 26 || id == sender || strings.Trim(id, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") != "" {
+			if !ok || len(id) != 26 || strings.Trim(id, "ABCDEFGHIJKLMNOPQRSTUVWXYZ234567") != "" {
+				continue
+			}
+			if id == sender {
+				if ownEcho != nil {
+					ownEcho(msg.Message)
+				}
 				continue
 			}
 			packet, err := base64.StdEncoding.DecodeString(payload)
@@ -67,6 +81,9 @@ func decodeSessionChatData(frame []byte, sender string, ownIDs ...string) [][]by
 			}
 		}
 		if own || !strings.HasPrefix(msg.Message, chatDataTag) {
+			if own && ownEcho != nil {
+				ownEcho(msg.Message)
+			}
 			continue
 		}
 		packet, err := base64.StdEncoding.DecodeString(msg.Message[len(chatDataTag):])

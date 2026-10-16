@@ -39,6 +39,7 @@ func main() {
 	mailruBatchBytes := flag.Int("mailru-batch-bytes", 500000, "Mail.ru chat batch payload target in bytes (4096..500000)")
 	mailruSendInterval := flag.Int("mailru-send-interval-ms", 0, "Minimum interval between Mail.ru chat messages; heartbeat bypasses this pacing")
 	mailruSendBytes := flag.Int("mailru-send-bytes-per-second", 0, "Mail.ru chat byte pacing budget including Base64; 0 disables byte pacing")
+	mailruSessionBytes := flag.Int("mailru-session-bytes", 0, "Experimental per-connection Mail.ru chat byte budget; 0 disables planned renewal")
 	mailruBrowserProfile := flag.String("mailru-browser-profile", "", "Private Mail.ru browser request profile JSON; reloads imports without restart")
 	yandexQueueSize := flag.Int("yandex-queue-size", 1024, "Yandex transport write queue size")
 	yandexSafeMode := flag.Bool("yandex-safe-mode", false, "Fragment Legacy cursor payloads below 2600 bytes and pace all writes at 10/s (enable on both peers)")
@@ -159,6 +160,12 @@ func main() {
 	case "mailru":
 		mailruTransport := mailru.NewMailruDocsTransport(globalDocUrl, config)
 		mailruTransport.SetEditorActivity(*mailruEditorActivity)
+		if err := mailruTransport.SetChatSessionBudget(*mailruSessionBytes); err != nil {
+			log.Fatal(err)
+		}
+		if *mailruSessionBytes > 0 && *mailruBatchBytes > *mailruSessionBytes/2 {
+			log.Fatal("Mail.ru batch bytes must not exceed half the session byte budget")
+		}
 		if err := mailruTransport.SetChatPacing(time.Duration(*mailruSendInterval)*time.Millisecond, *mailruSendBytes); err != nil {
 			log.Fatal(err)
 		}

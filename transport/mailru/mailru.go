@@ -58,6 +58,8 @@ type DocSession struct {
 	chatReady        atomic.Bool
 	chatReadyAfter   time.Time
 	trace            sessionTrace
+	chatEchoes       chatEchoes
+	chatBytes        int // sole writer; reset with each physical session
 }
 
 type queuedPacket struct {
@@ -203,6 +205,7 @@ type MailruDocsTransport struct {
 	sessionIDs         atomic.Uint64
 	sendInterval       time.Duration
 	sendBytesPerSecond int
+	sessionByteBudget  int
 }
 
 // NewMailruDocsTransport accepts either a bare weblink ("AbCd/EfGh") or a full
@@ -580,6 +583,17 @@ func (t *MailruDocsTransport) writerLoop() {
 			sender = t.senderID
 		}
 		msg := encodeChatData(pending.data, sender)
+		if t.sessionByteBudget > 0 {
+			if session.chatBytes > 0 && session.chatBytes+len(msg) > t.sessionByteBudget {
+				if !session.chatEchoes.wait(t.done, 3*time.Second) {
+					return
+				}
+				session.closeWithReason("session_budget")
+				t.dropConnection(session)
+				continue // the same pending packet belongs to the next session
+			}
+			session.chatEchoes.expect(chatDataText(pending.data, sender))
+		}
 		if err := session.safeWrite(websocket.TextMessage, msg); err != nil {
 			t.writeErrors.Add(1)
 			t.dropConnection(session)
@@ -587,6 +601,7 @@ func (t *MailruDocsTransport) writerLoop() {
 		}
 		t.wsWrites.Add(1)
 		t.wsBytes.Add(uint64(len(msg)))
+		session.chatBytes += len(msg)
 		nextSend = time.Now().Add(t.chatSpacing(len(msg)))
 		t.queuedBytes.Add(-int64(len(pending.data)))
 		pending = nil
@@ -611,7 +626,11 @@ func (t *MailruDocsTransport) handleMessage(session *DocSession, data []byte) {
 	if !bytes.Contains(data, []byte(`"messages"`)) || session == nil {
 		return
 	}
-	for _, packet := range decodeSessionChatData(data, t.senderID, session.Info.EditorUserID, session.UserID) {
+	var ownEcho func(string)
+	if t.sessionByteBudget > 0 {
+		ownEcho = session.chatEchoes.observe
+	}
+	for _, packet := range decodeObservedChatData(data, t.senderID, ownEcho, session.Info.EditorUserID, session.UserID) {
 		t.RecordReceive(len(packet))
 		t.CallReceive(packet)
 	}
