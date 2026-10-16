@@ -3,8 +3,16 @@ package mailru
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/cookiejar"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -234,5 +242,46 @@ func TestHybridBoundsAndPaths(t *testing.T) {
 	}
 	if _, _, _, ok := tcpInfo([]byte{0x45}); ok {
 		t.Fatal("short packet")
+	}
+}
+
+func TestDispatcherCookieScope(t *testing.T) {
+	jar, _ := cookiejar.New(nil)
+	base, _ := url.Parse(cloudBase)
+	jar.SetCookies(base, []*http.Cookie{{Name: "session", Value: "test", Secure: true, Path: "/"}})
+	for _, target := range []string{"https://upload1.cloud.mail.ru/upload", "https://download.cloud.mail.ru/get", "https://cloclo1.datacloudmail.ru/a", "https://cloud.mail.ru.evil/a"} {
+		seedCloudCookies(jar, base, target)
+		u, _ := url.Parse(target)
+		if got := len(jar.Cookies(u)) > 0; got != cloudURL(target, false) {
+			t.Fatalf("wrong cookie scope for %s", u.Host)
+		}
+	}
+}
+
+type cloudTestRoundTrip func(*http.Request) (*http.Response, error)
+
+func (f cloudTestRoundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestUploadCreatedResponseRegistersFile(t *testing.T) {
+	profile := filepath.Join(t.TempDir(), "profile.json")
+	raw := []byte(`{"cookies":{"session":"test"}}`)
+	if err := os.WriteFile(profile, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, status := range []int{200, 201, 403} {
+		s := newCloudStore(profile, "test/document")
+		registered := false
+		s.state = &cloudState{profile: sha256.Sum256(raw), expires: time.Now().Add(time.Minute), upload: "https://upload.cloud.mail.ru/", client: &http.Client{Transport: cloudTestRoundTrip(func(r *http.Request) (*http.Response, error) {
+			code, body := status, strings.Repeat("a", 40)+";4"
+			if r.Method == "POST" {
+				registered = true
+				code, body = 200, `{"status":200}`
+			}
+			return &http.Response{StatusCode: code, Body: io.NopCloser(strings.NewReader(body)), Header: make(http.Header)}, nil
+		})}}
+		err := s.Put(context.Background(), strings.Repeat("a", 32)+"-"+strings.Repeat("b", 16), []byte("test"))
+		if (err == nil) != (status != 403) || registered != (status != 403) {
+			t.Fatalf("status %d: registered=%v error=%v", status, registered, err)
+		}
 	}
 }

@@ -159,6 +159,14 @@ func (h *HybridTransport) Stop() error {
 func (h *HybridTransport) IsConnected() bool               { return h.IsRunning() && h.inner.IsConnected() }
 func (h *HybridTransport) Stats() transport.TransportStats { return h.inner.Stats() }
 
+// cloudStore errors contain fixed descriptions/status codes, never request URLs.
+func (h *HybridTransport) fileError(phase string, err error) {
+	n := h.errors.Add(1)
+	if h.ctx.Err() == nil && (n <= 8 || n%100 == 0) {
+		utils.Statusf("[M-HYBRID] file_error phase=%s error=%v count=%d", phase, err, n)
+	}
+}
+
 // Classify complete IPv4 TCP packets only. Control packets stay low latency.
 // Pure ACKs are coalesced by flow, retaining the latest window/SACK information.
 func tcpInfo(p []byte) (key string, payload int, flags byte, ok bool) {
@@ -317,7 +325,7 @@ func (h *HybridTransport) uploadLoop() {
 			err := h.store.Put(ctx, id, data)
 			cancel()
 			if err != nil {
-				h.errors.Add(1)
+				h.fileError("upload", err)
 				h.scheduleDelete(id)
 				continue
 			}
@@ -438,7 +446,7 @@ func (h *HybridTransport) downloadLoop() {
 				h.mu.Unlock()
 				h.ack(task.id)
 			} else {
-				h.errors.Add(1)
+				h.fileError("download", err)
 			}
 			h.mu.Lock()
 			delete(h.inflight, task.id)
@@ -483,7 +491,7 @@ func (h *HybridTransport) deleteLoop() {
 			}
 			h.mu.Unlock()
 			if err != nil {
-				h.errors.Add(1)
+				h.fileError("delete", err)
 			}
 		}
 	}

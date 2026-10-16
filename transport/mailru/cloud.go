@@ -146,6 +146,11 @@ func (s *cloudStore) session(ctx context.Context) (*cloudState, error) {
 	if !cloudURL(st.upload, false) || !cloudURL(st.download, true) {
 		return nil, errors.New("file server rejected")
 	}
+	// Copy the authenticated Cloud session only to the dispatcher-selected
+	// Cloud hosts. Never seed credentials on datacloudmail.ru redirect hosts.
+	for _, target := range []string{st.upload, st.download} {
+		seedCloudCookies(jar, base, target)
+	}
 	if err = st.api(ctx, "folder", url.Values{"home": {s.folder}, "limit": {"0"}}, false, nil); err != nil {
 		var failure cloudFailure
 		if !errors.As(err, &failure) || failure.status != 404 {
@@ -163,6 +168,15 @@ func (s *cloudStore) session(ctx context.Context) (*cloudState, error) {
 	st.expires = time.Now().Add(5 * time.Minute)
 	s.state = st
 	return st, nil
+}
+func seedCloudCookies(jar http.CookieJar, base *url.URL, target string) {
+	if !cloudURL(target, false) {
+		return
+	}
+	u, _ := url.Parse(target)
+	for _, c := range jar.Cookies(base) {
+		jar.SetCookies(u, []*http.Cookie{{Name: c.Name, Value: c.Value, Path: "/", Secure: true}})
+	}
 }
 func (st *cloudState) api(ctx context.Context, endpoint string, params url.Values, post bool, dst any) error {
 	if params == nil {
@@ -252,7 +266,7 @@ func (s *cloudStore) Put(ctx context.Context, id string, data []byte) error {
 	}
 	raw, readErr := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	resp.Body.Close()
-	if resp.StatusCode != 200 {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		err = cloudFailure{resp.StatusCode}
 		s.invalidate(st, err)
 		return err
@@ -325,6 +339,7 @@ func (s *cloudStore) Sweep(ctx context.Context) error {
 		Body struct {
 			List []struct {
 				Home  string `json:"home"`
+				Type  string `json:"type"`
 				Mtime int64  `json:"mtime"`
 			} `json:"list"`
 		} `json:"body"`
@@ -335,7 +350,7 @@ func (s *cloudStore) Sweep(ctx context.Context) error {
 	}
 	removed := 0
 	for _, entry := range listing.Body.List {
-		if !strings.HasPrefix(entry.Home, s.folder+"/ofh1-") || !strings.HasSuffix(entry.Home, ".bin") || entry.Mtime < 946684800 || entry.Mtime >= time.Now().Add(-time.Hour).Unix() {
+		if entry.Type != "file" || !strings.HasPrefix(entry.Home, s.folder+"/ofh1-") || !strings.HasSuffix(entry.Home, ".bin") || entry.Mtime < 946684800 || entry.Mtime >= time.Now().Add(-time.Hour).Unix() {
 			continue
 		}
 		id := strings.TrimSuffix(strings.TrimPrefix(entry.Home, s.folder+"/ofh1-"), ".bin")
